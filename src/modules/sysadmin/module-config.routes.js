@@ -7,12 +7,33 @@ const service = require('./module-config.service');
 
 const sysadminRoutes = express.Router();
 
-const fieldTypeSchema = z.enum(['text', 'email', 'phone', 'password', 'number', 'date', 'select', 'textarea', 'country', 'owner', 'checkbox']);
+const fieldTypeSchema = z.enum([
+  'textbox',
+  'textarea',
+  'checkbox',
+  'dropdownbox',
+  'int',
+  'decimals',
+  'browser_button',
+  'date',
+  'attach_document',
+  'image',
+  'text',
+  'email',
+  'phone',
+  'password',
+  'number',
+  'select',
+  'country',
+  'owner'
+]);
 const fieldSchema = z.object({
   fieldKey: z.string().trim().max(80).optional(),
   label: z.string().trim().min(1).max(120),
   type: fieldTypeSchema,
   options: z.union([z.array(z.string()), z.string()]).optional(),
+  tableType: z.enum(['main', 'detail']).optional(),
+  detailTableName: z.string().trim().max(80).optional().or(z.literal('')),
   required: z.boolean().optional(),
   showInTable: z.boolean().optional(),
   showInForm: z.boolean().optional(),

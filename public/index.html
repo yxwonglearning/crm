@@ -19,7 +19,7 @@
         <nav class="nav">
           <button class="nav-button is-active" data-view="customersView">Customers</button>
           <button class="nav-button" data-view="usersView">Users</button>
-          <button class="nav-button" data-view="sysadminView">Sysadmin</button>
+          <button class="nav-button" data-view="sysadminView">Admin Portal</button>
         </nav>
         <button id="logoutButton" class="secondary full-width" hidden>Sign out</button>
       </aside>
@@ -83,7 +83,7 @@
           </div>
 
           <div id="customerModal" class="modal-backdrop" hidden>
-            <form id="customerForm" class="panel modal-card">
+            <form id="customerForm" class="panel modal-card customer-modal-card">
               <div class="modal-header">
                 <h2 id="customerFormTitle">Add</h2>
                 <button type="button" class="icon-button" id="closeCustomerModal" aria-label="Close">x</button>
@@ -170,85 +170,271 @@
         <section id="sysadminView" class="view" hidden>
           <header class="toolbar">
             <div>
-              <h1>Sysadmin</h1>
-              <p>Configure module fields, table columns, forms, and import columns.</p>
-            </div>
-            <div class="toolbar-actions">
-              <select id="fieldConfigModule">
-                <option value="customers">Customers</option>
-                <option value="users">Users</option>
-              </select>
+              <h1>Admin Portal</h1>
+              <p>Low-code configuration workspace for modules, forms, pages, automation, and permissions.</p>
             </div>
           </header>
 
-          <div class="query-panel">
-            <div class="table-actions">
-              <button type="button" id="addFieldButton">Add Field</button>
-            </div>
-            <div class="table-wrap config-table-wrap">
-              <table class="config-table">
-                <thead>
-                  <tr>
-                    <th>Field</th>
-                    <th>Type</th>
-                    <th>Table</th>
-                    <th>Form</th>
-                    <th>Import</th>
-                    <th>Required</th>
-                    <th>Order</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody id="fieldConfigRows"></tbody>
-              </table>
-            </div>
+          <div class="admin-layout">
+            <aside class="admin-menu">
+              <button type="button" class="admin-collapse-button" id="toggleAdminMenu" aria-label="Collapse admin menu">‹</button>
+              <button type="button" class="admin-section-button is-active" data-admin-section="adminModulesSection" data-short="M">
+                <span>Modules</span>
+                <small>CRM objects and publish state</small>
+              </button>
+              <button type="button" class="admin-section-button" data-admin-section="adminFormsSection" data-short="F">
+                <span>Form Builder</span>
+                <small>Fields, forms, table columns</small>
+              </button>
+              <button type="button" class="admin-section-button" data-admin-section="adminPagesSection" data-short="P">
+                <span>Module Pages</span>
+                <small>Published user-facing pages</small>
+              </button>
+              <button type="button" class="admin-section-button" data-admin-section="adminActionFlowSection" data-short="A">
+                <span>Action Flow</span>
+                <small>Triggers, conditions, actions</small>
+              </button>
+              <button type="button" class="admin-section-button" data-admin-section="adminPermissionsSection" data-short="R">
+                <span>Permissions</span>
+                <small>Access control per module</small>
+              </button>
+            </aside>
+
+            <section id="adminModulesSection" class="admin-section">
+              <div class="section-heading">
+                <div>
+                  <h2>Modules</h2>
+                  <p>Manage CRM modules and prepare them for publishing.</p>
+                </div>
+                <span class="status-pill">Phase 2</span>
+              </div>
+              <div class="admin-summary-grid">
+                <div class="summary-tile">
+                  <strong>Customers</strong>
+                  <span>Published system module</span>
+                </div>
+                <div class="summary-tile">
+                  <strong>Users</strong>
+                  <span>Published admin module</span>
+                </div>
+              </div>
+              <div class="empty-state">
+                <h3>Module Builder Coming Next</h3>
+                <p>Phase 2 will add create, edit, draft, publish, and menu visibility controls for custom modules.</p>
+              </div>
+            </section>
+
+            <section id="adminFormsSection" class="admin-section" hidden>
+              <div class="section-heading">
+                <div>
+                  <h2>Form Builder</h2>
+                  <p>Configure module fields, table columns, forms, and import columns.</p>
+                </div>
+                <div class="toolbar-actions">
+                  <button type="button" id="addFieldButton">Add Field</button>
+                  <button type="button" class="secondary" id="batchAddFieldsButton">Batch Add</button>
+                  <button type="button" class="secondary" id="fieldPropertiesButton">Field Properties</button>
+                </div>
+              </div>
+
+              <div class="builder-layout">
+                <aside class="builder-list">
+                  <label class="compact-label">
+                    Search Forms
+                    <input id="formBuilderSearch" type="search" placeholder="Search forms">
+                  </label>
+                  <div id="formModuleRows" class="module-list"></div>
+                </aside>
+
+                <div class="table-wrap config-table-wrap">
+                  <table class="config-table">
+                    <thead>
+                      <tr>
+                        <th>Field</th>
+                        <th>Type</th>
+                        <th>Show In Table</th>
+                        <th>Form</th>
+                        <th>Import</th>
+                        <th>Required</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody id="fieldConfigRows"></tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
+
+            <section id="adminPagesSection" class="admin-section" hidden>
+              <div class="section-heading">
+                <div>
+                  <h2>Module Pages</h2>
+                  <p>Publish module forms as usable CRM list, create, edit, and detail pages.</p>
+                </div>
+                <span class="status-pill">Phase 4</span>
+              </div>
+              <div class="empty-state">
+                <h3>Page Publisher Planned</h3>
+                <p>Published modules will automatically become user-facing CRM pages with search, filters, tables, and forms.</p>
+              </div>
+            </section>
+
+            <section id="adminActionFlowSection" class="admin-section" hidden>
+              <div class="section-heading">
+                <div>
+                  <h2>Action Flow</h2>
+                  <p>Configure business logic with triggers, conditions, actions, scheduling, integrations, and logs.</p>
+                </div>
+                <span class="status-pill">Phase 5</span>
+              </div>
+              <div class="empty-state">
+                <h3>Automation Engine Planned</h3>
+                <p>The first version will support record-created, record-updated, and status-changed triggers.</p>
+              </div>
+            </section>
+
+            <section id="adminPermissionsSection" class="admin-section" hidden>
+              <div class="section-heading">
+                <div>
+                  <h2>Permissions</h2>
+                  <p>Control who can view, create, edit, delete, import, export, and configure each module.</p>
+                </div>
+                <span class="status-pill">Platform</span>
+              </div>
+              <div class="empty-state">
+                <h3>Permission Builder Planned</h3>
+                <p>Role and module-level permissions will be added before custom modules become broadly editable.</p>
+              </div>
+            </section>
           </div>
 
           <div id="fieldConfigModal" class="modal-backdrop" hidden>
-            <form id="fieldConfigForm" class="panel modal-card narrow-modal">
+            <form id="fieldConfigForm" class="panel modal-card field-config-modal-card">
               <div class="modal-header">
                 <h2 id="fieldConfigFormTitle">Add Field</h2>
                 <button type="button" class="icon-button" id="closeFieldConfigModal" aria-label="Close">x</button>
               </div>
               <input name="fieldKey" type="hidden">
-              <label>
-                Label
-                <input name="label" placeholder="Example: Industry" required>
-              </label>
-              <div class="grid-two">
+              <div class="field-config-grid">
                 <label>
-                  Type
-                  <select name="type">
-                    <option value="text">Text</option>
-                    <option value="email">Email</option>
-                    <option value="phone">Phone</option>
-                    <option value="password">Password</option>
-                    <option value="number">Number</option>
-                    <option value="date">Date</option>
-                    <option value="select">Dropdown</option>
-                    <option value="textarea">Textarea</option>
-                    <option value="checkbox">Checkbox</option>
+                  <span>Field Name</span>
+                  <input name="label" placeholder="Example: Industry" required>
+                </label>
+                <label>
+                  <span>Data Key</span>
+                  <input name="dataKeyPreview" placeholder="Auto generated" readonly>
+                </label>
+                <label>
+                  <span>Database Field Name</span>
+                  <input name="databaseFieldName" placeholder="Auto generated" readonly>
+                </label>
+                <label>
+                  <span>Table</span>
+                  <select name="tableType">
+                    <option value="main">Main Table</option>
+                    <option value="detail">Detail Table</option>
                   </select>
                 </label>
-                <label>
-                  Order
-                  <input name="sortOrder" type="number" value="100" min="1">
+                <label id="detailTableNameRow" hidden>
+                  <span>Detail Table Name</span>
+                  <input name="detailTableName" placeholder="Auto generated">
                 </label>
-              </div>
-              <label>
-                Dropdown Options
-                <input name="options" placeholder="Option A, Option B">
-              </label>
-              <div class="checkbox-grid">
-                <label><input name="showInTable" type="checkbox" checked> Table</label>
-                <label><input name="showInForm" type="checkbox" checked> Form</label>
-                <label><input name="showInImport" type="checkbox"> Import</label>
-                <label><input name="required" type="checkbox"> Required</label>
+                <label>
+                  <span>Field Type</span>
+                  <select name="type"></select>
+                </label>
+                <label id="dropdownOptionsRow" class="field-config-wide" hidden>
+                  <span>Dropdown Options</span>
+                  <input name="options" placeholder="Option A, Option B">
+                </label>
+                <div id="browserButtonRow" class="field-config-row field-config-wide" hidden>
+                  <span>Browser Button Module</span>
+                  <div class="input-action">
+                    <input name="browserModulePreview" placeholder="Link in future phase" readonly>
+                    <button type="button" class="secondary" disabled>Search</button>
+                  </div>
+                </div>
+                <div class="checkbox-grid field-config-wide">
+                  <label><input name="showInTable" type="checkbox" checked> Show In Table</label>
+                  <label><input name="showInForm" type="checkbox" checked> Show In Form</label>
+                  <label><input name="showInImport" type="checkbox"> Show In Import</label>
+                  <label><input name="required" type="checkbox"> Required</label>
+                </div>
               </div>
               <div class="form-actions">
                 <button type="submit" id="saveFieldConfigButton">Add Field</button>
                 <button type="button" class="secondary" id="clearFieldConfigForm">Clear</button>
                 <button type="button" class="danger-button" id="deleteFieldConfigButton" hidden>Delete</button>
+              </div>
+            </form>
+          </div>
+
+          <div id="batchFieldModal" class="modal-backdrop" hidden>
+            <form id="batchFieldForm" class="panel modal-card batch-field-modal-card">
+              <div class="modal-header">
+                <h2>Batch Add Fields</h2>
+                <button type="button" class="icon-button" id="closeBatchFieldModal" aria-label="Close">x</button>
+              </div>
+              <div class="batch-tabs">
+                <div id="batchTableTabs" class="tab-strip"></div>
+                <button type="button" class="icon-button" id="addDetailTableTab" aria-label="Add detail table">+</button>
+              </div>
+              <div class="batch-toolbar">
+                <strong id="batchActiveTableLabel">Main Table</strong>
+                <div class="toolbar-actions">
+                  <button type="button" class="secondary" id="addBatchFieldRow">Add Row</button>
+                </div>
+              </div>
+              <div class="table-wrap batch-table-wrap">
+                <table class="batch-field-table">
+                  <thead>
+                    <tr>
+                      <th>Field Name</th>
+                      <th>Data Key</th>
+                      <th>Database Field Name</th>
+                      <th>Field Type</th>
+                      <th>Dropdown Options</th>
+                      <th>Show In Table</th>
+                      <th>Show In Form</th>
+                      <th>Import</th>
+                      <th>Required</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="batchFieldRows"></tbody>
+                </table>
+              </div>
+              <div class="form-actions">
+                <button type="submit" id="saveBatchFieldsButton">Confirm</button>
+                <button type="button" class="secondary" id="cancelBatchFieldsButton">Cancel</button>
+              </div>
+            </form>
+          </div>
+
+          <div id="fieldPropertiesModal" class="modal-backdrop" hidden>
+            <form id="fieldPropertiesForm" class="panel modal-card field-properties-modal-card">
+              <div class="modal-header">
+                <h2>Field Read/Write Properties</h2>
+                <button type="button" class="icon-button" id="closeFieldPropertiesModal" aria-label="Close">x</button>
+              </div>
+              <div class="table-wrap field-properties-wrap">
+                <table class="field-properties-table">
+                  <thead>
+                    <tr>
+                      <th>Field Name</th>
+                      <th>Field Type</th>
+                      <th>Display</th>
+                      <th>Edit</th>
+                      <th>Required</th>
+                      <th>Disable Manual Input</th>
+                    </tr>
+                  </thead>
+                  <tbody id="fieldPropertiesRows"></tbody>
+                </table>
+              </div>
+              <div class="form-actions end-actions">
+                <button type="submit" id="saveFieldPropertiesButton">Save</button>
+                <button type="button" class="secondary" id="cancelFieldPropertiesButton">Cancel</button>
               </div>
             </form>
           </div>

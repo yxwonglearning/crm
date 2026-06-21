@@ -428,10 +428,10 @@ td {
 
 .select-column,
 .select-cell {
-  width: 44px;
-  min-width: 44px;
-  padding-left: 10px;
-  padding-right: 10px;
+  width: 48px;
+  min-width: 48px;
+  padding-left: 14px;
+  padding-right: 8px;
   text-align: center;
 }
 
@@ -521,6 +521,17 @@ td.company-cell {
   white-space: nowrap;
 }
 
+.config-table th:nth-child(3),
+.config-table td:nth-child(3),
+.config-table th:nth-child(4),
+.config-table td:nth-child(4),
+.config-table th:nth-child(5),
+.config-table td:nth-child(5),
+.config-table th:nth-child(6),
+.config-table td:nth-child(6) {
+  text-align: center;
+}
+
 .config-table input[type="number"] {
   width: 78px;
 }
@@ -532,6 +543,224 @@ td.company-cell {
 
 .config-table-wrap {
   min-height: 0;
+}
+
+.admin-layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.admin-nav-collapsed .admin-layout {
+  grid-template-columns: 56px minmax(0, 1fr);
+}
+
+.admin-menu {
+  display: grid;
+  gap: 8px;
+  position: sticky;
+  top: 24px;
+}
+
+.admin-collapse-button {
+  width: 36px;
+  min-height: 34px;
+  justify-self: end;
+  padding: 0;
+  background: #e8ebef;
+  color: var(--text);
+  border: 1px solid #cfd5dc;
+}
+
+.admin-collapse-button:hover {
+  background: #d9dee5;
+}
+
+.admin-section-button {
+  min-height: auto;
+  display: grid;
+  justify-content: stretch;
+  gap: 5px;
+  padding: 14px;
+  text-align: left;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-left: 4px solid transparent;
+  box-shadow: none;
+}
+
+.admin-nav-collapsed .admin-section-button {
+  min-height: 46px;
+  place-items: center;
+  padding: 0;
+  text-align: center;
+}
+
+.admin-section-button:hover,
+.admin-section-button.is-active {
+  background: #f8fafc;
+  color: var(--text);
+  border-left-color: var(--primary);
+}
+
+.admin-nav-collapsed .admin-section-button::before {
+  content: attr(data-short);
+  font-weight: 900;
+}
+
+.admin-nav-collapsed .admin-section-button span,
+.admin-nav-collapsed .admin-section-button small {
+  display: none;
+}
+
+.admin-section-button small {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.admin-section {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.section-heading {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 18px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+.section-heading p,
+.empty-state p {
+  margin-bottom: 0;
+}
+
+.status-pill {
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  color: #334155;
+  background: #f8fafc;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 5px 10px;
+  white-space: nowrap;
+}
+
+.admin-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.summary-tile,
+.empty-state {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 18px;
+}
+
+.summary-tile {
+  display: grid;
+  gap: 6px;
+}
+
+.summary-tile span {
+  color: var(--muted);
+}
+
+.empty-state h3 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.builder-layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+  align-items: stretch;
+}
+
+.builder-list {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 12px;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.compact-label {
+  gap: 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.module-list {
+  display: grid;
+  gap: 7px;
+}
+
+.module-list-button {
+  min-height: auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: #f8fafc;
+  color: var(--text);
+  border: 1px solid #d9e0e7;
+  border-left: 4px solid transparent;
+  text-align: left;
+}
+
+.module-list-button:hover,
+.module-list-button.is-active {
+  background: #eef7ff;
+  color: var(--text);
+  border-left-color: var(--primary);
+}
+
+.module-list-button span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.module-list-button small {
+  color: var(--muted);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.module-list-button em {
+  min-width: 28px;
+  height: 24px;
+  border-radius: 999px;
+  background: white;
+  border: 1px solid #d9e0e7;
+  color: #334155;
+  display: grid;
+  place-items: center;
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.module-list-empty {
+  margin: 0;
+  padding: 8px 2px;
 }
 
 th {
@@ -593,8 +822,290 @@ td {
   overflow: auto;
 }
 
+.customer-modal-card {
+  width: min(100%, 980px);
+}
+
 .narrow-modal {
   width: min(100%, 460px);
+}
+
+.field-config-modal-card {
+  width: min(100%, 920px);
+}
+
+.batch-field-modal-card {
+  width: min(100%, 1180px);
+}
+
+.field-properties-modal-card {
+  width: min(100%, 820px);
+}
+
+.field-config-grid {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  gap: 0;
+  border: 1px solid var(--line);
+  border-bottom: 0;
+}
+
+.field-config-grid > label,
+.field-config-grid > .field-config-row {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 0;
+  border-bottom: 1px solid var(--line);
+  color: #374151;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.field-config-grid > label > span,
+.field-config-grid > .field-config-row > span {
+  padding: 0 12px;
+}
+
+.field-config-grid > label > input,
+.field-config-grid > label > select,
+.field-config-grid .input-action {
+  border: 0;
+  border-left: 1px solid var(--line);
+  border-radius: 0;
+  min-height: 42px;
+}
+
+.field-config-grid .input-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 5px;
+}
+
+.field-config-grid .input-action input {
+  border: 0;
+}
+
+.field-config-grid > .checkbox-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 22px;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+  grid-column: 1 / -1;
+  background: white;
+}
+
+.field-config-grid > .checkbox-grid label {
+  display: flex;
+}
+
+.readonly-checkbox {
+  pointer-events: none;
+}
+
+.batch-tabs,
+.batch-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tab-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tab-item {
+  display: inline-flex;
+  align-items: center;
+  border-bottom: 2px solid transparent;
+}
+
+.tab-item.is-active {
+  border-bottom-color: var(--primary);
+}
+
+.tab-button {
+  min-height: 34px;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 0;
+  border-bottom: 0;
+  padding: 0 8px 0 10px;
+}
+
+.tab-button:hover,
+.tab-button.is-active {
+  background: transparent;
+  color: var(--primary);
+}
+
+.tab-remove-button {
+  width: 22px;
+  min-height: 22px;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  border: 0;
+  font-weight: 900;
+}
+
+.tab-remove-button:hover {
+  background: #eef2f7;
+  color: var(--danger);
+}
+
+.batch-table-wrap {
+  min-height: 360px;
+}
+
+.batch-field-table {
+  min-width: 1120px;
+}
+
+.batch-field-table th,
+.batch-field-table td {
+  white-space: nowrap;
+}
+
+.batch-field-table input,
+.batch-field-table select {
+  min-width: 120px;
+  padding: 7px 8px;
+}
+
+.batch-field-table input[type="checkbox"] {
+  min-width: 0;
+}
+
+.batch-field-table .is-existing {
+  background: #fbfcfd;
+}
+
+.field-properties-wrap {
+  min-height: 360px;
+}
+
+.field-properties-table {
+  min-width: 720px;
+}
+
+.field-properties-table th,
+.field-properties-table td {
+  white-space: nowrap;
+}
+
+.field-properties-table th:nth-child(n + 3),
+.field-properties-table td:nth-child(n + 3) {
+  text-align: center;
+}
+
+.detail-table-section {
+  margin-top: 18px;
+}
+
+.detail-table-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.detail-table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.detail-table-title {
+  font-weight: 800;
+  color: var(--text);
+}
+
+.detail-table-add {
+  min-height: 32px;
+  padding: 6px 12px;
+}
+
+.detail-table-bulk {
+  min-height: 32px;
+  padding: 6px 12px;
+}
+
+.small-button {
+  min-height: 30px;
+  padding: 5px 10px;
+}
+
+.detail-entry-wrap {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+.detail-entry-table {
+  min-width: 720px;
+}
+
+.detail-entry-table th,
+.detail-entry-table td {
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.detail-entry-table th:first-child,
+.detail-entry-table td:first-child {
+  width: 48px;
+  min-width: 48px;
+  text-align: center;
+}
+
+.detail-entry-table th:nth-child(2),
+.detail-entry-table td:nth-child(2) {
+  width: 62px;
+  min-width: 62px;
+  text-align: center;
+}
+
+.detail-entry-table th:last-child,
+.detail-entry-table td:last-child {
+  width: 86px;
+  text-align: right;
+}
+
+.detail-entry-table input,
+.detail-entry-table select,
+.detail-entry-table textarea {
+  min-width: 150px;
+  width: 100%;
+  margin: 0;
+}
+
+.detail-entry-table input[type="checkbox"] {
+  min-width: 0;
+  width: 16px;
+}
+
+.detail-entry-table textarea {
+  min-height: 38px;
+  resize: vertical;
+}
+
+.detail-entry-table tr.is-selected td {
+  background: #eef7ff;
+  border-bottom-color: #c9e2f7;
+}
+
+.end-actions {
+  justify-content: flex-end;
 }
 
 .modal-header {
@@ -667,8 +1178,18 @@ td {
 @media (max-width: 900px) {
   .app-shell,
   .split-layout,
+  .admin-layout,
+  .builder-layout,
   .login-hero {
     grid-template-columns: 1fr;
+  }
+
+  .admin-nav-collapsed .admin-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-collapse-button {
+    display: none;
   }
 
   .login-copy {
@@ -695,6 +1216,15 @@ td {
   .inline-import {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .section-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-summary-grid {
+    grid-template-columns: 1fr;
   }
 
   .modal-backdrop {

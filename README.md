@@ -1,10 +1,10 @@
 # Amperes CRM
 
-Self-hosted CRM foundation built with Node.js, Express, MySQL, and a browser UI. The app is currently focused on customer records, user management, country-aware contact numbers, and Excel customer import.
+Self-hosted CRM foundation built with Node.js, Express, MySQL, and a browser UI. The app is currently focused on customer records, user management, country-aware contact numbers, Excel customer import, and early low-code CRM configuration.
 
 ## Current Status
 
-The CRM is usable locally for basic customer and user workflows:
+The CRM is usable locally for customer, user, import, and early low-code configuration workflows:
 
 - Login with JWT authentication.
 - Admin user management.
@@ -16,6 +16,19 @@ The CRM is usable locally for basic customer and user workflows:
 - Dedicated full-page login screen.
 - Modal forms for adding/editing customers and users.
 - Customer import modal with template download, file upload, and import result display.
+- Admin Portal with sections for Modules, Form Builder, Module Pages, Action Flow, and Permissions.
+- Form Builder for customer and user field configuration.
+- Configurable fields for main table and detail table placement.
+- Batch Add fields workflow with main/detail table tabs.
+- Field Properties grid for display and required flags.
+- Customer detail-table data entry inside the Add/Edit Customer modal.
+- Detail-table row controls:
+  - add row
+  - remove row
+  - row checkbox selection
+  - select all rows
+  - duplicate selected rows
+  - delete selected rows
 
 ## Current App Access
 
@@ -54,6 +67,7 @@ Backend modules live in `src/modules/*`:
 - `countries`
 - `customers`
 - `imports`
+- `sysadmin`
 - `users`
 
 Frontend files live in `public/`:
@@ -61,6 +75,87 @@ Frontend files live in `public/`:
 - `index.html`
 - `styles.css`
 - `app.js`
+
+## Low-Code CRM Direction
+
+The long-term direction is to turn Amperes CRM into a low-code, fully customizable CRM platform where admins can create modules, forms, pages, and automation without editing source code. Weaver e-cology and e-Builder are useful references for the platform concept, especially the separation between form building, page publishing, data rules, and action-flow automation.
+
+### Target Admin Experience
+
+Admins should have a dedicated portal for configuring the CRM:
+
+- `Admin Portal`: the dedicated low-code configuration workspace.
+- `Module Builder`: create and manage modules such as Customers, Suppliers, Projects, Tickets, Assets, or Contracts.
+- `Form Builder`: add and configure module fields without coding.
+- `Module Page Publisher`: publish form-backed modules as usable CRM pages.
+- `Action Flow`: configure triggers, conditions, actions, scheduled jobs, integrations, and execution logs.
+- `Permissions`: control who can view, create, edit, delete, import, export, and configure each module.
+
+### Recommended Build Phases And Progress
+
+1. Phase 1: Dedicated Admin Portal - mostly done
+   - Converted the old sysadmin area into `Admin Portal`.
+   - Added an admin-only configuration workspace.
+   - Added internal admin sections for Modules, Form Builder, Module Pages, Action Flow, and Permissions.
+   - Normal CRM usage is separated from admin configuration through sidebar navigation.
+2. Phase 2: Module Builder - scaffolded, not fully implemented
+   - Admin Portal has a `Modules` section.
+   - Customers and Users are visible as existing system modules.
+   - Full custom module create/edit/publish controls are still pending.
+   - Allow admins to create modules with a name, key, description, status, and menu visibility.
+   - Support draft and published states before exposing modules to normal users.
+3. Phase 3: Form Builder - in progress
+   - Existing customer and user fields are configurable through Form Builder.
+   - Admins can add one field at a time with `Add Field`.
+   - Admins can add multiple fields through `Batch Add`.
+   - Fields can be assigned to `Main Table` or `Detail Table`.
+   - Detail table names are generated and shown in the field list.
+   - Supported configurable field types currently include textbox, textarea, checkbox, dropdownbox, int, decimals, browser button placeholder, date, attach document placeholder, and image placeholder.
+   - System field types such as email, phone, country, owner, password, and status are supported by existing modules.
+   - `Field Properties` currently saves display and required settings.
+   - Add form sections, tabs, layout controls, validation rules, and versioning.
+4. Phase 4: Module Page Publisher - planned
+   - Admin Portal has a placeholder `Module Pages` section.
+   - Generated pages for custom published modules are not implemented yet.
+   - Target behavior: generate usable CRM pages from published modules.
+   - Include list views, add/edit forms, search, filters, import/export, and record detail pages.
+5. Phase 5: Action Flow - planned
+   - Admin Portal has a placeholder `Action Flow` section.
+   - Automation runtime is not implemented yet.
+   - Start with simple triggers such as record created, record updated, and status changed.
+   - Add conditions such as field equals value or number greater than value.
+   - Add actions such as update field, create task, assign owner, send notification, and call webhook.
+   - Later add scheduling, cross-module orchestration, external integrations, and execution logs.
+6. Phase 6: Permissions - planned
+   - Admin Portal has a placeholder `Permissions` section.
+   - Target behavior: control view, create, edit, delete, import, export, and configuration access per module and role.
+
+### Extra Platform Features To Add
+
+- Audit logs for admin configuration changes and record changes.
+- Module templates for common business objects.
+- Trash/archive instead of hard delete for configurable modules.
+- Lookup fields and related records.
+- Import/export settings per module.
+- Report builder and dashboard widgets.
+- Field-level and record-level permissions.
+- Backup, restore, and version history for low-code configuration.
+
+### Form Builder Conventions
+
+- `Data Key` is the stable internal field identifier used by API payloads, imports, JSON storage, formulas, reports, and future action-flow conditions. A field label can be renamed later, but the data key should stay stable so existing records and automations do not break.
+- New fields are appended to the end automatically; admins do not manually maintain display order in Phase 1.
+- Fields can be placed on the `Main Table` or a `Detail Table`.
+- Detail table names are generated from the module key, for example `customer_dt1`.
+- Detail-table records include their own `id` and a `mainid` field that maps each detail row back to the main record.
+- `Dropdown Options` only applies to `Dropdownbox` fields.
+- `Browser Button` fields are reserved for a future phase where the button links to available master-data/browser modules.
+- `Add Field` is for adding one field at a time.
+- `Batch Add` opens a field-management workspace that shows fields by `Main Table` and detail-table tabs, supports adding multiple draft fields, and can add new detail table tabs with generated names such as `customer_dt1`.
+- `Field Properties` opens a read/write properties grid for the selected form. Phase 1 saves display and required flags; editability and disable-manual-input are UI scaffolding for future permissions and browser-button phases.
+- Form Builder is for field configuration only. Bulk duplicate/delete controls should not be used there.
+- Detail-table row duplicate/delete is for data entry rows inside Add/Edit Customer, not for Form Builder fields.
+- Detail-table row delete keeps one blank row when every row is selected, so the table remains ready for input.
 
 ## What Has Been Done
 
@@ -126,10 +221,35 @@ Frontend files live in `public/`:
 - Added Delete Selected button.
 - Added delete confirmation modal before executing delete.
 - Added dedicated Email column.
+- Added configurable detail-table data entry in the customer form.
+- Added detail-table row add/remove controls.
+- Added detail-table row selection checkbox and select-all checkbox.
+- Added detail-table selected-row duplicate.
+- Added detail-table selected-row delete.
+- Detail-table duplicate/delete is scoped to customer detail data rows only, not the Form Builder field list.
 - Adjusted table alignment:
   - headers centered
   - row content vertically centered
   - company names left-aligned
+
+### Admin Portal And Low-Code Configuration
+
+- Added Admin Portal sidebar section.
+- Added admin sections:
+  - Modules
+  - Form Builder
+  - Module Pages
+  - Action Flow
+  - Permissions
+- Added collapsible admin menu.
+- Added module list for Customers and Users in Form Builder.
+- Added configurable field table.
+- Added Add Field modal.
+- Added support for selecting Main Table or Detail Table when creating fields.
+- Added generated data key and database field name previews.
+- Added Batch Add modal for adding multiple fields.
+- Added detail-table tabs inside Batch Add.
+- Added Field Properties modal for display and required settings.
 
 ### Country And Phone Handling
 
@@ -167,6 +287,7 @@ Frontend files live in `public/`:
 - Hid app sidebar while logged out.
 - Updated brand to `Amperes CRM`.
 - Changed primary action color to blue.
+- Started the admin-only configuration area with configurable module fields.
 - Standardized labels to Title Case, for example:
   - Add Customer
   - Import Customers
@@ -244,15 +365,25 @@ Immediate testing:
 3. Login with admin@example.com / ChangeMe123!.
 4. Test Add Customer.
 5. Test Edit Customer.
-6. Test customer search and status filter.
-7. Test customer multi-select.
-8. Test Delete Selected and confirm popup.
-9. Test Download Customer Import Template.
-10. Fill the template with sample customers.
-11. Import the Excel file.
-12. Confirm imported customers appear in the table.
-13. Test Add User.
-14. Test Edit User.
+6. Test customer detail-table row Add.
+7. Test detail-table row checkbox selection.
+8. Test detail-table select-all.
+9. Test detail-table Duplicate selected rows.
+10. Test detail-table Delete selected rows.
+11. Test customer search and status filter.
+12. Test customer multi-select.
+13. Test Delete Selected and confirm popup.
+14. Test Download Customer Import Template.
+15. Fill the template with sample customers.
+16. Import the Excel file.
+17. Confirm imported customers appear in the table.
+18. Test Add User.
+19. Test Edit User.
+20. Open Admin Portal.
+21. Test Form Builder module switching between Customers and Users.
+22. Test Add Field.
+23. Test Batch Add field rows and detail table tabs.
+24. Test Field Properties display/required settings.
 
 Security cleanup:
 1. Create your real admin user.
@@ -308,6 +439,7 @@ src/
     countries/
     customers/
     imports/
+    sysadmin/
     users/
   shared/
 public/

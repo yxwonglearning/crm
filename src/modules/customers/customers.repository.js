@@ -1,5 +1,16 @@
 const { pool } = require('../../database/pool');
 
+function assertSafeIdentifier(identifier) {
+  if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(String(identifier || ''))) {
+    throw new Error(`Unsafe database identifier: ${identifier}`);
+  }
+}
+
+function sqlIdentifier(identifier) {
+  assertSafeIdentifier(identifier);
+  return `\`${identifier}\``;
+}
+
 function baseSelect() {
   return `SELECT
       c.id,
@@ -51,6 +62,40 @@ async function listCustomers(filters) {
 async function findCustomerById(id) {
   const [rows] = await pool.execute(`${baseSelect()} WHERE c.id = ? LIMIT 1`, [id]);
   return rows[0] || null;
+}
+
+async function detailRowsByCustomerId(customerId, fields) {
+  const detailFields = fields.filter((field) => field.tableType === 'detail' && field.detailTableName);
+  const tables = Array.from(new Set(detailFields.map((field) => field.detailTableName)));
+  const values = {};
+
+  for (const tableName of tables) {
+    const tableFields = detailFields.filter((field) => field.detailTableName === tableName);
+    const columns = ['id', 'mainid', ...tableFields.map((field) => field.fieldKey)].map(sqlIdentifier).join(', ');
+    if (!columns) continue;
+    const [rows] = await pool.execute(
+      `SELECT ${columns} FROM ${sqlIdentifier(tableName)} WHERE mainid = ? ORDER BY id ASC`,
+      [customerId]
+    );
+    values[tableName] = rows;
+  }
+
+  return values;
+}
+
+async function detailValuesByCustomerId(customerId, fields) {
+  const detailRows = await detailRowsByCustomerId(customerId, fields);
+  const values = {};
+  Object.values(detailRows).forEach((rows) => {
+    const firstRow = rows[0];
+    if (!firstRow) return;
+    Object.keys(firstRow)
+      .filter((key) => !['id', 'mainid'].includes(key))
+      .forEach((key) => {
+        values[key] = firstRow[key];
+      });
+  });
+  return values;
 }
 
 async function createCustomer(customer) {
@@ -119,6 +164,70 @@ async function updateCustomer(id, customer) {
   );
 }
 
+function normalizeDetailValue(field, value) {
+  if (field.type === 'checkbox') return value ? 1 : 0;
+  return value === '' ? null : value;
+}
+
+function rowHasValue(row, fields) {
+  return fields.some((field) => {
+    const value = row[field.fieldKey];
+    if (field.type === 'checkbox') return Boolean(value);
+    return value !== undefined && value !== null && String(value).trim() !== '';
+  });
+}
+
+async function upsertDetailRows(customerId, fields, detailTables) {
+  const detailFields = fields.filter((field) => field.tableType === 'detail' && field.detailTableName);
+  const tables = Array.from(new Set(detailFields.map((field) => field.detailTableName)));
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    for (const tableName of tables) {
+      const tableFields = detailFields.filter((field) => field.detailTableName === tableName);
+      const inputRows = Array.isArray(detailTables?.[tableName]) ? detailTables[tableName] : [];
+      const rows = inputRows.filter((row) => rowHasValue(row, tableFields));
+
+      await connection.execute(
+        `DELETE FROM ${sqlIdentifier(tableName)} WHERE mainid = ?`,
+        [customerId]
+      );
+
+      for (const row of rows) {
+        const columns = ['mainid', ...tableFields.map((field) => field.fieldKey)];
+        const values = [customerId, ...tableFields.map((field) => normalizeDetailValue(field, row[field.fieldKey]))];
+        const placeholders = columns.map(() => '?').join(', ');
+        await connection.execute(
+          `INSERT INTO ${sqlIdentifier(tableName)} (${columns.map(sqlIdentifier).join(', ')}) VALUES (${placeholders})`,
+          values
+        );
+      }
+    }
+
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+async function upsertDetailValues(customerId, fields, values) {
+  const detailFields = fields.filter((field) => field.tableType === 'detail' && field.detailTableName);
+  const detailTables = {};
+  detailFields.forEach((field) => {
+    if (!Object.prototype.hasOwnProperty.call(values, field.fieldKey)) return;
+    if (!detailTables[field.detailTableName]) {
+      detailTables[field.detailTableName] = [{}];
+    }
+    detailTables[field.detailTableName][0][field.fieldKey] = values[field.fieldKey];
+  });
+  await upsertDetailRows(customerId, fields, detailTables);
+}
+
 async function deleteCustomers(ids) {
   const placeholders = ids.map(() => '?').join(', ');
   const [result] = await pool.execute(
@@ -128,4 +237,14 @@ async function deleteCustomers(ids) {
   return result.affectedRows;
 }
 
-module.exports = { listCustomers, findCustomerById, createCustomer, updateCustomer, deleteCustomers };
+module.exports = {
+  listCustomers,
+  findCustomerById,
+  detailRowsByCustomerId,
+  detailValuesByCustomerId,
+  createCustomer,
+  updateCustomer,
+  upsertDetailRows,
+  upsertDetailValues,
+  deleteCustomers
+};

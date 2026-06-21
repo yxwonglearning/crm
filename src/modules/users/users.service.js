@@ -23,6 +23,19 @@ function normalizeUser(row) {
   };
 }
 
+function normalizeCustomFieldValue(field, value) {
+  if (field.type === 'checkbox') return Boolean(value);
+  if (field.type === 'int') {
+    if (value === '' || value === null || value === undefined) return '';
+    return Number.parseInt(value, 10);
+  }
+  if (field.type === 'decimals') {
+    if (value === '' || value === null || value === undefined) return '';
+    return Number(value);
+  }
+  return value;
+}
+
 async function userFieldConfig() {
   return moduleConfig.getModuleConfig('users');
 }
@@ -39,7 +52,7 @@ async function customFieldsFromInput(input) {
         throw new AppError(`${field.label} is required`, 422);
       }
       if (value !== undefined) {
-        customFields[field.fieldKey] = field.type === 'checkbox' ? Boolean(value) : value;
+        customFields[field.fieldKey] = normalizeCustomFieldValue(field, value);
       }
     });
 

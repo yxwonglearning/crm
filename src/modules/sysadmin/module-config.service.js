@@ -6,12 +6,26 @@ const defaultModules = new Map([
   [customerModule.moduleKey, { module: customerModule, fields: customerFields }],
   [userModule.moduleKey, { module: userModule, fields: userFields }]
 ]);
-const fieldTypes = new Set(['text', 'email', 'phone', 'password', 'number', 'date', 'select', 'textarea', 'country', 'owner', 'checkbox']);
-const lockedRequiredFields = new Map(Array.from(defaultModules.entries()).map(([moduleKey, config]) => [
-  moduleKey,
-  new Set(config.fields.filter((field) => field.required).map((field) => field.fieldKey))
-]));
-
+const fieldTypes = new Set([
+  'textbox',
+  'textarea',
+  'checkbox',
+  'dropdownbox',
+  'int',
+  'decimals',
+  'browser_button',
+  'date',
+  'attach_document',
+  'image',
+  'text',
+  'email',
+  'phone',
+  'password',
+  'number',
+  'select',
+  'country',
+  'owner'
+]);
 function slugFieldKey(label) {
   return String(label || '')
     .trim()
@@ -93,6 +107,25 @@ function normalizeOptions(input) {
     .filter(Boolean);
 }
 
+function moduleTableBase(moduleKey) {
+  return String(moduleKey || 'module').replace(/s$/, '') || 'module';
+}
+
+async function resolveDetailTableName(moduleKey, moduleId, input = {}) {
+  if (input.tableType !== 'detail') return null;
+  if (input.detailTableName) return input.detailTableName;
+
+  const existingFields = await repository.listFields(moduleKey);
+  const existingDetailTable = existingFields.find((field) => field.tableType === 'detail' && field.detailTableName)?.detailTableName;
+  if (existingDetailTable) return existingDetailTable;
+
+  const allFields = await repository.listFields(moduleKey);
+  const detailTableCount = new Set(allFields
+    .filter((field) => field.tableType === 'detail' && field.detailTableName)
+    .map((field) => field.detailTableName)).size;
+  return `${moduleTableBase(moduleKey)}_dt${detailTableCount + 1}`;
+}
+
 async function createField(moduleKey, input) {
   const module = await repository.findModuleByKey(moduleKey);
   if (!module) throw new AppError('Module not found', 404);
@@ -106,18 +139,28 @@ async function createField(moduleKey, input) {
     throw new AppError('Unsupported field type', 422);
   }
 
-  await repository.createCustomField(module.id, {
+  const tableType = input.tableType === 'detail' ? 'detail' : 'main';
+  const detailTableName = await resolveDetailTableName(moduleKey, module.id, input);
+  const field = {
     fieldKey,
     label: input.label,
     type: input.type,
-    options: normalizeOptions(input.options),
+    tableType,
+    detailTableName,
+    options: input.type === 'dropdownbox' ? normalizeOptions(input.options) : [],
     required: Boolean(input.required),
     showInTable: input.showInTable !== false,
     showInForm: Boolean(input.required) || input.showInForm !== false,
     showInImport: Boolean(input.showInImport),
     searchable: Boolean(input.searchable),
-    sortOrder: input.sortOrder || 100
-  });
+    sortOrder: await repository.nextSortOrder(module.id)
+  };
+
+  if (field.tableType === 'detail') {
+    await repository.ensureDetailTableField(field.detailTableName, field.fieldKey, field.type);
+  }
+
+  await repository.createCustomField(module.id, field);
 
   return getModuleConfig(moduleKey);
 }
@@ -131,7 +174,7 @@ async function updateField(moduleKey, fieldKey, input) {
 
   const updates = {
     ...input,
-    options: input.options === undefined ? undefined : normalizeOptions(input.options)
+    options: input.options === undefined ? undefined : (input.type || field.type) === 'dropdownbox' ? normalizeOptions(input.options) : []
   };
 
   if (updates.required) {
@@ -140,15 +183,29 @@ async function updateField(moduleKey, fieldKey, input) {
 
   if (field.locked) {
     delete updates.type;
-    if (lockedRequiredFields.get(moduleKey)?.has(fieldKey)) {
-      updates.required = true;
-      updates.showInForm = true;
-    }
+    delete updates.tableType;
+    delete updates.detailTableName;
+  }
+
+  if (updates.tableType === 'detail' && !updates.detailTableName) {
+    const module = await repository.findModuleByKey(moduleKey);
+    updates.detailTableName = await resolveDetailTableName(moduleKey, module.id, updates);
+  }
+
+  if (updates.tableType === 'main') {
+    updates.detailTableName = null;
   }
 
   Object.keys(updates).forEach((key) => {
     if (updates[key] === undefined) delete updates[key];
   });
+
+  const nextTableType = updates.tableType || field.tableType;
+  const nextDetailTableName = updates.detailTableName === undefined ? field.detailTableName : updates.detailTableName;
+  const nextType = updates.type || field.type;
+  if (nextTableType === 'detail') {
+    await repository.ensureDetailTableField(nextDetailTableName, field.fieldKey, nextType);
+  }
 
   await repository.updateField(moduleKey, fieldKey, updates);
   return getModuleConfig(moduleKey);
