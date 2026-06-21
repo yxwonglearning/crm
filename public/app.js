@@ -13,7 +13,9 @@ const state = {
   editingFieldKey: '',
   batchActiveTable: 'main',
   batchDetailTables: [],
+  batchEditRows: [],
   batchDraftRows: [],
+  editingFormulaFieldKey: '',
   selectedCustomerIds: new Set()
 };
 
@@ -67,6 +69,122 @@ function slugFieldKeyPreview(label) {
 
 function renderReadonlyCheckbox(checked) {
   return `<input class="readonly-checkbox" type="checkbox" ${checked ? 'checked' : ''} disabled aria-label="${checked ? 'Checked' : 'Unchecked'}">`;
+}
+
+function formulaFields() {
+  return activeConfigFields().filter((field) => field.tableType !== 'detail');
+}
+
+function formulaTargetFields() {
+  const fields = formulaFields().filter((field) => !field.locked);
+  return fields.length ? fields : formulaFields();
+}
+
+function insertAtCursor(input, text) {
+  const start = input.selectionStart ?? input.value.length;
+  const end = input.selectionEnd ?? input.value.length;
+  input.value = `${input.value.slice(0, start)}${text}${input.value.slice(end)}`;
+  input.focus();
+  input.setSelectionRange(start + text.length, start + text.length);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function valuesFromCustomerForm(form) {
+  const values = {};
+  mainFormFields().forEach((field) => {
+    const input = form.elements[field.fieldKey];
+    if (!input) return;
+    values[field.fieldKey] = input.type === 'checkbox' ? input.checked : input.value;
+  });
+  return values;
+}
+
+function coerceFormulaValue(value) {
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
+  if (value === null || value === undefined || value === '') return '';
+  const number = Number(value);
+  return Number.isFinite(number) && String(value).trim() !== '' ? number : value;
+}
+
+function buildCustomFormulaFunctions(source = '', name = '', body = '') {
+  const functions = {};
+  if (String(source || '').trim()) {
+    const factory = Function(`"use strict"; ${source}`);
+    const sourceFunctions = factory();
+    if (!sourceFunctions || typeof sourceFunctions !== 'object' || Array.isArray(sourceFunctions)) {
+      throw new Error('Custom formula code must return an object of functions.');
+    }
+    Object.assign(functions, sourceFunctions);
+  }
+  const functionName = String(name || '').trim().toUpperCase();
+  const functionBody = String(body || '').trim();
+  if (functionName && functionBody) {
+    functions[functionName] = Function('value', `"use strict"; ${functionBody}`);
+  }
+  Object.entries(functions).forEach(([name, fn]) => {
+    if (!/^[A-Z][A-Z0-9_]*$/.test(name) || typeof fn !== 'function') {
+      throw new Error('Custom function names must be uppercase functions.');
+    }
+  });
+  return functions;
+}
+
+function buildAvailableFormulaFunctions(fields = [], customFunctionSource = '', customFunctionName = '', customFunctionBody = '') {
+  const savedFunctions = fields.reduce((functions, field) => ({
+    ...functions,
+    ...buildCustomFormulaFunctions(field.formulaJs, field.formulaFunctionName, field.formulaFunctionBody)
+  }), {});
+  return {
+    ...savedFunctions,
+    ...buildCustomFormulaFunctions(customFunctionSource, customFunctionName, customFunctionBody)
+  };
+}
+
+function evaluateFormulaExpression(expression, values, customFunctionSource = '', customFunctionName = '', customFunctionBody = '', customFunctionFields = []) {
+  if (!String(expression || '').trim()) return '';
+  const customFunctions = buildAvailableFormulaFunctions(customFunctionFields, customFunctionSource, customFunctionName, customFunctionBody);
+  const functionNames = new Set(['ABS', 'ROUND', 'MIN', 'MAX', ...Object.keys(customFunctions)]);
+  let compiled = String(expression)
+    .replace(/\b([a-zA-Z][a-zA-Z0-9_]*)\s*\(/g, (_match, name) => `${name.toUpperCase()}(`)
+    .replace(/\{([a-zA-Z][a-zA-Z0-9_]*)\}/g, (_match, key) => `coerceValue(values[${JSON.stringify(key)}])`);
+
+  compiled = compiled.replace(/\b(ABS|ROUND|MIN|MAX)\b/g, (name) => `Math.${name.toLowerCase()}`);
+  if (/[^0-9+\-*/().,\sA-Za-z_$[\]"']/.test(compiled)) {
+    throw new Error('Formula contains unsupported characters.');
+  }
+
+  const bareWords = compiled.match(/[A-Za-z_]+/g) || [];
+  const allowedWords = new Set(['Math', 'abs', 'round', 'min', 'max', 'values', 'coerceValue', ...Object.keys(values), ...functionNames]);
+  if (bareWords.some((word) => !allowedWords.has(word))) {
+    throw new Error('Formula contains unsupported words.');
+  }
+
+  const result = Function('values', 'customFunctions', 'coerceValue', `"use strict"; const { ${Object.keys(customFunctions).join(', ')} } = customFunctions; return (${compiled});`)(values, customFunctions, coerceFormulaValue);
+  if (typeof result === 'number') {
+    if (!Number.isFinite(result)) return '';
+    return Number.isInteger(result) ? String(result) : String(Number(result.toFixed(4)));
+  }
+  return result ?? '';
+}
+
+function applyCustomerFormulas() {
+  const form = $('#customerForm');
+  if (!form) return;
+  const values = valuesFromCustomerForm(form);
+  mainFormFields()
+    .filter((field) => field.formulaEnabled && field.formulaExpression)
+    .forEach((field) => {
+      const input = form.elements[field.fieldKey];
+      if (!input) return;
+      try {
+        const value = evaluateFormulaExpression(field.formulaExpression, values, field.formulaJs, field.formulaFunctionName, field.formulaFunctionBody, state.customerFields);
+        input.value = value;
+        values[field.fieldKey] = value;
+      } catch (_error) {
+        input.value = '';
+        values[field.fieldKey] = '';
+      }
+    });
 }
 
 function fieldTypeLabel(type) {
@@ -135,13 +253,36 @@ function nextBatchDetailTableName() {
 }
 
 function batchRowsForActiveTable() {
-  const existingRows = activeConfigFields()
-    .filter((field) => tableKeyForField(field) === state.batchActiveTable)
-    .map((field) => ({ existing: true, field }));
+  const existingRows = state.batchEditRows
+    .filter((row) => row.tableKey === state.batchActiveTable)
+    .map((row) => ({ existing: true, row }));
   const draftRows = state.batchDraftRows
     .filter((row) => row.tableKey === state.batchActiveTable)
     .map((row) => ({ existing: false, row }));
   return [...existingRows, ...draftRows];
+}
+
+function batchRowFromField(field) {
+  return {
+    id: `existing-${field.fieldKey}`,
+    existing: true,
+    locked: Boolean(field.locked),
+    tableKey: tableKeyForField(field),
+    fieldKey: field.fieldKey,
+    databaseFieldName: field.dataKey || field.fieldKey,
+    label: field.label,
+    type: field.type,
+    options: (field.options || []).join(', '),
+    showInTable: field.showInTable,
+    showInForm: field.showInForm,
+    showInImport: field.showInImport,
+    required: field.required
+  };
+}
+
+function findBatchRow(rowId) {
+  return state.batchEditRows.find((row) => row.id === rowId)
+    || state.batchDraftRows.find((row) => row.id === rowId);
 }
 
 function createBatchDraftRow(tableKey = state.batchActiveTable) {
@@ -151,6 +292,7 @@ function createBatchDraftRow(tableKey = state.batchActiveTable) {
     tableKey,
     label: '',
     fieldKey: '',
+    databaseFieldName: '',
     type: 'textbox',
     options: '',
     showInTable: true,
@@ -183,37 +325,21 @@ function renderBatchRows() {
   if (!body) return;
   const rows = batchRowsForActiveTable();
   body.innerHTML = rows.map((item) => {
-    if (item.existing) {
-      const field = item.field;
-      return `
-        <tr class="is-existing">
-          <td><strong>${escapeHtml(field.label)}</strong></td>
-          <td>${escapeHtml(field.fieldKey)}</td>
-          <td>${escapeHtml(field.dataKey || field.fieldKey)}</td>
-          <td>${escapeHtml(fieldTypeLabel(field.type))}</td>
-          <td>${escapeHtml((field.options || []).join(', '))}</td>
-          <td>${renderReadonlyCheckbox(field.showInTable)}</td>
-          <td>${renderReadonlyCheckbox(field.showInForm)}</td>
-          <td>${renderReadonlyCheckbox(field.showInImport)}</td>
-          <td>${renderReadonlyCheckbox(field.required)}</td>
-          <td><span class="muted">Saved</span></td>
-        </tr>
-      `;
-    }
-
     const row = item.row;
+    const isExisting = item.existing;
+    const status = isExisting ? '<span class="muted">Saved</span>' : `<button type="button" class="link-button" data-remove-batch-row="${escapeHtml(row.id)}">Remove</button>`;
     return `
-      <tr data-batch-row="${escapeHtml(row.id)}">
+      <tr class="${isExisting ? 'is-existing' : ''}" data-batch-row="${escapeHtml(row.id)}" ${isExisting ? 'data-existing-batch-row="true"' : ''}>
         <td><input name="label" value="${escapeHtml(row.label)}" placeholder="Field name"></td>
         <td><input name="fieldKey" value="${escapeHtml(row.fieldKey)}" placeholder="Auto" readonly></td>
-        <td><input name="databaseFieldName" value="${escapeHtml(row.fieldKey)}" placeholder="Auto" readonly></td>
-        <td><select name="type">${renderFieldTypeOptions(row.type, false)}</select></td>
+        <td><input name="databaseFieldName" value="${escapeHtml(row.databaseFieldName || row.fieldKey)}" placeholder="Auto" readonly></td>
+        <td><select name="type" ${row.locked ? 'disabled' : ''}>${renderFieldTypeOptions(row.type, isExisting)}</select></td>
         <td><input name="options" value="${escapeHtml(row.options)}" placeholder="Option A, Option B" ${row.type === 'dropdownbox' ? '' : 'hidden'}></td>
         <td>${batchEditableCheckbox('showInTable', row.showInTable)}</td>
         <td>${batchEditableCheckbox('showInForm', row.showInForm)}</td>
         <td>${batchEditableCheckbox('showInImport', row.showInImport)}</td>
         <td>${batchEditableCheckbox('required', row.required)}</td>
-        <td><button type="button" class="link-button" data-remove-batch-row="${escapeHtml(row.id)}">Remove</button></td>
+        <td>${status}</td>
       </tr>
     `;
   }).join('') || '<tr><td colspan="10">No fields in this table yet.</td></tr>';
@@ -234,6 +360,7 @@ function openBatchFieldModal() {
     .filter((field) => field.tableType === 'detail' && field.detailTableName)
     .map((field) => field.detailTableName)
     .filter((value, index, list) => list.indexOf(value) === index);
+  state.batchEditRows = activeConfigFields().map(batchRowFromField);
   state.batchDraftRows = [];
   renderBatchFieldModal();
   $('#batchFieldModal').hidden = false;
@@ -243,6 +370,7 @@ function openBatchFieldModal() {
 function closeBatchFieldModal() {
   const modal = $('#batchFieldModal');
   if (!modal) return;
+  resetModalFullscreen(modal);
   modal.hidden = true;
   document.body.classList.remove('modal-open');
 }
@@ -280,12 +408,191 @@ function openFieldPropertiesModal() {
 function closeFieldPropertiesModal() {
   const modal = $('#fieldPropertiesModal');
   if (!modal) return;
+  resetModalFullscreen(modal);
+  modal.hidden = true;
+  document.body.classList.remove('modal-open');
+}
+
+function renderFormulaTargets(selectedFieldKey = '') {
+  const select = $('#formulaBuilderForm')?.elements.targetField;
+  if (!select) return;
+  const fields = formulaTargetFields();
+  select.innerHTML = fields.map((field) => (
+    `<option value="${escapeHtml(field.fieldKey)}" ${field.fieldKey === selectedFieldKey ? 'selected' : ''}>${escapeHtml(field.label)}</option>`
+  )).join('');
+}
+
+function renderFormulaVariables(targetFieldKey = '') {
+  const container = $('#formulaVariableList');
+  if (!container) return;
+  container.innerHTML = formulaFields()
+    .filter((field) => field.fieldKey !== targetFieldKey)
+    .map((field) => `
+      <button type="button" class="link-button" data-insert-formula="{${escapeHtml(field.fieldKey)}}">${escapeHtml(field.label)}</button>
+    `).join('') || '<p class="muted">No source fields available.</p>';
+}
+
+function customFormulaFunctionNames(source = '', name = '', body = '') {
+  try {
+    return Object.keys(buildAvailableFormulaFunctions(activeConfigFields(), source, name, body));
+  } catch (_error) {
+    return [];
+  }
+}
+
+function renderFormulaFunctions(source = '', name = '', body = '') {
+  const container = $('#formulaFunctionList');
+  if (!container) return;
+  const builtIns = [
+    ['ROUND(', 'ROUND(value)'],
+    ['ABS(', 'ABS(value)'],
+    ['MIN(', 'MIN(value1, value2)'],
+    ['MAX(', 'MAX(value1, value2)']
+  ];
+  const builtInNames = new Set(builtIns.map(([_insert, label]) => label.split('(')[0]));
+  const custom = customFormulaFunctionNames(source, name, body)
+    .filter((functionName) => !builtInNames.has(functionName))
+    .map((functionName) => [`${functionName}(`, `${functionName}(value)`]);
+  container.innerHTML = [...builtIns, ...custom].map(([insert, label]) => (
+    `<button type="button" class="link-button" data-insert-formula="${escapeHtml(insert)}">${escapeHtml(label)}</button>`
+  )).join('');
+}
+
+const formulaFunctionPresets = {
+  TRIM: "return String(value || '').trim();",
+  LTRIM: "return String(value || '').replace(/^\\s+/, '');",
+  RTRIM: "return String(value || '').replace(/\\s+$/, '');",
+  UPPER: "return String(value || '').toUpperCase();",
+  LOWER: "return String(value || '').toLowerCase();"
+};
+
+function savedFormulaFunctionPresets() {
+  return activeConfigFields().reduce((presets, field) => {
+    const functionName = String(field.formulaFunctionName || '').trim().toUpperCase();
+    const functionBody = String(field.formulaFunctionBody || '').trim();
+    if (functionName && functionBody) {
+      presets[functionName] = functionBody;
+    }
+    return presets;
+  }, {});
+}
+
+function renderFormulaPresetButtons() {
+  const container = $('#formulaPresetButtons');
+  if (!container) return;
+  const presets = { ...formulaFunctionPresets, ...savedFormulaFunctionPresets() };
+  container.innerHTML = Object.keys(presets).map((name) => (
+    `<button type="button" class="secondary" data-function-preset="${escapeHtml(name)}">${escapeHtml(name)}</button>`
+  )).join('');
+}
+
+function applyFormulaFunctionPreset(name) {
+  const form = $('#formulaBuilderForm');
+  const body = { ...formulaFunctionPresets, ...savedFormulaFunctionPresets() }[name];
+  if (!form || !body) return;
+  form.elements.formulaFunctionName.value = name;
+  form.elements.formulaFunctionBody.value = body;
+  renderFormulaFunctions(form.elements.formulaJs.value, name, body);
+  updateFormulaPreview();
+}
+
+function syncFormulaBuilderField(fieldKey) {
+  const form = $('#formulaBuilderForm');
+  const field = findConfigField(fieldKey) || formulaTargetFields()[0];
+  if (!form || !field) return;
+  state.editingFormulaFieldKey = field.fieldKey;
+  form.elements.fieldKey.value = field.fieldKey;
+  form.elements.targetField.value = field.fieldKey;
+  form.elements.formulaExpression.value = field.formulaExpression || '';
+  form.elements.formulaJs.value = '';
+  form.elements.formulaFunctionName.value = field.formulaFunctionName || '';
+  form.elements.formulaFunctionBody.value = field.formulaFunctionBody || '';
+  form.elements.formulaSql.value = field.formulaSql || '';
+  form.elements.formulaEnabled.checked = Boolean(field.formulaEnabled);
+  $('#formulaTargetLabel').textContent = `${field.label} =`;
+  renderFormulaVariables(field.fieldKey);
+  renderFormulaFunctions(field.formulaJs || '', field.formulaFunctionName || '', field.formulaFunctionBody || '');
+  renderFormulaPresetButtons();
+  updateFormulaPreview();
+}
+
+function updateFormulaPreview() {
+  const form = $('#formulaBuilderForm');
+  const preview = $('#formulaPreview');
+  if (!form || !preview) return;
+  const sampleValues = {};
+  formulaFields().forEach((field, index) => {
+    sampleValues[field.fieldKey] = index + 1;
+  });
+  try {
+    const value = evaluateFormulaExpression(
+      form.elements.formulaExpression.value,
+      sampleValues,
+      form.elements.formulaJs.value,
+      form.elements.formulaFunctionName.value,
+      form.elements.formulaFunctionBody.value,
+      activeConfigFields()
+    );
+    preview.textContent = value === '' ? 'Preview: blank' : `Preview: ${value}`;
+  } catch (error) {
+    preview.textContent = error.message;
+  }
+}
+
+function showFormulaTab(paneId) {
+  $$('.formula-tab-pane').forEach((pane) => {
+    pane.hidden = pane.id !== paneId;
+  });
+  $$('[data-formula-tab]').forEach((button) => {
+    button.classList.toggle('is-active', button.dataset.formulaTab === paneId);
+  });
+}
+
+function openFormulaBuilderModal(fieldKey = '') {
+  if (!formulaTargetFields().length) {
+    toast('Add A Custom Field Before Creating A Formula.', 'error');
+    return;
+  }
+  renderFormulaTargets(fieldKey);
+  syncFormulaBuilderField(fieldKey || formulaTargetFields()[0]?.fieldKey || '');
+  showFormulaTab('formulaExpressionPane');
+  $('#formulaBuilderModal').hidden = false;
+  document.body.classList.add('modal-open');
+  $('#formulaBuilderForm [name="formulaExpression"]').focus();
+}
+
+function closeFormulaBuilderModal() {
+  const modal = $('#formulaBuilderModal');
+  if (!modal) return;
+  resetModalFullscreen(modal);
   modal.hidden = true;
   document.body.classList.remove('modal-open');
 }
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
+
+function setModalFullscreen(modal, enabled) {
+  const card = modal?.querySelector('.modal-card');
+  const button = card?.querySelector('[data-modal-fullscreen]');
+  if (!card || !button) return;
+  modal.classList.toggle('is-fullscreen', enabled);
+  card.classList.toggle('is-fullscreen', enabled);
+  button.setAttribute('aria-pressed', String(enabled));
+  button.setAttribute('aria-label', enabled ? 'Restore popup size' : 'Enlarge to full screen');
+  button.setAttribute('title', enabled ? 'Restore popup size' : 'Enlarge to full screen');
+}
+
+function resetModalFullscreen(modal) {
+  setModalFullscreen(modal, false);
+}
+
+function toggleModalFullscreen(button) {
+  const modal = button.closest('.modal-backdrop');
+  const card = button.closest('.modal-card');
+  if (!modal || !card) return;
+  setModalFullscreen(modal, !card.classList.contains('is-fullscreen'));
+}
 
 function toast(message, type = 'ok') {
   const element = $('#toast');
@@ -328,6 +635,7 @@ function showView(id) {
   closeDeleteCustomerModal();
   closeUserModal();
   closeFieldConfigModal();
+  closeFormulaBuilderModal();
   $('#loginView').hidden = id !== 'loginView';
   $$('.view').forEach((view) => {
     view.hidden = view.id !== id;
@@ -467,9 +775,12 @@ function renderCustomerFieldInput(field, value = '', options = {}) {
   const binding = options.detailField
     ? `data-detail-field="${escapeHtml(field.fieldKey)}"`
     : `name="${escapeHtml(field.fieldKey)}"`;
+  const formulaReadonly = field.formulaEnabled && field.formulaExpression && !options.detailField
+    ? 'readonly data-formula-field="true"'
+    : '';
 
   if (field.type === 'textarea') {
-    return `<textarea ${binding} rows="4" ${required}>${escapeHtml(value)}</textarea>`;
+    return `<textarea ${binding} rows="4" ${required} ${formulaReadonly}>${escapeHtml(value)}</textarea>`;
   }
 
   if (field.type === 'select' || field.type === 'dropdownbox') {
@@ -517,7 +828,7 @@ function renderCustomerFieldInput(field, value = '', options = {}) {
     decimals: 'number'
   }[field.type] || field.type;
   const step = field.type === 'int' ? 'step="1"' : field.type === 'decimals' ? 'step="any"' : '';
-  return `<input ${binding} type="${escapeHtml(inputType)}" value="${escapeHtml(value)}" ${step} ${required}>`;
+  return `<input ${binding} type="${escapeHtml(inputType)}" value="${escapeHtml(value)}" ${step} ${required} ${formulaReadonly}>`;
 }
 
 function valueForForm(customer, field) {
@@ -725,6 +1036,7 @@ function renderCustomerFormFields(customer = null) {
   $('#customerFormFields').innerHTML = `${mainFields}${detailTables}`;
   updateDialCode();
   syncAllDetailTableControls();
+  applyCustomerFormulas();
 }
 
 function renderCustomerCell(customer, field) {
@@ -911,9 +1223,10 @@ function renderFieldConfig() {
       <td>${renderReadonlyCheckbox(field.showInForm)}</td>
       <td>${renderReadonlyCheckbox(field.showInImport)}</td>
       <td>${renderReadonlyCheckbox(field.required)}</td>
+      <td>${field.formulaEnabled ? '<span class="formula-badge">fx</span>' : ''}</td>
       <td><button type="button" class="link-button" data-edit-field="${escapeHtml(field.fieldKey)}">Edit</button></td>
     </tr>
-  `).join('') || `<tr><td colspan="7">No fields found for ${escapeHtml(module?.name || 'this form')}.</td></tr>`;
+  `).join('') || `<tr><td colspan="8">No fields found for ${escapeHtml(module?.name || 'this form')}.</td></tr>`;
   renderFormModuleList();
 }
 function moduleFieldCount(moduleKey) {
@@ -1013,6 +1326,7 @@ function openFieldConfigModal(field = null) {
 function closeFieldConfigModal() {
   const modal = $('#fieldConfigModal');
   if (!modal) return;
+  resetModalFullscreen(modal);
   modal.hidden = true;
   document.body.classList.remove('modal-open');
 }
@@ -1132,6 +1446,7 @@ function openCustomerModal() {
 function closeCustomerModal() {
   const modal = $('#customerModal');
   if (!modal) return;
+  resetModalFullscreen(modal);
   modal.hidden = true;
   document.body.classList.remove('modal-open');
 }
@@ -1147,6 +1462,7 @@ function openImportModal() {
 function closeImportModal() {
   const modal = $('#importModal');
   if (!modal) return;
+  resetModalFullscreen(modal);
   modal.hidden = true;
   document.body.classList.remove('modal-open');
 }
@@ -1166,6 +1482,7 @@ function openDeleteCustomerModal() {
 function closeDeleteCustomerModal() {
   const modal = $('#deleteCustomerModal');
   if (!modal) return;
+  resetModalFullscreen(modal);
   modal.hidden = true;
   document.body.classList.remove('modal-open');
 }
@@ -1188,6 +1505,7 @@ function openUserModal() {
 function closeUserModal() {
   const modal = $('#userModal');
   if (!modal) return;
+  resetModalFullscreen(modal);
   modal.hidden = true;
   document.body.classList.remove('modal-open');
 }
@@ -1330,6 +1648,7 @@ function bindEvents() {
   $('#customerFormFields').addEventListener('change', (event) => {
     if (event.target.name === 'countryId') {
       updateDialCode();
+      applyCustomerFormulas();
       return;
     }
 
@@ -1348,6 +1667,10 @@ function bindEvents() {
       const section = detailRowCheckbox.closest('[data-detail-table-section]');
       if (section) syncDetailTableControls(section);
     }
+    applyCustomerFormulas();
+  });
+  $('#customerFormFields').addEventListener('input', () => {
+    applyCustomerFormulas();
   });
   $('#customerFormFields').addEventListener('click', (event) => {
     const addButton = event.target.closest('[data-add-detail-row]');
@@ -1420,6 +1743,11 @@ function bindEvents() {
       closeCustomerModal();
     }
   });
+  document.addEventListener('click', (event) => {
+    const fullscreenButton = event.target.closest('[data-modal-fullscreen]');
+    if (!fullscreenButton) return;
+    toggleModalFullscreen(fullscreenButton);
+  });
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
     if (!$('#customerModal').hidden) {
@@ -1442,6 +1770,9 @@ function bindEvents() {
     }
     if (!$('#fieldPropertiesModal').hidden) {
       closeFieldPropertiesModal();
+    }
+    if (!$('#formulaBuilderModal').hidden) {
+      closeFormulaBuilderModal();
     }
   });
 
@@ -1473,6 +1804,7 @@ function bindEvents() {
   });
 
   $('#addFieldButton').addEventListener('click', () => openFieldConfigModal());
+  $('#formDesignButton').addEventListener('click', () => openFormulaBuilderModal());
   $('#batchAddFieldsButton').addEventListener('click', openBatchFieldModal);
   $('#fieldPropertiesButton').addEventListener('click', openFieldPropertiesModal);
   $('#closeFieldConfigModal').addEventListener('click', closeFieldConfigModal);
@@ -1536,13 +1868,16 @@ function bindEvents() {
   $('#batchFieldRows').addEventListener('input', (event) => {
     const rowElement = event.target.closest('[data-batch-row]');
     if (!rowElement) return;
-    const row = state.batchDraftRows.find((item) => item.id === rowElement.dataset.batchRow);
+    const row = findBatchRow(rowElement.dataset.batchRow);
     if (!row) return;
     if (event.target.name === 'label') {
       row.label = event.target.value;
-      row.fieldKey = slugFieldKeyPreview(row.label);
-      rowElement.querySelector('[name="fieldKey"]').value = row.fieldKey;
-      rowElement.querySelector('[name="databaseFieldName"]').value = row.fieldKey;
+      if (!row.existing) {
+        row.fieldKey = slugFieldKeyPreview(row.label);
+        row.databaseFieldName = row.fieldKey;
+        rowElement.querySelector('[name="fieldKey"]').value = row.fieldKey;
+        rowElement.querySelector('[name="databaseFieldName"]').value = row.fieldKey;
+      }
     } else if (event.target.name === 'options') {
       row.options = event.target.value;
     }
@@ -1550,7 +1885,7 @@ function bindEvents() {
   $('#batchFieldRows').addEventListener('change', (event) => {
     const rowElement = event.target.closest('[data-batch-row]');
     if (!rowElement) return;
-    const row = state.batchDraftRows.find((item) => item.id === rowElement.dataset.batchRow);
+    const row = findBatchRow(rowElement.dataset.batchRow);
     if (!row) return;
     if (event.target.name === 'type') {
       row.type = event.target.value;
@@ -1572,6 +1907,97 @@ function bindEvents() {
   $('#fieldPropertiesModal').addEventListener('click', (event) => {
     if (event.target === event.currentTarget) {
       closeFieldPropertiesModal();
+    }
+  });
+  $('#closeFormulaBuilderModal').addEventListener('click', closeFormulaBuilderModal);
+  $('#cancelFormulaButton').addEventListener('click', closeFormulaBuilderModal);
+  $('#clearFormulaButton').addEventListener('click', () => {
+    const form = $('#formulaBuilderForm');
+    form.elements.formulaExpression.value = '';
+    form.elements.formulaJs.value = '';
+    form.elements.formulaFunctionName.value = '';
+    form.elements.formulaFunctionBody.value = '';
+    form.elements.formulaSql.value = '';
+    form.elements.formulaEnabled.checked = false;
+    renderFormulaFunctions('');
+    renderFormulaPresetButtons();
+    updateFormulaPreview();
+  });
+  $('#formulaBuilderModal').addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) {
+      closeFormulaBuilderModal();
+    }
+  });
+  $('#formulaBuilderForm [name="targetField"]').addEventListener('change', (event) => {
+    syncFormulaBuilderField(event.target.value);
+  });
+  $('#formulaBuilderForm [name="formulaExpression"]').addEventListener('input', updateFormulaPreview);
+  $('#formulaBuilderForm [name="formulaJs"]').addEventListener('input', (event) => {
+    const form = event.target.form;
+    renderFormulaFunctions(event.target.value, form.elements.formulaFunctionName.value, form.elements.formulaFunctionBody.value);
+    updateFormulaPreview();
+  });
+  $('#formulaBuilderForm [name="formulaFunctionName"]').addEventListener('input', (event) => {
+    event.target.value = event.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '');
+    const form = event.target.form;
+    renderFormulaFunctions(form.elements.formulaJs.value, event.target.value, form.elements.formulaFunctionBody.value);
+    updateFormulaPreview();
+  });
+  $('#formulaBuilderForm [name="formulaFunctionBody"]').addEventListener('input', (event) => {
+    const form = event.target.form;
+    renderFormulaFunctions(form.elements.formulaJs.value, form.elements.formulaFunctionName.value, event.target.value);
+    updateFormulaPreview();
+  });
+  $('#formulaBuilderForm').addEventListener('click', (event) => {
+    const tabButton = event.target.closest('[data-formula-tab]');
+    if (!tabButton) return;
+    showFormulaTab(tabButton.dataset.formulaTab);
+  });
+  $('#formulaBuilderForm').addEventListener('click', (event) => {
+    const presetButton = event.target.closest('[data-function-preset]');
+    if (!presetButton) return;
+    applyFormulaFunctionPreset(presetButton.dataset.functionPreset);
+  });
+  $('#formulaBuilderForm').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-insert-formula]');
+    if (!button) return;
+    insertAtCursor($('#formulaBuilderForm').elements.formulaExpression, button.dataset.insertFormula);
+  });
+  $('#formulaBuilderForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const fieldKey = form.elements.fieldKey.value;
+    const field = findConfigField(fieldKey);
+    if (!field) return;
+    const formulaExpression = form.elements.formulaExpression.value.trim();
+    const formulaJs = form.elements.formulaJs.value.trim();
+    const formulaFunctionName = form.elements.formulaFunctionName.value.trim().toUpperCase();
+    const formulaFunctionBody = form.elements.formulaFunctionBody.value.trim();
+    const formulaSql = form.elements.formulaSql.value.trim();
+    const formulaEnabled = form.elements.formulaEnabled.checked && Boolean(formulaExpression);
+    const submitButton = $('#saveFormulaButton');
+    submitButton.disabled = true;
+    submitButton.textContent = 'Saving...';
+    try {
+      const config = await api(`/api/sysadmin/modules/${state.activeConfigModule}/fields/${fieldKey}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          formulaExpression,
+          formulaEnabled,
+          formulaJs,
+          formulaFunctionName,
+          formulaFunctionBody,
+          formulaSql
+        })
+      });
+      setModuleConfig(state.activeConfigModule, config.fields);
+      closeFormulaBuilderModal();
+      toast('Formula Saved.');
+    } catch (error) {
+      toast(titleCaseMessage(error.message), 'error');
+    } finally {
+      submitButton.disabled = false;
+      submitButton.textContent = 'Save';
     }
   });
 
@@ -1629,9 +2055,10 @@ function bindEvents() {
 
   $('#batchFieldForm').addEventListener('submit', async (event) => {
     event.preventDefault();
-    const rows = state.batchDraftRows.filter((row) => row.label.trim());
-    if (!rows.length) {
-      toast('Add at least one field.', 'error');
+    const existingRows = state.batchEditRows.filter((row) => row.label.trim());
+    const newRows = state.batchDraftRows.filter((row) => row.label.trim());
+    if (!existingRows.length && !newRows.length) {
+      toast('Add or edit at least one field.', 'error');
       return;
     }
 
@@ -1640,7 +2067,21 @@ function bindEvents() {
     submitButton.textContent = 'Saving...';
     try {
       let latestConfig = null;
-      for (const row of rows) {
+      for (const row of existingRows) {
+        latestConfig = await api(`/api/sysadmin/modules/${state.activeConfigModule}/fields/${row.fieldKey}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            label: row.label,
+            type: row.type,
+            options: row.type === 'dropdownbox' ? row.options : [],
+            showInTable: row.showInTable,
+            showInForm: row.showInForm,
+            showInImport: row.showInImport,
+            required: row.required
+          })
+        });
+      }
+      for (const row of newRows) {
         latestConfig = await api(`/api/sysadmin/modules/${state.activeConfigModule}/fields`, {
           method: 'POST',
           body: JSON.stringify({
@@ -1661,12 +2102,12 @@ function bindEvents() {
         setModuleConfig(state.activeConfigModule, latestConfig.fields);
       }
       closeBatchFieldModal();
-      toast(`Added ${rows.length} Field${rows.length === 1 ? '' : 's'}.`);
+      toast(`Saved ${existingRows.length + newRows.length} Field${existingRows.length + newRows.length === 1 ? '' : 's'}.`);
     } catch (error) {
       toast(titleCaseMessage(error.message), 'error');
     } finally {
       submitButton.disabled = false;
-      submitButton.textContent = 'Confirm';
+      submitButton.textContent = 'Save Changes';
     }
   });
 

@@ -107,6 +107,24 @@ function normalizeOptions(input) {
     .filter(Boolean);
 }
 
+function normalizeFormulaExpression(input) {
+  return String(input || '').trim();
+}
+
+function normalizeFormulaScript(input) {
+  return String(input || '').trim();
+}
+
+function normalizeFormulaFunctionName(input) {
+  return String(input || '').trim().toUpperCase();
+}
+
+function assertFormulaFunctionName(name) {
+  if (name && !/^[A-Z][A-Z0-9_]*$/.test(name)) {
+    throw new AppError('Formula function name must use uppercase letters, numbers, or underscores', 422);
+  }
+}
+
 function moduleTableBase(moduleKey) {
   return String(moduleKey || 'module').replace(/s$/, '') || 'module';
 }
@@ -138,6 +156,8 @@ async function createField(moduleKey, input) {
   if (!fieldTypes.has(input.type)) {
     throw new AppError('Unsupported field type', 422);
   }
+  const formulaFunctionName = normalizeFormulaFunctionName(input.formulaFunctionName);
+  assertFormulaFunctionName(formulaFunctionName);
 
   const tableType = input.tableType === 'detail' ? 'detail' : 'main';
   const detailTableName = await resolveDetailTableName(moduleKey, module.id, input);
@@ -148,6 +168,12 @@ async function createField(moduleKey, input) {
     tableType,
     detailTableName,
     options: input.type === 'dropdownbox' ? normalizeOptions(input.options) : [],
+    formulaExpression: normalizeFormulaExpression(input.formulaExpression),
+    formulaEnabled: Boolean(input.formulaEnabled && normalizeFormulaExpression(input.formulaExpression)),
+    formulaJs: normalizeFormulaScript(input.formulaJs),
+    formulaFunctionName,
+    formulaFunctionBody: normalizeFormulaScript(input.formulaFunctionBody),
+    formulaSql: normalizeFormulaScript(input.formulaSql),
     required: Boolean(input.required),
     showInTable: input.showInTable !== false,
     showInForm: Boolean(input.required) || input.showInForm !== false,
@@ -171,10 +197,18 @@ async function updateField(moduleKey, fieldKey, input) {
   if (!fieldTypes.has(input.type || field.type)) {
     throw new AppError('Unsupported field type', 422);
   }
+  const formulaFunctionName = input.formulaFunctionName === undefined ? undefined : normalizeFormulaFunctionName(input.formulaFunctionName);
+  assertFormulaFunctionName(formulaFunctionName);
 
   const updates = {
     ...input,
-    options: input.options === undefined ? undefined : (input.type || field.type) === 'dropdownbox' ? normalizeOptions(input.options) : []
+    options: input.options === undefined ? undefined : (input.type || field.type) === 'dropdownbox' ? normalizeOptions(input.options) : [],
+    formulaExpression: input.formulaExpression === undefined ? undefined : normalizeFormulaExpression(input.formulaExpression),
+    formulaEnabled: input.formulaEnabled === undefined ? undefined : Boolean(input.formulaEnabled && normalizeFormulaExpression(input.formulaExpression ?? field.formulaExpression)),
+    formulaJs: input.formulaJs === undefined ? undefined : normalizeFormulaScript(input.formulaJs),
+    formulaFunctionName,
+    formulaFunctionBody: input.formulaFunctionBody === undefined ? undefined : normalizeFormulaScript(input.formulaFunctionBody),
+    formulaSql: input.formulaSql === undefined ? undefined : normalizeFormulaScript(input.formulaSql)
   };
 
   if (updates.required) {

@@ -86,7 +86,10 @@
             <form id="customerForm" class="panel modal-card customer-modal-card">
               <div class="modal-header">
                 <h2 id="customerFormTitle">Add</h2>
-                <button type="button" class="icon-button" id="closeCustomerModal" aria-label="Close">x</button>
+                <div class="modal-title-actions">
+                  <button type="button" class="icon-button fullscreen-button" data-modal-fullscreen aria-label="Enlarge to full screen" aria-pressed="false" title="Enlarge to full screen"></button>
+                  <button type="button" class="icon-button" id="closeCustomerModal" aria-label="Close">x</button>
+                </div>
               </div>
               <input name="id" type="hidden">
               <div id="customerFormFields"></div>
@@ -101,7 +104,10 @@
             <div class="panel modal-card narrow-modal">
               <div class="modal-header">
                 <h2>Delete Customers</h2>
-                <button type="button" class="icon-button" id="closeDeleteCustomerModal" aria-label="Close">x</button>
+                <div class="modal-title-actions">
+                  <button type="button" class="icon-button fullscreen-button" data-modal-fullscreen aria-label="Enlarge to full screen" aria-pressed="false" title="Enlarge to full screen"></button>
+                  <button type="button" class="icon-button" id="closeDeleteCustomerModal" aria-label="Close">x</button>
+                </div>
               </div>
               <p id="deleteCustomerMessage" class="muted"></p>
               <div class="form-actions">
@@ -115,7 +121,10 @@
             <form id="importForm" class="panel modal-card narrow-modal">
               <div class="modal-header">
                 <h2>Import Customers</h2>
-                <button type="button" class="icon-button" id="closeImportModal" aria-label="Close">x</button>
+                <div class="modal-title-actions">
+                  <button type="button" class="icon-button fullscreen-button" data-modal-fullscreen aria-label="Enlarge to full screen" aria-pressed="false" title="Enlarge to full screen"></button>
+                  <button type="button" class="icon-button" id="closeImportModal" aria-label="Close">x</button>
+                </div>
               </div>
               <p class="muted">Download the fixed Excel template, fill in the customer information, then upload it here.</p>
               <a class="inline-link" href="/api/imports/customers/template" id="templateLink">Download Customer Import Template</a>
@@ -155,7 +164,10 @@
             <form id="userForm" class="panel modal-card">
               <div class="modal-header">
                 <h2 id="userFormTitle">Add User</h2>
-                <button type="button" class="icon-button" id="closeUserModal" aria-label="Close">x</button>
+                <div class="modal-title-actions">
+                  <button type="button" class="icon-button fullscreen-button" data-modal-fullscreen aria-label="Enlarge to full screen" aria-pressed="false" title="Enlarge to full screen"></button>
+                  <button type="button" class="icon-button" id="closeUserModal" aria-label="Close">x</button>
+                </div>
               </div>
               <input name="id" type="hidden">
               <div id="userFormFields"></div>
@@ -231,8 +243,9 @@
                   <p>Configure module fields, table columns, forms, and import columns.</p>
                 </div>
                 <div class="toolbar-actions">
+                  <button type="button" class="secondary" id="formDesignButton">Form Design</button>
                   <button type="button" id="addFieldButton">Add Field</button>
-                  <button type="button" class="secondary" id="batchAddFieldsButton">Batch Add</button>
+                  <button type="button" class="secondary" id="batchAddFieldsButton">Batch Edit</button>
                   <button type="button" class="secondary" id="fieldPropertiesButton">Field Properties</button>
                 </div>
               </div>
@@ -256,6 +269,7 @@
                         <th>Form</th>
                         <th>Import</th>
                         <th>Required</th>
+                        <th>Formula</th>
                         <th></th>
                       </tr>
                     </thead>
@@ -312,7 +326,10 @@
             <form id="fieldConfigForm" class="panel modal-card field-config-modal-card">
               <div class="modal-header">
                 <h2 id="fieldConfigFormTitle">Add Field</h2>
-                <button type="button" class="icon-button" id="closeFieldConfigModal" aria-label="Close">x</button>
+                <div class="modal-title-actions">
+                  <button type="button" class="icon-button fullscreen-button" data-modal-fullscreen aria-label="Enlarge to full screen" aria-pressed="false" title="Enlarge to full screen"></button>
+                  <button type="button" class="icon-button" id="closeFieldConfigModal" aria-label="Close">x</button>
+                </div>
               </div>
               <input name="fieldKey" type="hidden">
               <div class="field-config-grid">
@@ -372,8 +389,11 @@
           <div id="batchFieldModal" class="modal-backdrop" hidden>
             <form id="batchFieldForm" class="panel modal-card batch-field-modal-card">
               <div class="modal-header">
-                <h2>Batch Add Fields</h2>
-                <button type="button" class="icon-button" id="closeBatchFieldModal" aria-label="Close">x</button>
+                <h2>Batch Edit Fields</h2>
+                <div class="modal-title-actions">
+                  <button type="button" class="icon-button fullscreen-button" data-modal-fullscreen aria-label="Enlarge to full screen" aria-pressed="false" title="Enlarge to full screen"></button>
+                  <button type="button" class="icon-button" id="closeBatchFieldModal" aria-label="Close">x</button>
+                </div>
               </div>
               <div class="batch-tabs">
                 <div id="batchTableTabs" class="tab-strip"></div>
@@ -405,7 +425,7 @@
                 </table>
               </div>
               <div class="form-actions">
-                <button type="submit" id="saveBatchFieldsButton">Confirm</button>
+                <button type="submit" id="saveBatchFieldsButton">Save Changes</button>
                 <button type="button" class="secondary" id="cancelBatchFieldsButton">Cancel</button>
               </div>
             </form>
@@ -415,7 +435,10 @@
             <form id="fieldPropertiesForm" class="panel modal-card field-properties-modal-card">
               <div class="modal-header">
                 <h2>Field Read/Write Properties</h2>
-                <button type="button" class="icon-button" id="closeFieldPropertiesModal" aria-label="Close">x</button>
+                <div class="modal-title-actions">
+                  <button type="button" class="icon-button fullscreen-button" data-modal-fullscreen aria-label="Enlarge to full screen" aria-pressed="false" title="Enlarge to full screen"></button>
+                  <button type="button" class="icon-button" id="closeFieldPropertiesModal" aria-label="Close">x</button>
+                </div>
               </div>
               <div class="table-wrap field-properties-wrap">
                 <table class="field-properties-table">
@@ -435,6 +458,112 @@
               <div class="form-actions end-actions">
                 <button type="submit" id="saveFieldPropertiesButton">Save</button>
                 <button type="button" class="secondary" id="cancelFieldPropertiesButton">Cancel</button>
+              </div>
+            </form>
+          </div>
+
+          <div id="formulaBuilderModal" class="modal-backdrop" hidden>
+            <form id="formulaBuilderForm" class="panel modal-card formula-builder-modal-card">
+              <div class="modal-header">
+                <h2>Function Formula</h2>
+                <div class="modal-title-actions">
+                  <button type="button" class="icon-button fullscreen-button" data-modal-fullscreen aria-label="Enlarge to full screen" aria-pressed="false" title="Enlarge to full screen"></button>
+                  <button type="button" class="icon-button" id="closeFormulaBuilderModal" aria-label="Close">x</button>
+                </div>
+              </div>
+              <input name="fieldKey" type="hidden">
+              <div class="formula-builder-topbar">
+                <label>
+                  <span>Formula Field</span>
+                  <select name="targetField"></select>
+                </label>
+              </div>
+              <div class="formula-tabs" role="tablist" aria-label="Formula configuration">
+                <button type="button" class="tab-button is-active" data-formula-tab="formulaExpressionPane">Formula</button>
+                <button type="button" class="tab-button" data-formula-tab="formulaJsPane">Custom JS</button>
+                <button type="button" class="tab-button" data-formula-tab="formulaSqlPane">SQL Capture</button>
+              </div>
+              <div class="formula-builder-grid">
+                <section id="formulaExpressionPane" class="formula-tab-pane">
+                  <label class="formula-editor-row">
+                    <span id="formulaTargetLabel">Formula =</span>
+                    <textarea name="formulaExpression" rows="8" placeholder="{fieldKey} + {anotherField}"></textarea>
+                  </label>
+                  <div class="formula-side-panel">
+                    <div class="formula-operator-grid">
+                      <button type="button" class="secondary" data-insert-formula="+">+</button>
+                      <button type="button" class="secondary" data-insert-formula="-">-</button>
+                      <button type="button" class="secondary" data-insert-formula="*">*</button>
+                      <button type="button" class="secondary" data-insert-formula="/">/</button>
+                      <button type="button" class="secondary" data-insert-formula="(">(</button>
+                      <button type="button" class="secondary" data-insert-formula=")">)</button>
+                      <button type="button" class="secondary" data-insert-formula="ROUND(">ROUND</button>
+                      <button type="button" class="secondary" data-insert-formula="MAX(">MAX</button>
+                      <button type="button" class="secondary" data-insert-formula="MIN(">MIN</button>
+                    </div>
+                    <label class="formula-toggle">
+                      <input name="formulaEnabled" type="checkbox">
+                      Enable formula
+                    </label>
+                    <pre id="formulaPreview" class="result-box compact"></pre>
+                  </div>
+                </section>
+                <section id="formulaJsPane" class="formula-tab-pane" hidden>
+                  <div class="formula-function-designer">
+                    <label>
+                      <span>Function Name</span>
+                      <input name="formulaFunctionName" placeholder="TRIM">
+                    </label>
+                    <label>
+                      <span>Function Body</span>
+                      <textarea name="formulaFunctionBody" rows="8" placeholder="return String(value || '').trim();"></textarea>
+                    </label>
+                  </div>
+                  <input name="formulaJs" type="hidden" value="">
+                  <div class="formula-tips">
+                    <strong>Custom Functions</strong>
+                    <p class="muted">Name a helper like TRIM or UPPER, write the function body, then call it from formulas like TRIM({companyName}).</p>
+                    <div class="formula-preset-buttons" id="formulaPresetButtons">
+                      <button type="button" class="secondary" data-function-preset="TRIM">TRIM</button>
+                      <button type="button" class="secondary" data-function-preset="LTRIM">LTRIM</button>
+                      <button type="button" class="secondary" data-function-preset="RTRIM">RTRIM</button>
+                      <button type="button" class="secondary" data-function-preset="UPPER">UPPER</button>
+                      <button type="button" class="secondary" data-function-preset="LOWER">LOWER</button>
+                    </div>
+                  </div>
+                </section>
+                <section id="formulaSqlPane" class="formula-tab-pane" hidden>
+                  <label class="formula-code-editor">
+                    <span>SQL Capture</span>
+                    <textarea name="formulaSql" rows="14" placeholder="SELECT SUM(total) FROM invoices WHERE customer_id = {id}"></textarea>
+                  </label>
+                  <div class="formula-tips">
+                    <strong>SQL Capture</strong>
+                    <p class="muted">Store SQL lookup logic here for the next data-capture step. Execution will be wired behind guarded server endpoints.</p>
+                  </div>
+                </section>
+                <div class="formula-picker">
+                  <strong>Variables</strong>
+                  <div id="formulaVariableList"></div>
+                </div>
+                <div class="formula-picker">
+                  <strong>Functions</strong>
+                  <div id="formulaFunctionList">
+                    <button type="button" class="link-button" data-insert-formula="ROUND(">ROUND(value)</button>
+                    <button type="button" class="link-button" data-insert-formula="ABS(">ABS(value)</button>
+                    <button type="button" class="link-button" data-insert-formula="MIN(">MIN(value1, value2)</button>
+                    <button type="button" class="link-button" data-insert-formula="MAX(">MAX(value1, value2)</button>
+                  </div>
+                </div>
+                <div class="formula-tips">
+                  <strong>Tips</strong>
+                  <p class="muted">Use field variables like {quantity} and operators like +, -, *, and /. Formula fields are calculated on the customer form.</p>
+                </div>
+              </div>
+              <div class="form-actions end-actions">
+                <button type="submit" id="saveFormulaButton">Save</button>
+                <button type="button" class="secondary" id="clearFormulaButton">Clear</button>
+                <button type="button" class="secondary" id="cancelFormulaButton">Cancel</button>
               </div>
             </form>
           </div>

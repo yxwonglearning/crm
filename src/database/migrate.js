@@ -102,6 +102,12 @@ async function main() {
   await ensureColumn(connection, 'customers', 'custom_fields', 'custom_fields JSON NULL AFTER notes');
   await ensureColumn(connection, 'crm_module_fields', 'field_table', "field_table ENUM('main', 'detail') NOT NULL DEFAULT 'main' AFTER field_type");
   await ensureColumn(connection, 'crm_module_fields', 'detail_table_name', 'detail_table_name VARCHAR(80) NULL AFTER field_table');
+  await ensureColumn(connection, 'crm_module_fields', 'formula_expression', 'formula_expression TEXT NULL AFTER options_json');
+  await ensureColumn(connection, 'crm_module_fields', 'formula_enabled', 'formula_enabled TINYINT(1) NOT NULL DEFAULT 0 AFTER formula_expression');
+  await ensureColumn(connection, 'crm_module_fields', 'formula_js', 'formula_js TEXT NULL AFTER formula_enabled');
+  await ensureColumn(connection, 'crm_module_fields', 'formula_function_name', 'formula_function_name VARCHAR(80) NULL AFTER formula_js');
+  await ensureColumn(connection, 'crm_module_fields', 'formula_function_body', 'formula_function_body TEXT NULL AFTER formula_function_name');
+  await ensureColumn(connection, 'crm_module_fields', 'formula_sql', 'formula_sql TEXT NULL AFTER formula_function_body');
   try {
     await connection.query(
       "ALTER TABLE crm_module_fields MODIFY field_type ENUM('textbox', 'textarea', 'checkbox', 'dropdownbox', 'int', 'decimals', 'browser_button', 'date', 'attach_document', 'image', 'text', 'email', 'phone', 'password', 'number', 'select', 'country', 'owner') NOT NULL DEFAULT 'textbox'"

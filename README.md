@@ -19,8 +19,10 @@ The CRM is usable locally for customer, user, import, and early low-code configu
 - Admin Portal with sections for Modules, Form Builder, Module Pages, Action Flow, and Permissions.
 - Form Builder for customer and user field configuration.
 - Configurable fields for main table and detail table placement.
-- Batch Add fields workflow with main/detail table tabs.
+- Batch Edit fields workflow with editable existing fields, new field rows, and main/detail table tabs.
 - Field Properties grid for display and required flags.
+- Formula Builder with formula expressions, reusable custom helper functions, and SQL capture storage.
+- All pop-out modals include a fullscreen/enlarge button.
 - Customer detail-table data entry inside the Add/Edit Customer modal.
 - Detail-table row controls:
   - add row
@@ -107,13 +109,15 @@ Admins should have a dedicated portal for configuring the CRM:
 3. Phase 3: Form Builder - in progress
    - Existing customer and user fields are configurable through Form Builder.
    - Admins can add one field at a time with `Add Field`.
-   - Admins can add multiple fields through `Batch Add`.
+   - Admins can edit existing fields and add new fields through `Batch Edit`.
    - Fields can be assigned to `Main Table` or `Detail Table`.
    - Detail table names are generated and shown in the field list.
    - Supported configurable field types currently include textbox, textarea, checkbox, dropdownbox, int, decimals, browser button placeholder, date, attach document placeholder, and image placeholder.
    - System field types such as email, phone, country, owner, password, and status are supported by existing modules.
    - `Field Properties` currently saves display and required settings.
-   - Add form sections, tabs, layout controls, validation rules, and versioning.
+   - `Form Design` opens the Formula Builder for formula expressions, reusable custom functions, and SQL capture notes.
+   - Formula fields are evaluated on the customer form and server save path.
+   - Still missing: form sections, tabs, layout controls, sort/reorder controls, validation rules, import/export mapping controls, real lookup/browser-button behavior, editability enforcement, field-level permissions, audit logs, and versioning.
 4. Phase 4: Module Page Publisher - planned
    - Admin Portal has a placeholder `Module Pages` section.
    - Generated pages for custom published modules are not implemented yet.
@@ -151,11 +155,28 @@ Admins should have a dedicated portal for configuring the CRM:
 - `Dropdown Options` only applies to `Dropdownbox` fields.
 - `Browser Button` fields are reserved for a future phase where the button links to available master-data/browser modules.
 - `Add Field` is for adding one field at a time.
-- `Batch Add` opens a field-management workspace that shows fields by `Main Table` and detail-table tabs, supports adding multiple draft fields, and can add new detail table tabs with generated names such as `customer_dt1`.
+- `Batch Edit` opens a field-management workspace that shows fields by `Main Table` and detail-table tabs, supports editing existing fields, adding new rows, and adding new detail table tabs with generated names such as `customer_dt1`.
+- Existing field keys and database field names stay read-only in Batch Edit so saved data mappings remain stable.
+- Locked/system fields keep protected type/table settings, but formula settings and common display flags can still be saved.
 - `Field Properties` opens a read/write properties grid for the selected form. Phase 1 saves display and required flags; editability and disable-manual-input are UI scaffolding for future permissions and browser-button phases.
+- `Form Design` currently opens the Formula Builder. It supports field variables, basic operators, built-in functions, reusable custom helper functions, and SQL capture text. The SQL capture tab stores notes/configuration only; execution is planned for a later guarded backend phase.
 - Form Builder is for field configuration only. Bulk duplicate/delete controls should not be used there.
 - Detail-table row duplicate/delete is for data entry rows inside Add/Edit Customer, not for Form Builder fields.
 - Detail-table row delete keeps one blank row when every row is selected, so the table remains ready for input.
+
+### Form Builder Still Missing
+
+- Form layout designer for sections, columns, tabs, grouping, and field placement.
+- Field ordering/reordering controls in tables and forms.
+- Advanced validation rules such as min/max, regex, conditional required, uniqueness, and cross-field checks.
+- Bulk duplicate/delete/archive controls for configurable fields, with safeguards for existing data.
+- Real Browser Button and lookup fields connected to master-data/browser modules.
+- Field-level editability and disable-manual-input enforcement in the customer/user forms.
+- Role-based field permissions for view, create, edit, import, and export.
+- Import/export mapping controls per module and per field.
+- Formula dependency checks, circular-reference detection, and safer custom-function sandboxing.
+- SQL capture execution behind guarded backend endpoints.
+- Form versioning, draft/publish workflow, rollback, and audit logs for configuration changes.
 
 ## What Has Been Done
 
@@ -247,9 +268,12 @@ Admins should have a dedicated portal for configuring the CRM:
 - Added Add Field modal.
 - Added support for selecting Main Table or Detail Table when creating fields.
 - Added generated data key and database field name previews.
-- Added Batch Add modal for adding multiple fields.
-- Added detail-table tabs inside Batch Add.
+- Added Batch Edit modal for editing existing fields and adding multiple new fields.
+- Added detail-table tabs inside Batch Edit.
 - Added Field Properties modal for display and required settings.
+- Added Formula Builder for formula expressions, built-in functions, custom helper functions, and SQL capture storage.
+- Added formula database columns and server-side formula evaluation for customer saves.
+- Added fullscreen/enlarge controls to pop-out modals.
 
 ### Country And Phone Handling
 
@@ -382,8 +406,9 @@ Immediate testing:
 20. Open Admin Portal.
 21. Test Form Builder module switching between Customers and Users.
 22. Test Add Field.
-23. Test Batch Add field rows and detail table tabs.
+23. Test Batch Edit existing field rows, new field rows, and detail table tabs.
 24. Test Field Properties display/required settings.
+25. Test Form Design formulas and custom helper functions.
 
 Security cleanup:
 1. Create your real admin user.

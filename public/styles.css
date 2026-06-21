@@ -816,10 +816,47 @@ td {
   padding: 24px;
 }
 
+.modal-backdrop.is-fullscreen {
+  padding: 0;
+}
+
 .modal-card {
   width: min(100%, 560px);
   max-height: min(92vh, 820px);
   overflow: auto;
+}
+
+.modal-card.is-fullscreen {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  border-radius: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-card.is-fullscreen > .table-wrap,
+.modal-card.is-fullscreen > [id$="FormFields"],
+.modal-card.is-fullscreen > .field-config-grid,
+.modal-card.is-fullscreen > .formula-builder-grid {
+  flex: 1;
+  min-height: 0;
+}
+
+.modal-card.is-fullscreen .table-wrap,
+.modal-card.is-fullscreen .formula-builder-grid,
+.modal-card.is-fullscreen #customerFormFields,
+.modal-card.is-fullscreen #userFormFields {
+  overflow: auto;
+}
+
+.modal-card.is-fullscreen .formula-builder-grid {
+  align-content: start;
+}
+
+.modal-card.is-fullscreen .formula-editor-row textarea,
+.modal-card.is-fullscreen .formula-code-editor textarea {
+  min-height: 320px;
 }
 
 .customer-modal-card {
@@ -840,6 +877,10 @@ td {
 
 .field-properties-modal-card {
   width: min(100%, 820px);
+}
+
+.formula-builder-modal-card {
+  width: min(100%, 1040px);
 }
 
 .field-config-grid {
@@ -1006,6 +1047,184 @@ td {
   text-align: center;
 }
 
+.formula-builder-topbar {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.formula-builder-topbar label,
+.formula-code-editor,
+.formula-editor-row {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  align-items: stretch;
+  gap: 0;
+  border: 1px solid var(--line);
+  background: white;
+}
+
+.formula-builder-topbar label > span,
+.formula-code-editor > span,
+.formula-editor-row > span {
+  padding: 12px;
+}
+
+.formula-builder-topbar input,
+.formula-builder-topbar select,
+.formula-code-editor textarea,
+.formula-editor-row textarea {
+  border: 0;
+  border-left: 1px solid var(--line);
+  border-radius: 0;
+}
+
+.formula-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+}
+
+.formula-tabs .tab-button.is-active {
+  color: var(--primary);
+  border-bottom: 2px solid var(--primary);
+}
+
+.formula-builder-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 250px;
+  gap: 10px;
+}
+
+.formula-tab-pane {
+  display: contents;
+}
+
+.formula-editor-row {
+  grid-column: 1;
+}
+
+.formula-editor-row textarea,
+.formula-code-editor textarea {
+  min-height: 260px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+
+.formula-code-editor {
+  grid-column: 1;
+}
+
+.formula-function-designer {
+  grid-column: 1;
+  display: grid;
+  gap: 10px;
+}
+
+.formula-function-designer label {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  align-items: stretch;
+  gap: 0;
+  border: 1px solid var(--line);
+  background: white;
+}
+
+.formula-function-designer label > span {
+  padding: 12px;
+}
+
+.formula-function-designer input,
+.formula-function-designer textarea {
+  border: 0;
+  border-left: 1px solid var(--line);
+  border-radius: 0;
+}
+
+.formula-function-designer textarea {
+  min-height: 160px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+
+.formula-side-panel {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.formula-operator-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.formula-operator-grid button {
+  min-height: 34px;
+  padding: 0 8px;
+}
+
+.formula-toggle {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+}
+
+.formula-picker,
+.formula-tips {
+  border: 1px solid var(--line);
+  background: white;
+  padding: 12px;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-height: 180px;
+}
+
+.formula-tab-pane > .formula-tips {
+  min-height: 0;
+}
+
+.formula-preset-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.formula-preset-buttons button {
+  min-height: 32px;
+  padding: 0 10px;
+}
+
+#formulaVariableList,
+#formulaFunctionList {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+#formulaVariableList .link-button,
+#formulaFunctionList .link-button {
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.formula-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 2px 9px;
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #075985;
+  font-size: 12px;
+  font-weight: 900;
+}
+
 .detail-table-section {
   margin-top: 18px;
 }
@@ -1115,7 +1334,15 @@ td {
   gap: 14px;
 }
 
+.modal-title-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
 .icon-button {
+  position: relative;
   width: 36px;
   min-height: 36px;
   padding: 0;
@@ -1130,6 +1357,34 @@ td {
 .icon-button:hover {
   background: #dde5ee;
   color: #111827;
+}
+
+.fullscreen-button::before,
+.fullscreen-button::after {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-radius: 2px;
+}
+
+.fullscreen-button::after {
+  display: none;
+}
+
+.modal-card.is-fullscreen .fullscreen-button::before {
+  width: 10px;
+  height: 10px;
+  transform: translate(3px, -3px);
+}
+
+.modal-card.is-fullscreen .fullscreen-button::after {
+  display: block;
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  transform: translate(-3px, 3px);
+  background: #eef2f7;
 }
 
 .inline-link {
@@ -1223,6 +1478,28 @@ td {
     flex-direction: column;
   }
 
+  .formula-builder-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .formula-builder-topbar,
+  .formula-builder-topbar label,
+  .formula-function-designer label,
+  .formula-code-editor,
+  .formula-editor-row {
+    grid-template-columns: 1fr;
+  }
+
+  .formula-builder-topbar input,
+  .formula-builder-topbar select,
+  .formula-function-designer input,
+  .formula-function-designer textarea,
+  .formula-code-editor textarea,
+  .formula-editor-row textarea {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+
   .admin-summary-grid {
     grid-template-columns: 1fr;
   }
@@ -1235,5 +1512,9 @@ td {
   .modal-card {
     width: 100%;
     max-height: 88vh;
+  }
+
+  .modal-card.is-fullscreen {
+    max-height: none;
   }
 }

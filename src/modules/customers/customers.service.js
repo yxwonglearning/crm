@@ -70,15 +70,106 @@ function normalizeCustomFieldValue(field, value) {
   return value;
 }
 
+function numericValue(value) {
+  const number = Number.parseFloat(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function coerceFormulaValue(value) {
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
+  if (value === null || value === undefined || value === '') return '';
+  const number = Number(value);
+  return Number.isFinite(number) && String(value).trim() !== '' ? number : value;
+}
+
+function buildCustomFormulaFunctions(source = '', name = '', body = '') {
+  const functions = {};
+  try {
+    if (String(source || '').trim()) {
+      const sourceFunctions = Function(`"use strict"; ${source}`)();
+      if (!sourceFunctions || typeof sourceFunctions !== 'object' || Array.isArray(sourceFunctions)) {
+        throw new AppError('Custom formula code must return functions', 422);
+      }
+      Object.assign(functions, sourceFunctions);
+    }
+    const functionName = String(name || '').trim().toUpperCase();
+    const functionBody = String(body || '').trim();
+    if (functionName && functionBody) {
+      functions[functionName] = Function('value', `"use strict"; ${functionBody}`);
+    }
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    throw new AppError('Custom formula JS could not be loaded', 422);
+  }
+  Object.entries(functions).forEach(([name, fn]) => {
+    if (!/^[A-Z][A-Z0-9_]*$/.test(name) || typeof fn !== 'function') {
+      throw new AppError('Custom formula functions must use uppercase names', 422);
+    }
+  });
+  return functions;
+}
+
+function buildAvailableFormulaFunctions(fields = [], customFunctionSource = '', customFunctionName = '', customFunctionBody = '') {
+  const savedFunctions = fields.reduce((functions, field) => ({
+    ...functions,
+    ...buildCustomFormulaFunctions(field.formulaJs, field.formulaFunctionName, field.formulaFunctionBody)
+  }), {});
+  return {
+    ...savedFunctions,
+    ...buildCustomFormulaFunctions(customFunctionSource, customFunctionName, customFunctionBody)
+  };
+}
+
+function evaluateFormulaExpression(expression, values, customFunctionSource = '', customFunctionName = '', customFunctionBody = '', customFunctionFields = []) {
+  if (!String(expression || '').trim()) return '';
+  const customFunctions = buildAvailableFormulaFunctions(customFunctionFields, customFunctionSource, customFunctionName, customFunctionBody);
+  const functionNames = new Set(['ABS', 'ROUND', 'MIN', 'MAX', ...Object.keys(customFunctions)]);
+  let compiled = String(expression)
+    .replace(/\b([a-zA-Z][a-zA-Z0-9_]*)\s*\(/g, (_match, name) => `${name.toUpperCase()}(`)
+    .replace(/\{([a-zA-Z][a-zA-Z0-9_]*)\}/g, (_match, key) => `coerceValue(values[${JSON.stringify(key)}])`)
+    .replace(/\b(ABS|ROUND|MIN|MAX)\b/g, (name) => `Math.${name.toLowerCase()}`);
+
+  if (/[^0-9+\-*/().,\sA-Za-z_$[\]"']/.test(compiled)) {
+    throw new AppError('Formula contains unsupported characters', 422);
+  }
+
+  const words = compiled.match(/[A-Za-z_]+/g) || [];
+  const allowedWords = new Set(['Math', 'abs', 'round', 'min', 'max', 'values', 'coerceValue', ...Object.keys(values), ...functionNames]);
+  if (words.some((word) => !allowedWords.has(word))) {
+    throw new AppError('Formula contains unsupported words', 422);
+  }
+
+  let result;
+  try {
+    result = Function('values', 'customFunctions', 'coerceValue', `"use strict"; const { ${Object.keys(customFunctions).join(', ')} } = customFunctions; return (${compiled});`)(values, customFunctions, coerceFormulaValue);
+  } catch (_error) {
+    throw new AppError('Formula could not be calculated', 422);
+  }
+  if (typeof result === 'number') {
+    if (!Number.isFinite(result)) return '';
+    return Number.isInteger(result) ? result : Number(result.toFixed(4));
+  }
+  return result ?? '';
+}
+
+function applyFormulaFields(input, fields) {
+  const values = { ...input };
+  fields
+    .filter((field) => field.tableType !== 'detail' && field.formulaEnabled && field.formulaExpression)
+    .forEach((field) => {
+      values[field.fieldKey] = evaluateFormulaExpression(field.formulaExpression, values, field.formulaJs, field.formulaFunctionName, field.formulaFunctionBody, fields);
+    });
+  return values;
+}
+
 async function customerFieldConfig() {
   return moduleConfig.getModuleConfig('customers');
 }
 
-async function customFieldsFromInput(input) {
-  const config = await customerFieldConfig();
+function customFieldsFromInput(input, fields) {
   const customFields = {};
 
-  config.fields
+  fields
     .filter((field) => !systemFieldKeys.has(field.fieldKey) && field.tableType !== 'detail')
     .forEach((field) => {
       const value = input[field.fieldKey];
@@ -144,6 +235,8 @@ async function detailTablesFromInput(input) {
 }
 
 async function hydrateCustomerInput(input, userId) {
+  const config = await customerFieldConfig();
+  const formulaInput = applyFormulaFields(input, config.fields);
   const country = await countries.findCountryById(input.countryId);
   if (!country) {
     throw new AppError('Selected country does not exist', 422);
@@ -163,7 +256,7 @@ async function hydrateCustomerInput(input, userId) {
     phoneNumber: phone.phoneNumber,
     status: input.status || 'lead',
     notes: input.notes || null,
-    customFields: await customFieldsFromInput(input),
+    customFields: customFieldsFromInput(formulaInput, config.fields),
     detailTables: await detailTablesFromInput(input),
     ownerUserId: input.ownerUserId || null,
     userId
