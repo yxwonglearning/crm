@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Self Hosted CRM</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body class="is-auth">
+    <main class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-mark">A</span>
+          <span>
+            <strong>Amperes CRM</strong>
+            <small id="sessionLabel">Not signed in</small>
+          </span>
+        </div>
+        <nav class="nav">
+          <button class="nav-button is-active" data-view="customersView">Customers</button>
+          <button class="nav-button" data-view="usersView">Users</button>
+          <button class="nav-button" data-view="sysadminView">Sysadmin</button>
+        </nav>
+        <button id="logoutButton" class="secondary full-width" hidden>Sign out</button>
+      </aside>
+
+      <section class="workspace">
+        <section id="loginView" class="auth-panel">
+          <div class="login-hero">
+            <div class="login-copy">
+              <span class="eyebrow">Amperes Electronics</span>
+              <h1>Customer relationship management</h1>
+              <p>Manage customers, contacts, countries, imports, and team access from one private workspace.</p>
+            </div>
+            <form id="loginForm" class="panel login-card">
+              <span class="brand-mark large">A</span>
+              <h2>Sign In</h2>
+            <label>
+              Email
+              <input name="email" type="email" value="admin@example.com" autocomplete="email" required>
+            </label>
+            <label>
+              Password
+              <input name="password" type="password" value="ChangeMe123!" autocomplete="current-password" required>
+            </label>
+            <button type="submit">Sign In</button>
+              <p class="muted">Seeded admin credentials come from your `.env` file.</p>
+            </form>
+          </div>
+        </section>
+
+        <section id="customersView" class="view" hidden>
+          <header class="toolbar">
+            <div>
+              <h1>Customers</h1>
+              <p>Company records with country-aware contact numbers.</p>
+            </div>
+            <div class="toolbar-actions">
+              <input id="customerSearch" type="search" placeholder="Search Customers">
+              <select id="statusFilter">
+                <option value="">All Statuses</option>
+                <option value="lead">Lead</option>
+                <option value="active">Active</option>
+                <option value="inactive">Inactive</option>
+              </select>
+            </div>
+          </header>
+
+          <div class="query-panel">
+            <div class="table-actions">
+              <button type="button" id="addCustomerButton">Add</button>
+              <button type="button" class="secondary" id="openImportButton">Import</button>
+              <button type="button" class="danger-button" id="deleteCustomersButton" disabled>Delete</button>
+            </div>
+            <div class="table-wrap">
+              <table class="customers-table">
+                <thead>
+                  <tr id="customerTableHead"></tr>
+                </thead>
+                <tbody id="customerRows"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div id="customerModal" class="modal-backdrop" hidden>
+            <form id="customerForm" class="panel modal-card">
+              <div class="modal-header">
+                <h2 id="customerFormTitle">Add</h2>
+                <button type="button" class="icon-button" id="closeCustomerModal" aria-label="Close">x</button>
+              </div>
+              <input name="id" type="hidden">
+              <div id="customerFormFields"></div>
+              <div class="form-actions">
+                <button type="submit">Save Customer</button>
+                <button type="button" class="secondary" id="clearCustomerForm">Clear</button>
+              </div>
+            </form>
+          </div>
+
+          <div id="deleteCustomerModal" class="modal-backdrop" hidden>
+            <div class="panel modal-card narrow-modal">
+              <div class="modal-header">
+                <h2>Delete Customers</h2>
+                <button type="button" class="icon-button" id="closeDeleteCustomerModal" aria-label="Close">x</button>
+              </div>
+              <p id="deleteCustomerMessage" class="muted"></p>
+              <div class="form-actions">
+                <button type="button" class="danger-button" id="confirmDeleteCustomers">Delete</button>
+                <button type="button" class="secondary" id="cancelDeleteCustomers">Cancel</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="importModal" class="modal-backdrop" hidden>
+            <form id="importForm" class="panel modal-card narrow-modal">
+              <div class="modal-header">
+                <h2>Import Customers</h2>
+                <button type="button" class="icon-button" id="closeImportModal" aria-label="Close">x</button>
+              </div>
+              <p class="muted">Download the fixed Excel template, fill in the customer information, then upload it here.</p>
+              <a class="inline-link" href="/api/imports/customers/template" id="templateLink">Download Customer Import Template</a>
+              <label>
+                Excel file
+                <input name="file" type="file" accept=".xlsx,.xls" required>
+              </label>
+              <button type="submit">Import</button>
+              <pre id="importResult" class="result-box compact" hidden></pre>
+            </form>
+          </div>
+        </section>
+
+        <section id="usersView" class="view" hidden>
+          <header class="toolbar">
+            <div>
+              <h1>Users</h1>
+              <p>Admin-only user provisioning for your CRM team.</p>
+            </div>
+          </header>
+
+          <div class="query-panel">
+            <div class="table-actions">
+              <button type="button" id="addUserButton">Add User</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr id="userTableHead"></tr>
+                </thead>
+                <tbody id="userRows"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div id="userModal" class="modal-backdrop" hidden>
+            <form id="userForm" class="panel modal-card">
+              <div class="modal-header">
+                <h2 id="userFormTitle">Add User</h2>
+                <button type="button" class="icon-button" id="closeUserModal" aria-label="Close">x</button>
+              </div>
+              <input name="id" type="hidden">
+              <div id="userFormFields"></div>
+              <div class="form-actions">
+                <button type="submit" id="saveUserButton">Create User</button>
+                <button type="button" class="secondary" id="clearUserForm">Clear</button>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <section id="sysadminView" class="view" hidden>
+          <header class="toolbar">
+            <div>
+              <h1>Sysadmin</h1>
+              <p>Configure module fields, table columns, forms, and import columns.</p>
+            </div>
+            <div class="toolbar-actions">
+              <select id="fieldConfigModule">
+                <option value="customers">Customers</option>
+                <option value="users">Users</option>
+              </select>
+            </div>
+          </header>
+
+          <div class="query-panel">
+            <div class="table-actions">
+              <button type="button" id="addFieldButton">Add Field</button>
+            </div>
+            <div class="table-wrap config-table-wrap">
+              <table class="config-table">
+                <thead>
+                  <tr>
+                    <th>Field</th>
+                    <th>Type</th>
+                    <th>Table</th>
+                    <th>Form</th>
+                    <th>Import</th>
+                    <th>Required</th>
+                    <th>Order</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="fieldConfigRows"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div id="fieldConfigModal" class="modal-backdrop" hidden>
+            <form id="fieldConfigForm" class="panel modal-card narrow-modal">
+              <div class="modal-header">
+                <h2 id="fieldConfigFormTitle">Add Field</h2>
+                <button type="button" class="icon-button" id="closeFieldConfigModal" aria-label="Close">x</button>
+              </div>
+              <input name="fieldKey" type="hidden">
+              <label>
+                Label
+                <input name="label" placeholder="Example: Industry" required>
+              </label>
+              <div class="grid-two">
+                <label>
+                  Type
+                  <select name="type">
+                    <option value="text">Text</option>
+                    <option value="email">Email</option>
+                    <option value="phone">Phone</option>
+                    <option value="password">Password</option>
+                    <option value="number">Number</option>
+                    <option value="date">Date</option>
+                    <option value="select">Dropdown</option>
+                    <option value="textarea">Textarea</option>
+                    <option value="checkbox">Checkbox</option>
+                  </select>
+                </label>
+                <label>
+                  Order
+                  <input name="sortOrder" type="number" value="100" min="1">
+                </label>
+              </div>
+              <label>
+                Dropdown Options
+                <input name="options" placeholder="Option A, Option B">
+              </label>
+              <div class="checkbox-grid">
+                <label><input name="showInTable" type="checkbox" checked> Table</label>
+                <label><input name="showInForm" type="checkbox" checked> Form</label>
+                <label><input name="showInImport" type="checkbox"> Import</label>
+                <label><input name="required" type="checkbox"> Required</label>
+              </div>
+              <div class="form-actions">
+                <button type="submit" id="saveFieldConfigButton">Add Field</button>
+                <button type="button" class="secondary" id="clearFieldConfigForm">Clear</button>
+                <button type="button" class="danger-button" id="deleteFieldConfigButton" hidden>Delete</button>
+              </div>
+            </form>
+          </div>
+        </section>
+
+      </section>
+    </main>
+
+    <div id="toast" class="toast" hidden></div>
+    <script src="/app.js"></script>
+  </body>
+</html>
