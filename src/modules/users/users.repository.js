@@ -1,5 +1,23 @@
 const { pool } = require('../../database/pool');
 
+function assertSafeIdentifier(identifier) {
+  if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(String(identifier || ''))) {
+    throw new Error(`Unsafe database identifier: ${identifier}`);
+  }
+}
+
+function sqlIdentifier(identifier) {
+  assertSafeIdentifier(identifier);
+  return `\`${identifier}\``;
+}
+
+const systemFieldColumns = {
+  name: 'name',
+  email: 'email',
+  role: 'role',
+  status: 'status'
+};
+
 async function listUsers() {
   const [rows] = await pool.execute(
     `SELECT id, name, email, role, status, custom_fields, created_at, updated_at
@@ -57,4 +75,26 @@ async function updateUser(id, user) {
   await pool.execute(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`, values);
 }
 
-module.exports = { listUsers, findUserById, findUserCredentialsById, createUser, updateUser };
+async function countFieldValue(field, value, excludeId = null) {
+  const values = [];
+  let condition;
+  const column = systemFieldColumns[field.fieldKey];
+  if (column) {
+    condition = `LOWER(COALESCE(CAST(${sqlIdentifier(column)} AS CHAR), '')) = LOWER(?)`;
+    values.push(String(value));
+  } else {
+    condition = `LOWER(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(custom_fields, ?)), '')) = LOWER(?)`;
+    values.push(`$.${JSON.stringify(String(field.fieldKey || ''))}`, String(value));
+  }
+  if (excludeId) {
+    condition += ' AND id <> ?';
+    values.push(excludeId);
+  }
+  const [rows] = await pool.execute(
+    `SELECT COUNT(*) AS count FROM users WHERE ${condition}`,
+    values
+  );
+  return Number(rows[0]?.count || 0);
+}
+
+module.exports = { listUsers, findUserById, findUserCredentialsById, createUser, updateUser, countFieldValue };

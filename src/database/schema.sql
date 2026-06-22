@@ -79,6 +79,8 @@ CREATE TABLE IF NOT EXISTS crm_module_fields (
   formula_function_name VARCHAR(80) NULL,
   formula_function_body TEXT NULL,
   formula_sql TEXT NULL,
+  validation_json JSON NULL,
+  lookup_json JSON NULL,
   is_required TINYINT(1) NOT NULL DEFAULT 0,
   show_in_table TINYINT(1) NOT NULL DEFAULT 1,
   show_in_form TINYINT(1) NOT NULL DEFAULT 1,
@@ -86,12 +88,32 @@ CREATE TABLE IF NOT EXISTS crm_module_fields (
   is_searchable TINYINT(1) NOT NULL DEFAULT 0,
   sort_order INT NOT NULL DEFAULT 100,
   is_locked TINYINT(1) NOT NULL DEFAULT 0,
+  is_archived TINYINT(1) NOT NULL DEFAULT 0,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY crm_module_fields_key_unique (module_id, field_key),
   KEY crm_module_fields_module_id_fk (module_id),
   CONSTRAINT crm_module_fields_module_id_fk FOREIGN KEY (module_id) REFERENCES crm_modules(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS crm_browser_buttons (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  browser_key VARCHAR(80) NOT NULL,
+  name VARCHAR(120) NOT NULL,
+  source_module VARCHAR(80) NOT NULL,
+  source_table VARCHAR(80) NOT NULL,
+  value_field VARCHAR(80) NOT NULL DEFAULT 'id',
+  display_field VARCHAR(80) NOT NULL,
+  search_fields_json JSON NULL,
+  return_fields_json JSON NULL,
+  filter_json JSON NULL,
+  is_system TINYINT(1) NOT NULL DEFAULT 0,
+  is_enabled TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY crm_browser_buttons_key_unique (browser_key)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS crm_module_form_layouts (

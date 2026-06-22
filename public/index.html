@@ -198,6 +198,10 @@
                 <span>Form Builder</span>
                 <small>Fields, forms, table columns</small>
               </button>
+              <button type="button" class="admin-section-button" data-admin-section="adminBrowserButtonsSection" data-short="B">
+                <span>Browser Buttons</span>
+                <small>Master-data lookups</small>
+              </button>
               <button type="button" class="admin-section-button" data-admin-section="adminPagesSection" data-short="P">
                 <span>Module Pages</span>
                 <small>Published user-facing pages</small>
@@ -276,6 +280,97 @@
                     </thead>
                     <tbody id="fieldConfigRows"></tbody>
                   </table>
+                </div>
+              </div>
+            </section>
+
+            <section id="adminBrowserButtonsSection" class="admin-section" hidden>
+              <div class="section-heading">
+                <div>
+                  <h2>Browser Buttons</h2>
+                  <p>Lookup definitions for master-data selection across modules.</p>
+                </div>
+              </div>
+              <div class="browser-button-workspace">
+                <aside class="panel browser-source-panel">
+                  <div class="browser-source-heading">
+                    <strong>Sources</strong>
+                    <small>Module / table</small>
+                  </div>
+                  <input id="browserSourceSearch" type="search" placeholder="Search module or table">
+                  <div id="browserSourceRows" class="browser-source-list"></div>
+                </aside>
+                <div class="browser-button-main">
+                  <div class="panel browser-button-list-panel">
+                    <div class="browser-button-toolbar">
+                      <div>
+                        <strong id="activeBrowserSourceTitle">Select a source</strong>
+                        <small id="activeBrowserSourceMeta">Choose a module/table to manage its browser buttons.</small>
+                      </div>
+                      <button type="button" id="newBrowserButton" disabled>New Browser Button</button>
+                    </div>
+                    <div class="table-wrap browser-button-table-wrap">
+                      <table class="config-table">
+                        <thead>
+                          <tr>
+                            <th>Browser</th>
+                            <th>Value</th>
+                            <th>Display</th>
+                            <th>Search</th>
+                            <th>Condition</th>
+                            <th></th>
+                          </tr>
+                        </thead>
+                        <tbody id="browserButtonRows"></tbody>
+                      </table>
+                    </div>
+                  </div>
+                  <form id="browserButtonForm" class="panel browser-button-panel" hidden>
+                    <input name="editingBrowserKey" type="hidden">
+                    <input name="sourceModule" type="hidden">
+                    <input name="sourceTable" type="hidden">
+                    <div class="field-config-grid">
+                      <label>
+                        <span>Source</span>
+                        <input name="sourcePreview" readonly>
+                      </label>
+                      <label>
+                        <span>Name</span>
+                        <input name="name" placeholder="Example: Customer Billing Lookup" required>
+                      </label>
+                      <label>
+                        <span>Browser Key</span>
+                        <input name="browserKey" placeholder="Auto generated">
+                      </label>
+                      <label>
+                        <span>Stored Value Field</span>
+                        <select name="valueField" required></select>
+                      </label>
+                      <label>
+                        <span>Display Field</span>
+                        <select name="displayField" required></select>
+                      </label>
+                      <label>
+                        <span>Search Fields</span>
+                        <div class="browser-checkbox-list" data-browser-field-list="searchFields"></div>
+                      </label>
+                      <label>
+                        <span>Display Columns</span>
+                        <div class="browser-checkbox-list" data-browser-field-list="returnFields"></div>
+                      </label>
+                      <label>
+                        <span>SQL WHERE</span>
+                        <textarea name="sqlWhere" rows="3" placeholder="Example: status = 'active'"></textarea>
+                      </label>
+                      <div class="checkbox-grid field-config-wide">
+                        <label><input name="enabled" type="checkbox" checked> Enabled</label>
+                      </div>
+                    </div>
+                    <div class="form-actions">
+                      <button type="submit" id="saveBrowserButton">Save Browser</button>
+                      <button type="button" class="secondary" id="clearBrowserButtonForm">Close</button>
+                    </div>
+                  </form>
                 </div>
               </div>
             </section>
@@ -365,18 +460,46 @@
                   <span>Dropdown Options</span>
                   <input name="options" placeholder="Option A, Option B">
                 </label>
-                <div id="browserButtonRow" class="field-config-row field-config-wide" hidden>
-                  <span>Browser Button Module</span>
-                  <div class="input-action">
-                    <input name="browserModulePreview" placeholder="Link in future phase" readonly>
-                    <button type="button" class="secondary" disabled>Search</button>
-                  </div>
-                </div>
+                <label id="browserButtonRow" class="field-config-wide" hidden>
+                  <span>Browser Button</span>
+                  <select name="browserButtonKey"></select>
+                </label>
                 <div class="checkbox-grid field-config-wide">
                   <label><input name="showInTable" type="checkbox" checked> Show In Table</label>
                   <label><input name="showInForm" type="checkbox" checked> Show In Form</label>
                   <label><input name="showInImport" type="checkbox"> Show In Import</label>
                   <label><input name="required" type="checkbox"> Required</label>
+                </div>
+                <div class="field-config-wide validation-rule-grid">
+                  <label>
+                    <span>Minimum Length</span>
+                    <input name="validationMinLength" type="number" min="0" step="1">
+                  </label>
+                  <label>
+                    <span>Maximum Length</span>
+                    <input name="validationMaxLength" type="number" min="0" step="1">
+                  </label>
+                  <label>
+                    <span>Minimum Value</span>
+                    <input name="validationMinValue" type="number" step="any">
+                  </label>
+                  <label>
+                    <span>Maximum Value</span>
+                    <input name="validationMaxValue" type="number" step="any">
+                  </label>
+                  <label class="validation-rule-wide">
+                    <span>Regex Pattern</span>
+                    <input name="validationRegex" placeholder="Example: ^[A-Z0-9-]+$">
+                  </label>
+                  <label>
+                    <span>Required When Field</span>
+                    <select name="conditionalRequiredField"></select>
+                  </label>
+                  <label>
+                    <span>Required When Value</span>
+                    <input name="conditionalRequiredValue" placeholder="Exact value">
+                  </label>
+                  <label class="validation-rule-check"><input name="validationUnique" type="checkbox"> Unique Value</label>
                 </div>
               </div>
               <div class="form-actions">
@@ -403,6 +526,10 @@
               <div class="batch-toolbar">
                 <strong id="batchActiveTableLabel">Main Table</strong>
                 <div class="toolbar-actions">
+                  <button type="button" class="secondary" id="showArchivedBatchFields">Archived</button>
+                  <button type="button" class="secondary" id="restoreSelectedBatchFields" hidden disabled>Restore</button>
+                  <button type="button" class="secondary" id="duplicateSelectedBatchFields" disabled>Duplicate</button>
+                  <button type="button" class="secondary" id="archiveSelectedBatchFields" disabled>Archive</button>
                   <button type="button" class="danger-button" id="deleteSelectedBatchFields" disabled>Delete</button>
                   <button type="button" class="secondary" id="addBatchFieldRow">Add Row</button>
                 </div>
@@ -412,7 +539,7 @@
                   <thead>
                     <tr>
                       <th class="batch-select-column">
-                        <input type="checkbox" id="selectAllBatchFields" aria-label="Select deletable fields">
+                        <input type="checkbox" id="selectAllBatchFields" aria-label="Select fields">
                       </th>
                       <th>Field Name</th>
                       <th>Data Key</th>

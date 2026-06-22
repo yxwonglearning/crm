@@ -108,6 +108,9 @@ async function main() {
   await ensureColumn(connection, 'crm_module_fields', 'formula_function_name', 'formula_function_name VARCHAR(80) NULL AFTER formula_js');
   await ensureColumn(connection, 'crm_module_fields', 'formula_function_body', 'formula_function_body TEXT NULL AFTER formula_function_name');
   await ensureColumn(connection, 'crm_module_fields', 'formula_sql', 'formula_sql TEXT NULL AFTER formula_function_body');
+  await ensureColumn(connection, 'crm_module_fields', 'validation_json', 'validation_json JSON NULL AFTER formula_sql');
+  await ensureColumn(connection, 'crm_module_fields', 'lookup_json', 'lookup_json JSON NULL AFTER validation_json');
+  await ensureColumn(connection, 'crm_module_fields', 'is_archived', 'is_archived TINYINT(1) NOT NULL DEFAULT 0 AFTER is_locked');
   try {
     await connection.query(
       "ALTER TABLE crm_module_fields MODIFY field_type ENUM('textbox', 'textarea', 'checkbox', 'dropdownbox', 'int', 'decimals', 'browser_button', 'date', 'attach_document', 'image', 'text', 'email', 'phone', 'password', 'number', 'select', 'country', 'owner') NOT NULL DEFAULT 'textbox'"

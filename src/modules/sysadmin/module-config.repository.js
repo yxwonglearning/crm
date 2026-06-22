@@ -16,13 +16,16 @@ function toDbField(moduleId, field) {
     field.formulaFunctionName || null,
     field.formulaFunctionBody || null,
     field.formulaSql || null,
+    field.validationRules ? JSON.stringify(field.validationRules) : null,
+    field.lookupConfig ? JSON.stringify(field.lookupConfig) : null,
     field.required ? 1 : 0,
     field.showInTable ? 1 : 0,
     field.showInForm ? 1 : 0,
     field.showInImport ? 1 : 0,
     field.searchable ? 1 : 0,
     field.sortOrder || 100,
-    field.locked ? 1 : 0
+    field.locked ? 1 : 0,
+    field.archived ? 1 : 0
   ];
 }
 
@@ -69,6 +72,8 @@ function normalizeField(row) {
     formulaFunctionName: row.formula_function_name || '',
     formulaFunctionBody: row.formula_function_body || '',
     formulaSql: row.formula_sql || '',
+    validationRules: parseJsonObject(row.validation_json),
+    lookupConfig: parseJsonObject(row.lookup_json),
     required: Boolean(row.is_required),
     showInTable: Boolean(row.show_in_table),
     showInForm: Boolean(row.show_in_form),
@@ -76,6 +81,7 @@ function normalizeField(row) {
     searchable: Boolean(row.is_searchable),
     sortOrder: row.sort_order,
     locked: Boolean(row.is_locked),
+    archived: Boolean(row.is_archived),
     custom: !row.data_key
   };
 }
@@ -170,14 +176,17 @@ async function upsertField(moduleId, field) {
       formula_function_name,
       formula_function_body,
       formula_sql,
+      validation_json,
+      lookup_json,
       is_required,
       show_in_table,
       show_in_form,
       show_in_import,
       is_searchable,
       sort_order,
-      is_locked
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      is_locked,
+      is_archived
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE field_key = field_key`,
     toDbField(moduleId, field)
   );
@@ -203,8 +212,20 @@ async function listFields(moduleKey) {
   if (!module) return [];
   const [rows] = await pool.execute(
     `SELECT * FROM crm_module_fields
-     WHERE module_id = ?
+     WHERE module_id = ? AND is_archived = 0
      ORDER BY sort_order ASC, id ASC`,
+    [module.id]
+  );
+  return rows.map(normalizeField);
+}
+
+async function listArchivedFields(moduleKey) {
+  const module = await findModuleByKey(moduleKey);
+  if (!module) return [];
+  const [rows] = await pool.execute(
+    `SELECT * FROM crm_module_fields
+     WHERE module_id = ? AND is_archived = 1
+     ORDER BY updated_at DESC, sort_order ASC, id ASC`,
     [module.id]
   );
   return rows.map(normalizeField);
@@ -267,14 +288,17 @@ async function createCustomField(moduleId, field) {
       formula_function_name,
       formula_function_body,
       formula_sql,
+      validation_json,
+      lookup_json,
       is_required,
       show_in_table,
       show_in_form,
       show_in_import,
       is_searchable,
       sort_order,
-      is_locked
-    ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+      is_locked,
+      is_archived
+    ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
     [
       moduleId,
       field.fieldKey,
@@ -289,6 +313,8 @@ async function createCustomField(moduleId, field) {
       field.formulaFunctionName || null,
       field.formulaFunctionBody || null,
       field.formulaSql || null,
+      field.validationRules ? JSON.stringify(field.validationRules) : null,
+      field.lookupConfig ? JSON.stringify(field.lookupConfig) : null,
       field.required ? 1 : 0,
       field.showInTable ? 1 : 0,
       field.showInForm ? 1 : 0,
@@ -375,6 +401,8 @@ async function updateField(moduleKey, fieldKey, updates) {
     formulaFunctionName: 'formula_function_name',
     formulaFunctionBody: 'formula_function_body',
     formulaSql: 'formula_sql',
+    validationRules: 'validation_json',
+    lookupConfig: 'lookup_json',
     required: 'is_required',
     showInTable: 'show_in_table',
     showInForm: 'show_in_form',
@@ -386,8 +414,8 @@ async function updateField(moduleKey, fieldKey, updates) {
   Object.entries(map).forEach(([key, column]) => {
     if (!(key in updates)) return;
     assignments.push(`${column} = ?`);
-    if (key === 'options') {
-      values.push(updates.options ? JSON.stringify(updates.options) : null);
+    if (key === 'options' || key === 'validationRules' || key === 'lookupConfig') {
+      values.push(updates[key] ? JSON.stringify(updates[key]) : null);
     } else if (typeof updates[key] === 'boolean') {
       values.push(updates[key] ? 1 : 0);
     } else {
@@ -424,6 +452,30 @@ async function deleteField(moduleKey, fieldKey) {
   return result.affectedRows;
 }
 
+async function archiveField(moduleKey, fieldKey) {
+  const module = await findModuleByKey(moduleKey);
+  if (!module) return 0;
+  const [result] = await pool.execute(
+    `UPDATE crm_module_fields
+     SET is_archived = 1, show_in_table = 0, show_in_form = 0, show_in_import = 0
+     WHERE module_id = ? AND field_key = ? AND is_locked = 0`,
+    [module.id, fieldKey]
+  );
+  return result.affectedRows;
+}
+
+async function unarchiveField(moduleKey, fieldKey) {
+  const module = await findModuleByKey(moduleKey);
+  if (!module) return 0;
+  const [result] = await pool.execute(
+    `UPDATE crm_module_fields
+     SET is_archived = 0
+     WHERE module_id = ? AND field_key = ? AND is_locked = 0`,
+    [module.id, fieldKey]
+  );
+  return result.affectedRows;
+}
+
 async function fieldDataCount(moduleKey, field) {
   if (!field) return 0;
 
@@ -452,12 +504,113 @@ async function fieldDataCount(moduleKey, field) {
   return 0;
 }
 
+function normalizeBrowserButton(row) {
+  return {
+    id: row.id,
+    browserKey: row.browser_key,
+    name: row.name,
+    sourceModule: row.source_module,
+    sourceTable: row.source_table,
+    valueField: row.value_field,
+    displayField: row.display_field,
+    searchFields: parseOptions(row.search_fields_json),
+    returnFields: parseOptions(row.return_fields_json),
+    filter: parseJsonObject(row.filter_json),
+    system: Boolean(row.is_system),
+    enabled: Boolean(row.is_enabled)
+  };
+}
+
+function toDbBrowserButton(browser) {
+  return [
+    browser.browserKey,
+    browser.name,
+    browser.sourceModule,
+    browser.sourceTable,
+    browser.valueField || 'id',
+    browser.displayField,
+    JSON.stringify(browser.searchFields || []),
+    JSON.stringify(browser.returnFields || []),
+    browser.filter ? JSON.stringify(browser.filter) : null,
+    browser.system ? 1 : 0,
+    browser.enabled !== false ? 1 : 0
+  ];
+}
+
+async function upsertBrowserButton(browser) {
+  await pool.execute(
+    `INSERT INTO crm_browser_buttons (
+      browser_key,
+      name,
+      source_module,
+      source_table,
+      value_field,
+      display_field,
+      search_fields_json,
+      return_fields_json,
+      filter_json,
+      is_system,
+      is_enabled
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE
+      name = VALUES(name),
+      source_module = VALUES(source_module),
+      source_table = VALUES(source_table),
+      value_field = VALUES(value_field),
+      display_field = VALUES(display_field),
+      search_fields_json = VALUES(search_fields_json),
+      return_fields_json = VALUES(return_fields_json),
+      filter_json = VALUES(filter_json),
+      is_system = VALUES(is_system),
+      is_enabled = VALUES(is_enabled)`,
+    toDbBrowserButton(browser)
+  );
+}
+
+async function listBrowserButtons() {
+  const [rows] = await pool.execute(
+    `SELECT * FROM crm_browser_buttons
+     ORDER BY is_system DESC, name ASC`
+  );
+  return rows.map(normalizeBrowserButton);
+}
+
+async function findBrowserButton(browserKey) {
+  const [rows] = await pool.execute(
+    `SELECT * FROM crm_browser_buttons
+     WHERE browser_key = ?
+     LIMIT 1`,
+    [browserKey]
+  );
+  return rows[0] ? normalizeBrowserButton(rows[0]) : null;
+}
+
+async function deleteBrowserButton(browserKey) {
+  const [result] = await pool.execute(
+    `DELETE FROM crm_browser_buttons
+     WHERE browser_key = ? AND is_system = 0`,
+    [browserKey]
+  );
+  return result.affectedRows;
+}
+
+async function browserButtonUsageCount(browserKey) {
+  const [rows] = await pool.execute(
+    `SELECT COUNT(*) AS count
+     FROM crm_module_fields
+     WHERE JSON_UNQUOTE(JSON_EXTRACT(lookup_json, '$.browserButtonKey')) = ?`,
+    [browserKey]
+  );
+  return Number(rows[0]?.count || 0);
+}
+
 module.exports = {
   upsertModule,
   upsertField,
   findModuleByKey,
   listModules,
   listFields,
+  listArchivedFields,
   findField,
   listFormLayouts,
   upsertFormLayout,
@@ -467,5 +620,12 @@ module.exports = {
   updateField,
   nextSortOrder,
   deleteField,
-  fieldDataCount
+  archiveField,
+  unarchiveField,
+  fieldDataCount,
+  upsertBrowserButton,
+  listBrowserButtons,
+  findBrowserButton,
+  deleteBrowserButton,
+  browserButtonUsageCount
 };

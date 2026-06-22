@@ -6,6 +6,10 @@ const state = {
   customers: [],
   customerFields: [],
   userFields: [],
+  adminModules: [],
+  browserButtons: [],
+  activeBrowserSource: '',
+  browserSourceSearch: '',
   formDesignLayouts: {},
   activeAdminSection: 'adminModulesSection',
   adminMenuCollapsed: false,
@@ -16,8 +20,12 @@ const state = {
   batchDetailTables: [],
   batchEditRows: [],
   batchDraftRows: [],
+  batchArchivedRows: [],
   batchSelectedRowIds: new Set(),
   batchDeletedFieldKeys: new Set(),
+  batchArchivedFieldKeys: new Set(),
+  batchRestoredFieldKeys: new Set(),
+  batchShowingArchived: false,
   editingFormulaFieldKey: '',
   activeFormDesignType: 'add',
   selectedFormDesignFieldKey: '',
@@ -274,6 +282,7 @@ function syncFieldConfigTypeRows() {
 
   $('#dropdownOptionsRow').hidden = !isDropdownOptionFieldType(type);
   $('#browserButtonRow').hidden = type !== 'browser_button';
+  form.elements.browserButtonKey.innerHTML = renderBrowserButtonOptions(form.elements.browserButtonKey.value);
   $('#detailTableNameRow').hidden = tableType !== 'detail';
   form.elements.detailTableName.value = tableType === 'detail'
     ? (form.elements.detailTableName.value || generatedDetailTableName())
@@ -960,6 +969,9 @@ function nextBatchDetailTableName() {
 }
 
 function batchRowsForActiveTable() {
+  if (state.batchShowingArchived) {
+    return state.batchArchivedRows.map((row) => ({ existing: true, row }));
+  }
   const existingRows = state.batchEditRows
     .filter((row) => row.tableKey === state.batchActiveTable)
     .map((row) => ({ existing: true, row }));
@@ -971,9 +983,10 @@ function batchRowsForActiveTable() {
 
 function batchRowFromField(field) {
   return {
-    id: `existing-${field.fieldKey}`,
+    id: `${field.archived ? 'archived' : 'existing'}-${field.fieldKey}`,
     existing: true,
     locked: Boolean(field.locked),
+    archived: Boolean(field.archived),
     dataCount: Number(field.dataCount || 0),
     tableKey: tableKeyForField(field),
     fieldKey: field.fieldKey,
@@ -990,6 +1003,7 @@ function batchRowFromField(field) {
 
 function findBatchRow(rowId) {
   return state.batchEditRows.find((row) => row.id === rowId)
+    || state.batchArchivedRows.find((row) => row.id === rowId)
     || state.batchDraftRows.find((row) => row.id === rowId);
 }
 
@@ -999,7 +1013,35 @@ function canDeleteBatchRow(row) {
   return !row.locked && Number(row.dataCount || 0) === 0;
 }
 
-function createBatchDraftRow(tableKey = state.batchActiveTable) {
+function canSelectBatchRow(row) {
+  return Boolean(row && !row.locked);
+}
+
+function canArchiveBatchRow(row) {
+  return Boolean(row && row.existing && !row.locked);
+}
+
+function canDuplicateBatchRow(row) {
+  return Boolean(row && !row.locked && !row.archived);
+}
+
+function canRestoreBatchRow(row) {
+  return Boolean(row && row.archived && !row.locked);
+}
+
+function selectedBatchRows() {
+  return [
+    ...state.batchEditRows,
+    ...state.batchArchivedRows,
+    ...state.batchDraftRows
+  ].filter((row) => state.batchSelectedRowIds.has(row.id));
+}
+
+function selectedActionRows(predicate) {
+  return selectedBatchRows().filter(predicate);
+}
+
+function createBatchDraftRow(tableKey = state.batchActiveTable, overrides = {}) {
   const id = `draft-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   state.batchDraftRows.push({
     id,
@@ -1012,13 +1054,37 @@ function createBatchDraftRow(tableKey = state.batchActiveTable) {
     showInTable: true,
     showInForm: true,
     showInImport: false,
-    required: false
+    required: false,
+    ...overrides,
+    id,
+    tableKey
+  });
+}
+
+function duplicateBatchRows(rows) {
+  rows.forEach((row) => {
+    const label = `${row.label || 'Field'} Copy`;
+    const fieldKey = uniqueFieldKeyForLabel(label, row.tableKey);
+    createBatchDraftRow(row.tableKey, {
+      label,
+      fieldKey,
+      databaseFieldName: fieldKey,
+      type: editableFieldTypes.some((type) => type.value === row.type) ? row.type : 'textbox',
+      options: row.options || '',
+      showInTable: row.showInTable,
+      showInForm: row.showInForm,
+      showInImport: row.showInImport,
+      required: row.required
+    });
   });
 }
 
 function renderBatchTabs() {
   const tabs = $('#batchTableTabs');
   if (!tabs) return;
+  tabs.hidden = state.batchShowingArchived;
+  const addDetailButton = $('#addDetailTableTab');
+  if (addDetailButton) addDetailButton.hidden = state.batchShowingArchived;
   tabs.innerHTML = batchExistingTables().map((tableKey) => {
     const hasSavedFields = activeConfigFields().some((field) => tableKeyForField(field) === tableKey);
     const canRemove = tableKey !== 'main' && !hasSavedFields;
@@ -1031,15 +1097,17 @@ function renderBatchTabs() {
       </span>
     `;
   }).join('');
-  $('#batchActiveTableLabel').textContent = tableLabel(state.batchActiveTable);
+  $('#batchActiveTableLabel').textContent = state.batchShowingArchived ? 'Archived Fields' : tableLabel(state.batchActiveTable);
 }
 
 function renderBatchRows() {
   const body = $('#batchFieldRows');
   if (!body) return;
   const rows = batchRowsForActiveTable();
-  const selectableRows = rows.filter((item) => canDeleteBatchRow(item.row));
+  const selectableRows = rows.filter((item) => canSelectBatchRow(item.row));
   const selectedSelectableRows = selectableRows.filter((item) => state.batchSelectedRowIds.has(item.row.id));
+  const selectedRows = selectedBatchRows();
+  const showingArchived = state.batchShowingArchived;
   const selectAll = $('#selectAllBatchFields');
   if (selectAll) {
     selectAll.disabled = selectableRows.length === 0;
@@ -1048,36 +1116,59 @@ function renderBatchRows() {
   }
   const deleteButton = $('#deleteSelectedBatchFields');
   if (deleteButton) {
-    deleteButton.disabled = selectedSelectableRows.length === 0;
+    deleteButton.hidden = showingArchived;
+    deleteButton.disabled = !selectedRows.some(canDeleteBatchRow);
+  }
+  const archiveButton = $('#archiveSelectedBatchFields');
+  if (archiveButton) {
+    archiveButton.hidden = showingArchived;
+    archiveButton.disabled = !selectedRows.some(canArchiveBatchRow);
+  }
+  const duplicateButton = $('#duplicateSelectedBatchFields');
+  if (duplicateButton) {
+    duplicateButton.hidden = showingArchived;
+    duplicateButton.disabled = !selectedRows.some(canDuplicateBatchRow);
+  }
+  const restoreButton = $('#restoreSelectedBatchFields');
+  if (restoreButton) {
+    restoreButton.hidden = !showingArchived;
+    restoreButton.disabled = !selectedRows.some(canRestoreBatchRow);
+  }
+  const addButton = $('#addBatchFieldRow');
+  if (addButton) addButton.hidden = showingArchived;
+  const archivedButton = $('#showArchivedBatchFields');
+  if (archivedButton) {
+    archivedButton.textContent = showingArchived ? 'Active Fields' : 'Archived';
   }
   body.innerHTML = rows.map((item) => {
     const row = item.row;
     const isExisting = item.existing;
     const canDelete = canDeleteBatchRow(row);
+    const canSelect = canSelectBatchRow(row);
     const deleteTitle = row.locked
-      ? 'System field cannot be deleted'
-      : (Number(row.dataCount || 0) > 0 ? 'Field has data and cannot be deleted' : 'Select field for delete');
+      ? 'System field cannot be selected'
+      : (Number(row.dataCount || 0) > 0 ? 'Select field to archive or duplicate. Delete is blocked because it has data.' : 'Select field');
     return `
       <tr class="${isExisting ? 'is-existing' : ''}" data-batch-row="${escapeHtml(row.id)}" ${isExisting ? 'data-existing-batch-row="true"' : ''}>
         <td class="batch-select-column">
-          <input name="deleteRow" type="checkbox" aria-label="Select ${escapeHtml(row.label || row.fieldKey || 'field')} for delete" title="${escapeHtml(deleteTitle)}" ${state.batchSelectedRowIds.has(row.id) ? 'checked' : ''} ${canDelete ? '' : 'disabled'}>
+          <input name="deleteRow" type="checkbox" aria-label="Select ${escapeHtml(row.label || row.fieldKey || 'field')}" title="${escapeHtml(deleteTitle)}" ${state.batchSelectedRowIds.has(row.id) ? 'checked' : ''} ${canSelect ? '' : 'disabled'} data-can-delete="${canDelete ? 'true' : 'false'}">
         </td>
-        <td><input name="label" value="${escapeHtml(row.label)}" placeholder="Field name"></td>
+        <td><input name="label" value="${escapeHtml(row.label)}" placeholder="Field name" ${showingArchived ? 'readonly' : ''}></td>
         <td><input name="fieldKey" value="${escapeHtml(row.fieldKey)}" placeholder="Auto" ${isExisting ? 'readonly' : ''}></td>
         <td><input name="databaseFieldName" value="${escapeHtml(row.databaseFieldName || row.fieldKey)}" placeholder="Auto" readonly></td>
-        <td><select name="type" ${row.locked ? 'disabled' : ''}>${renderFieldTypeOptions(row.type, isExisting)}</select></td>
-        <td><input name="options" value="${escapeHtml(row.options)}" placeholder="Option A, Option B" ${isDropdownOptionFieldType(row.type) ? '' : 'hidden'}></td>
-        <td>${batchEditableCheckbox('showInTable', row.showInTable)}</td>
-        <td>${batchEditableCheckbox('showInForm', row.showInForm)}</td>
-        <td>${batchEditableCheckbox('showInImport', row.showInImport)}</td>
-        <td>${batchEditableCheckbox('required', row.required)}</td>
+        <td><select name="type" ${row.locked || showingArchived ? 'disabled' : ''}>${renderFieldTypeOptions(row.type, isExisting)}</select></td>
+        <td><input name="options" value="${escapeHtml(row.options)}" placeholder="Option A, Option B" ${isDropdownOptionFieldType(row.type) ? '' : 'hidden'} ${showingArchived ? 'readonly' : ''}></td>
+        <td>${batchEditableCheckbox('showInTable', row.showInTable, showingArchived)}</td>
+        <td>${batchEditableCheckbox('showInForm', row.showInForm, showingArchived)}</td>
+        <td>${batchEditableCheckbox('showInImport', row.showInImport, showingArchived)}</td>
+        <td>${batchEditableCheckbox('required', row.required, showingArchived)}</td>
       </tr>
     `;
   }).join('') || '<tr><td colspan="10">No fields in this table yet.</td></tr>';
 }
 
-function batchEditableCheckbox(name, checked) {
-  return `<input name="${escapeHtml(name)}" type="checkbox" ${checked ? 'checked' : ''}>`;
+function batchEditableCheckbox(name, checked, disabled = false) {
+  return `<input name="${escapeHtml(name)}" type="checkbox" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}>`;
 }
 
 function renderBatchFieldModal() {
@@ -1085,16 +1176,26 @@ function renderBatchFieldModal() {
   renderBatchRows();
 }
 
-function openBatchFieldModal() {
+async function openBatchFieldModal() {
   state.batchActiveTable = 'main';
+  state.batchShowingArchived = false;
   state.batchDetailTables = activeConfigFields()
     .filter((field) => field.tableType === 'detail' && field.detailTableName)
     .map((field) => field.detailTableName)
     .filter((value, index, list) => list.indexOf(value) === index);
   state.batchEditRows = activeConfigFields().map(batchRowFromField);
   state.batchDraftRows = [];
+  state.batchArchivedRows = [];
   state.batchSelectedRowIds = new Set();
   state.batchDeletedFieldKeys = new Set();
+  state.batchArchivedFieldKeys = new Set();
+  state.batchRestoredFieldKeys = new Set();
+  try {
+    const archived = await api(`/api/sysadmin/modules/${state.activeConfigModule}/fields/archived`);
+    state.batchArchivedRows = (archived.fields || []).map(batchRowFromField);
+  } catch (error) {
+    toast(titleCaseMessage(error.message), 'error');
+  }
   renderBatchFieldModal();
   $('#batchFieldModal').hidden = false;
   document.body.classList.add('modal-open');
@@ -1134,6 +1235,15 @@ function renderFieldProperties(fieldKey = '') {
 
 function propertyCheckbox(name, checked, disabled = false) {
   return `<input name="${escapeHtml(name)}" type="checkbox" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}>`;
+}
+
+function renderConditionalRequiredOptions(selected = '', currentFieldKey = '') {
+  return [
+    '<option value="">None</option>',
+    ...activeConfigFields()
+      .filter((field) => field.fieldKey !== currentFieldKey)
+      .map((field) => `<option value="${escapeHtml(field.fieldKey)}" ${field.fieldKey === selected ? 'selected' : ''}>${escapeHtml(field.label)}</option>`)
+  ].join('');
 }
 
 function openFieldPropertiesModal(fieldKey = '') {
@@ -1383,6 +1493,323 @@ function serializeForm(form) {
   return Object.fromEntries(new FormData(form).entries());
 }
 
+function browserKeyPreview(label) {
+  return String(label || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function stringList(value) {
+  if (Array.isArray(value)) return value.join(', ');
+  return String(value || '');
+}
+
+function checkedValues(container) {
+  return Array.from(container?.querySelectorAll('input[type="checkbox"]:checked') || [])
+    .map((checkbox) => checkbox.value)
+    .filter(Boolean);
+}
+
+function browserFieldValue(field) {
+  return field.dataKey || field.fieldKey;
+}
+
+function browserSourceKey(moduleKey, tableName) {
+  return `${moduleKey}::${tableName}`;
+}
+
+function parseBrowserSourceKey(sourceKey = '') {
+  const [moduleKey = '', tableName = ''] = String(sourceKey).split('::');
+  return { moduleKey, tableName };
+}
+
+function browserCatalogModules() {
+  const modules = new Map();
+  state.adminModules.forEach((config) => {
+    const module = config.module;
+    if (module?.moduleKey) {
+      modules.set(module.moduleKey, {
+        key: module.moduleKey,
+        name: module.name || titleCaseMessage(module.moduleKey),
+        fields: config.fields || []
+      });
+    }
+  });
+  state.browserButtons.forEach((browser) => {
+    if (!modules.has(browser.sourceModule)) {
+      modules.set(browser.sourceModule, {
+        key: browser.sourceModule,
+        name: titleCaseMessage(browser.sourceModule),
+        fields: []
+      });
+    }
+  });
+  if (!modules.has('countries')) {
+    modules.set('countries', { key: 'countries', name: 'Countries', fields: [] });
+  }
+  return Array.from(modules.values()).sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function browserTablesForModule(moduleKey) {
+  const module = browserCatalogModules().find((item) => item.key === moduleKey);
+  const tables = new Set([moduleKey]);
+  module?.fields
+    .filter((field) => field.tableType === 'detail' && field.detailTableName)
+    .forEach((field) => tables.add(field.detailTableName));
+  state.browserButtons
+    .filter((browser) => browser.sourceModule === moduleKey)
+    .forEach((browser) => tables.add(browser.sourceTable));
+  return Array.from(tables).sort();
+}
+
+function browserCatalogSources() {
+  return browserCatalogModules().flatMap((module) => browserTablesForModule(module.key).map((tableName) => ({
+    key: browserSourceKey(module.key, tableName),
+    moduleKey: module.key,
+    moduleName: module.name,
+    tableName,
+    count: state.browserButtons.filter((browser) => browser.sourceModule === module.key && browser.sourceTable === tableName).length
+  })));
+}
+
+function activeBrowserSource() {
+  if (!state.activeBrowserSource) return null;
+  const { moduleKey, tableName } = parseBrowserSourceKey(state.activeBrowserSource);
+  return browserCatalogSources().find((source) => source.moduleKey === moduleKey && source.tableName === tableName) || null;
+}
+
+function browserButtonsForActiveSource() {
+  const source = activeBrowserSource();
+  if (!source) return [];
+  return state.browserButtons.filter((browser) => (
+    browser.sourceModule === source.moduleKey && browser.sourceTable === source.tableName
+  ));
+}
+
+function renderBrowserSources() {
+  const container = $('#browserSourceRows');
+  if (!container) return;
+  const search = state.browserSourceSearch.trim().toLowerCase();
+  const sources = browserCatalogSources().filter((source) => (
+    !search ||
+    source.moduleName.toLowerCase().includes(search) ||
+    source.moduleKey.toLowerCase().includes(search) ||
+    source.tableName.toLowerCase().includes(search)
+  ));
+
+  container.innerHTML = sources.map((source) => `
+    <button type="button" class="browser-source-button ${source.key === state.activeBrowserSource ? 'is-active' : ''}" data-browser-source="${escapeHtml(source.key)}">
+      <span>
+        <strong>${escapeHtml(source.moduleName)}</strong>
+        <small>${escapeHtml(source.moduleKey)} / ${escapeHtml(source.tableName)}</small>
+      </span>
+      <em>${source.count}</em>
+    </button>
+  `).join('') || '<p class="muted browser-source-empty">No sources found.</p>';
+}
+
+function renderBrowserSourceHeader() {
+  const source = activeBrowserSource();
+  const title = $('#activeBrowserSourceTitle');
+  const meta = $('#activeBrowserSourceMeta');
+  const newButton = $('#newBrowserButton');
+  if (!title || !meta || !newButton) return;
+  if (!source) {
+    title.textContent = 'Select a source';
+    meta.textContent = 'Choose a module/table to manage its browser buttons.';
+    newButton.disabled = true;
+    return;
+  }
+  title.textContent = `${source.moduleName} / ${source.tableName}`;
+  meta.textContent = `${source.count} browser button${source.count === 1 ? '' : 's'} configured for this source.`;
+  newButton.disabled = false;
+}
+
+function selectBrowserSource(sourceKey) {
+  state.activeBrowserSource = sourceKey;
+  renderBrowserSources();
+  renderBrowserButtons();
+  clearBrowserButtonForm();
+}
+
+function browserFieldsForSource(moduleKey, tableName) {
+  if (moduleKey === 'countries') {
+    return ['id', 'name', 'iso2', 'dial_code'];
+  }
+  const module = browserCatalogModules().find((item) => item.key === moduleKey);
+  const fields = module?.fields || [];
+  const matchingFields = fields.filter((field) => (
+    tableName === moduleKey
+      ? field.tableType !== 'detail'
+      : field.tableType === 'detail' && field.detailTableName === tableName
+  ));
+  return Array.from(new Set(['id', ...matchingFields.map(browserFieldValue).filter(Boolean)])).sort();
+}
+
+function renderSelectOptions(values, selected = '', placeholder = '') {
+  const selectedSet = new Set(Array.isArray(selected) ? selected : [selected].filter(Boolean));
+  const normalizedValues = Array.from(new Set([...values, ...selectedSet].filter(Boolean)));
+  return [
+    placeholder ? `<option value="">${escapeHtml(placeholder)}</option>` : '',
+    ...normalizedValues.map((value) => `<option value="${escapeHtml(value)}" ${selectedSet.has(value) ? 'selected' : ''}>${escapeHtml(value)}</option>`)
+  ].join('');
+}
+
+function renderCheckboxOptions(values, selected = []) {
+  const selectedSet = new Set(selected);
+  return values.map((value) => `
+    <label class="browser-checkbox-option">
+      <input type="checkbox" value="${escapeHtml(value)}" ${selectedSet.has(value) ? 'checked' : ''}>
+      <span>${escapeHtml(value)}</span>
+    </label>
+  `).join('') || '<p class="muted browser-checkbox-empty">No fields available.</p>';
+}
+
+function syncBrowserSourceSelectors({
+  sourceModule = '',
+  sourceTable = '',
+  valueField = '',
+  displayField = '',
+  searchFields = [],
+  returnFields = []
+} = {}) {
+  const form = $('#browserButtonForm');
+  if (!form) return;
+  const source = activeBrowserSource();
+  const moduleKey = sourceModule || source?.moduleKey || form.elements.sourceModule.value || '';
+  const tableName = sourceTable || source?.tableName || form.elements.sourceTable.value || '';
+  form.elements.sourceModule.value = moduleKey;
+  form.elements.sourceTable.value = tableName;
+  form.elements.sourcePreview.value = moduleKey && tableName ? `${moduleKey} / ${tableName}` : '';
+
+  const fields = browserFieldsForSource(moduleKey, tableName);
+  const currentValue = form.elements.valueField.value;
+  const currentDisplay = form.elements.displayField.value;
+  const fallbackValue = valueField || (fields.includes(currentValue) ? currentValue : '') || (fields.includes('id') ? 'id' : fields[0] || '');
+  const fallbackDisplay = displayField || (fields.includes(currentDisplay) ? currentDisplay : '') || fields.find((field) => field !== fallbackValue) || fallbackValue;
+  const selectedSearch = searchFields.length
+    ? searchFields
+    : checkedValues(form.querySelector('[data-browser-field-list="searchFields"]')).filter((field) => fields.includes(field));
+  const selectedReturn = returnFields.length
+    ? returnFields
+    : checkedValues(form.querySelector('[data-browser-field-list="returnFields"]')).filter((field) => fields.includes(field));
+  form.elements.valueField.innerHTML = renderSelectOptions(fields, fallbackValue, 'Select value field');
+  form.elements.displayField.innerHTML = renderSelectOptions(fields, fallbackDisplay, 'Select display field');
+  form.querySelector('[data-browser-field-list="searchFields"]').innerHTML = renderCheckboxOptions(fields, selectedSearch);
+  form.querySelector('[data-browser-field-list="returnFields"]').innerHTML = renderCheckboxOptions(fields, selectedReturn);
+}
+
+function renderBrowserButtonOptions(selected = '') {
+  return [
+    '<option value="">Select browser button</option>',
+    ...state.browserButtons
+      .filter((browser) => browser.enabled)
+      .map((browser) => `<option value="${escapeHtml(browser.browserKey)}" ${browser.browserKey === selected ? 'selected' : ''}>${escapeHtml(browser.name)}</option>`)
+  ].join('');
+}
+
+function clearBrowserButtonForm() {
+  const form = $('#browserButtonForm');
+  if (!form) return;
+  form.reset();
+  form.hidden = true;
+  form.elements.editingBrowserKey.value = '';
+  form.elements.browserKey.readOnly = false;
+  form.elements.browserKey.value = '';
+  form.elements.enabled.checked = true;
+  syncBrowserSourceSelectors();
+  $('#saveBrowserButton').textContent = 'Save Browser';
+}
+
+function openNewBrowserButtonForm() {
+  const form = $('#browserButtonForm');
+  const source = activeBrowserSource();
+  if (!form || !source) return;
+  form.reset();
+  form.hidden = false;
+  form.elements.editingBrowserKey.value = '';
+  form.elements.browserKey.readOnly = false;
+  form.elements.browserKey.value = '';
+  form.elements.enabled.checked = true;
+  syncBrowserSourceSelectors({
+    sourceModule: source.moduleKey,
+    sourceTable: source.tableName,
+    valueField: 'id'
+  });
+  $('#saveBrowserButton').textContent = 'Save Browser';
+}
+
+function fillBrowserButtonForm(browser) {
+  const form = $('#browserButtonForm');
+  if (!form || !browser) return;
+  state.activeBrowserSource = browserSourceKey(browser.sourceModule, browser.sourceTable);
+  renderBrowserSources();
+  renderBrowserSourceHeader();
+  form.hidden = false;
+  form.elements.editingBrowserKey.value = browser.browserKey;
+  form.elements.name.value = browser.name;
+  form.elements.browserKey.value = browser.browserKey;
+  form.elements.browserKey.readOnly = true;
+  syncBrowserSourceSelectors(browser);
+  form.elements.sqlWhere.value = browser.filter?.where || '';
+  form.elements.enabled.checked = browser.enabled;
+  $('#saveBrowserButton').textContent = 'Save Browser';
+}
+
+function renderBrowserButtons() {
+  const body = $('#browserButtonRows');
+  if (!body) return;
+  renderBrowserSourceHeader();
+  const source = activeBrowserSource();
+  if (!source) {
+    body.innerHTML = '<tr><td colspan="6">Select a source to view its browser buttons.</td></tr>';
+    return;
+  }
+  body.innerHTML = browserButtonsForActiveSource().map((browser) => `
+    <tr data-browser-key="${escapeHtml(browser.browserKey)}">
+      <td>
+        <strong>${escapeHtml(browser.name)}</strong>
+        <div class="muted">${escapeHtml(browser.browserKey)}${browser.system ? ' Â· system' : ''}</div>
+      </td>
+      <td>${escapeHtml(browser.valueField)}</td>
+      <td>${escapeHtml(browser.displayField)}</td>
+      <td>${escapeHtml(stringList(browser.searchFields))}</td>
+      <td>${escapeHtml(browser.filter?.where || '')}</td>
+      <td>
+        <button type="button" class="link-button" data-edit-browser="${escapeHtml(browser.browserKey)}">Edit</button>
+        ${browser.system ? '<span class="muted">Preset</span>' : `<button type="button" class="link-button danger-link" data-delete-browser="${escapeHtml(browser.browserKey)}">Delete</button>`}
+      </td>
+    </tr>
+  `).join('') || '<tr><td colspan="6">No browser buttons configured for this source.</td></tr>';
+}
+
+async function refreshBrowserButtons() {
+  if (state.user?.role !== 'admin') return;
+  const [payload, modulePayload] = await Promise.all([
+    api('/api/sysadmin/browser-buttons'),
+    api('/api/sysadmin/modules')
+  ]);
+  state.browserButtons = payload.browserButtons || [];
+  state.adminModules = modulePayload.modules || [];
+  renderBrowserSources();
+  renderBrowserButtons();
+}
+
+function fieldValidationRulesFromForm(form) {
+  return {
+    minLength: form.elements.validationMinLength.value,
+    maxLength: form.elements.validationMaxLength.value,
+    minValue: form.elements.validationMinValue.value,
+    maxValue: form.elements.validationMaxValue.value,
+    regex: form.elements.validationRegex.value.trim(),
+    conditionalRequiredField: form.elements.conditionalRequiredField.value,
+    conditionalRequiredValue: form.elements.conditionalRequiredValue.value.trim(),
+    unique: form.elements.validationUnique.checked
+  };
+}
+
 function showView(id) {
   closeCustomerModal();
   closeImportModal();
@@ -1560,8 +1987,23 @@ function renderCustomerTableHead() {
   `;
 }
 
+function validationAttributes(field) {
+  const rules = field.validationRules || {};
+  const attrs = [];
+  if (rules.minLength !== undefined) attrs.push(`minlength="${escapeHtml(rules.minLength)}"`);
+  if (rules.maxLength !== undefined) attrs.push(`maxlength="${escapeHtml(rules.maxLength)}"`);
+  if (rules.minValue !== undefined) attrs.push(`min="${escapeHtml(rules.minValue)}"`);
+  if (rules.maxValue !== undefined) attrs.push(`max="${escapeHtml(rules.maxValue)}"`);
+  if (rules.regex) {
+    attrs.push(`pattern="${escapeHtml(rules.regex)}"`);
+    attrs.push(`title="${escapeHtml(`${field.label} format is invalid.`)}"`);
+  }
+  return attrs.join(' ');
+}
+
 function renderCustomerFieldInput(field, value = '', options = {}) {
   const required = options.enforceRequired === false ? '' : (field.required ? 'required' : '');
+  const validation = validationAttributes(field);
   const binding = options.detailField
     ? `data-detail-field="${escapeHtml(field.fieldKey)}"`
     : `name="${escapeHtml(field.fieldKey)}"`;
@@ -1570,7 +2012,7 @@ function renderCustomerFieldInput(field, value = '', options = {}) {
     : '';
 
   if (field.type === 'textarea') {
-    return `<textarea ${binding} rows="4" ${required} ${formulaReadonly}>${escapeHtml(value)}</textarea>`;
+    return `<textarea ${binding} rows="4" ${required} ${validation} ${formulaReadonly}>${escapeHtml(value)}</textarea>`;
   }
 
   if (field.type === 'select' || field.type === 'dropdownbox') {
@@ -1618,7 +2060,7 @@ function renderCustomerFieldInput(field, value = '', options = {}) {
     decimals: 'number'
   }[field.type] || field.type;
   const step = field.type === 'int' ? 'step="1"' : field.type === 'decimals' ? 'step="any"' : '';
-  return `<input ${binding} type="${escapeHtml(inputType)}" value="${escapeHtml(value)}" ${step} ${required} ${formulaReadonly}>`;
+  return `<input ${binding} type="${escapeHtml(inputType)}" value="${escapeHtml(value)}" ${step} ${required} ${validation} ${formulaReadonly}>`;
 }
 
 function valueForForm(customer, field) {
@@ -1937,9 +2379,10 @@ function renderGenericFieldInput(field, value = '', editing = false) {
   const name = `name="${escapeHtml(field.fieldKey)}"`;
   const autocomplete = field.fieldKey === 'password' ? 'autocomplete="new-password"' : '';
   const formulaReadonly = field.formulaEnabled && field.formulaExpression ? 'readonly data-formula-field="true"' : '';
+  const validation = validationAttributes(field);
 
   if (field.type === 'textarea') {
-    return `<textarea ${name} rows="4" ${required} ${formulaReadonly}>${escapeHtml(value)}</textarea>`;
+    return `<textarea ${name} rows="4" ${required} ${validation} ${formulaReadonly}>${escapeHtml(value)}</textarea>`;
   }
   if (field.type === 'select' || field.type === 'dropdownbox') {
     const options = (field.options || []).map((option) => (
@@ -1971,7 +2414,7 @@ function renderGenericFieldInput(field, value = '', editing = false) {
   }[field.type] || field.type;
   const minlength = field.fieldKey === 'password' ? 'minlength="8"' : '';
   const step = field.type === 'int' ? 'step="1"' : field.type === 'decimals' ? 'step="any"' : '';
-  return `<input ${name} type="${escapeHtml(inputType)}" value="${escapeHtml(value)}" ${step} ${minlength} ${required} ${autocomplete} ${formulaReadonly}>`;
+  return `<input ${name} type="${escapeHtml(inputType)}" value="${escapeHtml(value)}" ${step} ${minlength} ${required} ${autocomplete} ${validation} ${formulaReadonly}>`;
 }
 
 function renderUserFormFields(user = null) {
@@ -2155,7 +2598,7 @@ function clearFieldConfigForm() {
   form.elements.dataKeyPreview.readOnly = false;
   form.elements.tableType.value = 'main';
   form.elements.detailTableName.value = '';
-  form.elements.browserModulePreview.value = '';
+  form.elements.browserButtonKey.innerHTML = renderBrowserButtonOptions();
   form.elements.type.disabled = false;
   form.elements.tableType.disabled = false;
   form.elements.label.disabled = false;
@@ -2163,6 +2606,14 @@ function clearFieldConfigForm() {
   form.elements.showInForm.checked = true;
   form.elements.showInImport.checked = false;
   form.elements.required.checked = false;
+  form.elements.validationMinLength.value = '';
+  form.elements.validationMaxLength.value = '';
+  form.elements.validationMinValue.value = '';
+  form.elements.validationMaxValue.value = '';
+  form.elements.validationRegex.value = '';
+  form.elements.conditionalRequiredField.innerHTML = renderConditionalRequiredOptions();
+  form.elements.conditionalRequiredValue.value = '';
+  form.elements.validationUnique.checked = false;
   form.elements.showInForm.disabled = false;
   form.elements.required.disabled = false;
   state.editingFieldKey = '';
@@ -2188,10 +2639,19 @@ function openFieldConfigModal(field = null) {
     form.elements.type.innerHTML = renderFieldTypeOptions(field.type);
     form.elements.type.value = field.type;
     form.elements.options.value = (field.options || []).join(', ');
+    form.elements.browserButtonKey.innerHTML = renderBrowserButtonOptions(field.lookupConfig?.browserButtonKey || '');
     form.elements.showInTable.checked = field.showInTable;
     form.elements.showInForm.checked = field.showInForm;
     form.elements.showInImport.checked = field.showInImport;
     form.elements.required.checked = field.required;
+    form.elements.validationMinLength.value = field.validationRules?.minLength ?? '';
+    form.elements.validationMaxLength.value = field.validationRules?.maxLength ?? '';
+    form.elements.validationMinValue.value = field.validationRules?.minValue ?? '';
+    form.elements.validationMaxValue.value = field.validationRules?.maxValue ?? '';
+    form.elements.validationRegex.value = field.validationRules?.regex || '';
+    form.elements.conditionalRequiredField.innerHTML = renderConditionalRequiredOptions(field.validationRules?.conditionalRequiredField || '', field.fieldKey);
+    form.elements.conditionalRequiredValue.value = field.validationRules?.conditionalRequiredValue || '';
+    form.elements.validationUnique.checked = Boolean(field.validationRules?.unique);
     form.elements.type.disabled = field.locked;
     form.elements.tableType.disabled = field.locked;
     form.elements.showInForm.disabled = false;
@@ -2282,7 +2742,7 @@ function formatImportResult(result, refreshFailed = false) {
 }
 
 async function loadBootstrap() {
-  const [countries, users, customerConfig, userConfig] = await Promise.all([
+  const [countries, users, customerConfig, userConfig, browserButtons, adminModules] = await Promise.all([
     api('/api/countries'),
     api('/api/users').catch((error) => {
       if (state.user?.role === 'admin') throw error;
@@ -2292,11 +2752,15 @@ async function loadBootstrap() {
     api('/api/users/config').catch((error) => {
       if (state.user?.role === 'admin') throw error;
       return { fields: [] };
-    })
+    }),
+    state.user?.role === 'admin' ? api('/api/sysadmin/browser-buttons') : Promise.resolve({ browserButtons: [] }),
+    state.user?.role === 'admin' ? api('/api/sysadmin/modules') : Promise.resolve({ modules: [] })
   ]);
 
   state.countries = countries.countries;
   state.users = users.users;
+  state.browserButtons = browserButtons.browserButtons || [];
+  state.adminModules = adminModules.modules || [];
   state.customerFields = customerConfig.fields;
   state.userFields = userConfig.fields;
   rememberModuleConfig('customers', customerConfig);
@@ -2305,6 +2769,8 @@ async function loadBootstrap() {
   renderUsers();
   renderOwners();
   renderUserFormFields();
+  renderBrowserSources();
+  renderBrowserButtons();
   renderFieldConfig();
   await loadCustomers();
 }
@@ -2526,11 +2992,96 @@ function bindEvents() {
   });
 
   $$('.admin-section-button').forEach((button) => {
-    button.addEventListener('click', () => {
+    button.addEventListener('click', async () => {
       showAdminSection(button.dataset.adminSection);
+      if (button.dataset.adminSection === 'adminBrowserButtonsSection') {
+        try {
+          await refreshBrowserButtons();
+        } catch (error) {
+          toast(titleCaseMessage(error.message), 'error');
+        }
+      }
     });
   });
   $('#toggleAdminMenu').addEventListener('click', toggleAdminMenu);
+
+  $('#browserButtonForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = serializeForm(form);
+    const editingKey = data.editingBrowserKey;
+    delete data.editingBrowserKey;
+    data.enabled = form.elements.enabled.checked;
+    data.searchFields = checkedValues(form.querySelector('[data-browser-field-list="searchFields"]'));
+    data.returnFields = checkedValues(form.querySelector('[data-browser-field-list="returnFields"]'));
+    data.filter = form.elements.sqlWhere.value.trim()
+      ? { where: form.elements.sqlWhere.value.trim() }
+      : {};
+    delete data.sourcePreview;
+    delete data.sqlWhere;
+    if (!data.browserKey) {
+      data.browserKey = browserKeyPreview(data.name);
+    }
+    const submitButton = $('#saveBrowserButton');
+    submitButton.disabled = true;
+    submitButton.textContent = 'Saving...';
+    try {
+      const payload = await api(editingKey
+        ? `/api/sysadmin/browser-buttons/${editingKey}`
+        : '/api/sysadmin/browser-buttons', {
+        method: editingKey ? 'PATCH' : 'POST',
+        body: JSON.stringify(data)
+      });
+      state.browserButtons = payload.browserButtons || [];
+      renderBrowserSources();
+      renderBrowserButtons();
+      clearBrowserButtonForm();
+      toast('Browser Button Saved.');
+    } catch (error) {
+      toast(titleCaseMessage(error.message), 'error');
+    } finally {
+      submitButton.disabled = false;
+      submitButton.textContent = 'Save Browser';
+    }
+  });
+  $('#clearBrowserButtonForm').addEventListener('click', clearBrowserButtonForm);
+  $('#browserSourceSearch').addEventListener('input', (event) => {
+    state.browserSourceSearch = event.currentTarget.value;
+    renderBrowserSources();
+  });
+  $('#browserSourceRows').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-browser-source]');
+    if (!button) return;
+    selectBrowserSource(button.dataset.browserSource);
+  });
+  $('#newBrowserButton').addEventListener('click', openNewBrowserButtonForm);
+  $('#browserButtonForm [name="name"]').addEventListener('input', (event) => {
+    const form = event.currentTarget.form;
+    if (form.elements.editingBrowserKey.value || form.elements.browserKey.value) return;
+    form.elements.browserKey.value = browserKeyPreview(event.currentTarget.value);
+  });
+  $('#browserButtonRows').addEventListener('click', async (event) => {
+    const editButton = event.target.closest('[data-edit-browser]');
+    if (editButton) {
+      const browser = state.browserButtons.find((item) => item.browserKey === editButton.dataset.editBrowser);
+      fillBrowserButtonForm(browser);
+      return;
+    }
+    const deleteButton = event.target.closest('[data-delete-browser]');
+    if (!deleteButton) return;
+    try {
+      const payload = await api(`/api/sysadmin/browser-buttons/${deleteButton.dataset.deleteBrowser}`, {
+        method: 'DELETE'
+      });
+      state.browserButtons = payload.browserButtons || [];
+      renderBrowserSources();
+      renderBrowserButtons();
+      clearBrowserButtonForm();
+      toast('Browser Button Deleted.');
+    } catch (error) {
+      toast(titleCaseMessage(error.message), 'error');
+    }
+  });
 
   $('#formBuilderSearch').addEventListener('input', (event) => {
     state.formBuilderSearch = event.target.value;
@@ -2774,8 +3325,24 @@ function bindEvents() {
     createBatchDraftRow();
     renderBatchRows();
   });
+  $('#showArchivedBatchFields').addEventListener('click', () => {
+    state.batchShowingArchived = !state.batchShowingArchived;
+    state.batchSelectedRowIds = new Set();
+    renderBatchFieldModal();
+  });
+  $('#restoreSelectedBatchFields').addEventListener('click', () => {
+    const restorableRows = selectedActionRows(canRestoreBatchRow);
+    if (!restorableRows.length) return;
+    restorableRows.forEach((row) => {
+      state.batchRestoredFieldKeys.add(row.fieldKey);
+    });
+    const restoredIds = new Set(restorableRows.map((row) => row.id));
+    state.batchArchivedRows = state.batchArchivedRows.filter((row) => !restoredIds.has(row.id));
+    state.batchSelectedRowIds = new Set();
+    renderBatchFieldModal();
+  });
   $('#selectAllBatchFields').addEventListener('change', (event) => {
-    const rows = batchRowsForActiveTable().map((item) => item.row).filter(canDeleteBatchRow);
+    const rows = batchRowsForActiveTable().map((item) => item.row).filter(canSelectBatchRow);
     rows.forEach((row) => {
       if (event.target.checked) {
         state.batchSelectedRowIds.add(row.id);
@@ -2785,13 +3352,28 @@ function bindEvents() {
     });
     renderBatchRows();
   });
+  $('#duplicateSelectedBatchFields').addEventListener('click', () => {
+    const duplicableRows = selectedActionRows(canDuplicateBatchRow);
+    if (!duplicableRows.length) return;
+    duplicateBatchRows(duplicableRows);
+    state.batchSelectedRowIds = new Set();
+    renderBatchFieldModal();
+  });
+  $('#archiveSelectedBatchFields').addEventListener('click', () => {
+    const archivableRows = selectedActionRows(canArchiveBatchRow);
+    if (!archivableRows.length) return;
+    archivableRows.forEach((row) => {
+      state.batchArchivedFieldKeys.add(row.fieldKey);
+    });
+    const archivedIds = new Set(archivableRows.map((row) => row.id));
+    state.batchEditRows = state.batchEditRows.filter((row) => !archivedIds.has(row.id));
+    state.batchSelectedRowIds = new Set();
+    renderBatchFieldModal();
+  });
   $('#deleteSelectedBatchFields').addEventListener('click', () => {
-    const selectedIds = new Set(state.batchSelectedRowIds);
-    if (!selectedIds.size) return;
-    const deletableSelectedRows = [
-      ...state.batchEditRows,
-      ...state.batchDraftRows
-    ].filter((row) => selectedIds.has(row.id) && canDeleteBatchRow(row));
+    const deletableSelectedRows = selectedActionRows(canDeleteBatchRow);
+    if (!deletableSelectedRows.length) return;
+    const selectedIds = new Set(deletableSelectedRows.map((row) => row.id));
     deletableSelectedRows.forEach((row) => {
       if (row.existing) {
         state.batchDeletedFieldKeys.add(row.fieldKey);
@@ -2799,7 +3381,7 @@ function bindEvents() {
     });
     state.batchEditRows = state.batchEditRows.filter((row) => !selectedIds.has(row.id) || !canDeleteBatchRow(row));
     state.batchDraftRows = state.batchDraftRows.filter((row) => !selectedIds.has(row.id) || !canDeleteBatchRow(row));
-    state.batchSelectedRowIds = new Set();
+    state.batchSelectedRowIds = new Set([...state.batchSelectedRowIds].filter((id) => !selectedIds.has(id)));
     renderBatchRows();
   });
   $('#batchFieldRows').addEventListener('input', (event) => {
@@ -3176,11 +3758,15 @@ function bindEvents() {
     }
     delete data.dataKeyPreview;
     delete data.databaseFieldName;
-    delete data.browserModulePreview;
+    data.lookupConfig = data.type === 'browser_button'
+      ? { browserButtonKey: form.elements.browserButtonKey.value }
+      : {};
+    delete data.browserButtonKey;
     data.required = form.elements.required.checked;
     data.showInTable = form.elements.showInTable.checked;
     data.showInForm = form.elements.showInForm.checked;
     data.showInImport = form.elements.showInImport.checked;
+    data.validationRules = fieldValidationRulesFromForm(form);
     if (!isDropdownOptionFieldType(data.type)) {
       data.options = [];
     }
@@ -3248,10 +3834,12 @@ function bindEvents() {
 
   $('#batchFieldForm').addEventListener('submit', async (event) => {
     event.preventDefault();
-    const existingRows = state.batchEditRows.filter((row) => row.label.trim());
+    const existingRows = state.batchShowingArchived ? [] : state.batchEditRows.filter((row) => row.label.trim());
     const newRows = state.batchDraftRows.filter((row) => row.label.trim());
     const deletedFieldKeys = Array.from(state.batchDeletedFieldKeys);
-    if (!existingRows.length && !newRows.length && !deletedFieldKeys.length) {
+    const archivedFieldKeys = Array.from(state.batchArchivedFieldKeys);
+    const restoredFieldKeys = Array.from(state.batchRestoredFieldKeys);
+    if (!existingRows.length && !newRows.length && !deletedFieldKeys.length && !archivedFieldKeys.length && !restoredFieldKeys.length) {
       toast('Add or edit at least one field.', 'error');
       return;
     }
@@ -3281,6 +3869,16 @@ function bindEvents() {
       for (const fieldKey of deletedFieldKeys) {
         latestConfig = await api(`/api/sysadmin/modules/${state.activeConfigModule}/fields/${fieldKey}`, {
           method: 'DELETE'
+        });
+      }
+      for (const fieldKey of archivedFieldKeys) {
+        latestConfig = await api(`/api/sysadmin/modules/${state.activeConfigModule}/fields/${fieldKey}/archive`, {
+          method: 'POST'
+        });
+      }
+      for (const fieldKey of restoredFieldKeys) {
+        latestConfig = await api(`/api/sysadmin/modules/${state.activeConfigModule}/fields/${fieldKey}/unarchive`, {
+          method: 'POST'
         });
       }
       for (const row of existingRows) {
@@ -3319,7 +3917,7 @@ function bindEvents() {
       }
       closeBatchFieldModal();
       const savedCount = existingRows.length + newRows.length;
-      const changeCount = savedCount + deletedFieldKeys.length;
+      const changeCount = savedCount + deletedFieldKeys.length + archivedFieldKeys.length + restoredFieldKeys.length;
       toast(`Saved ${changeCount} Field${changeCount === 1 ? '' : 's'}.`);
     } catch (error) {
       toast(titleCaseMessage(error.message), 'error');

@@ -8,6 +8,41 @@ const defaultModules = new Map([
 ]);
 const formTypes = ['add', 'edit', 'detail'];
 const layoutStates = ['draft', 'published'];
+const defaultBrowserButtons = [
+  {
+    browserKey: 'countries',
+    name: 'Countries',
+    sourceModule: 'countries',
+    sourceTable: 'countries',
+    valueField: 'id',
+    displayField: 'name',
+    searchFields: ['name', 'iso2', 'dial_code'],
+    returnFields: ['name', 'dial_code'],
+    system: true
+  },
+  {
+    browserKey: 'users',
+    name: 'Users / Owners',
+    sourceModule: 'users',
+    sourceTable: 'users',
+    valueField: 'id',
+    displayField: 'name',
+    searchFields: ['name', 'email'],
+    returnFields: ['name', 'email', 'role'],
+    system: true
+  },
+  {
+    browserKey: 'customers',
+    name: 'Customers',
+    sourceModule: 'customers',
+    sourceTable: 'customers',
+    valueField: 'id',
+    displayField: 'company_name',
+    searchFields: ['company_name', 'email', 'contact_person'],
+    returnFields: ['company_name', 'email', 'contact_person'],
+    system: true
+  }
+];
 const fieldTypes = new Set([
   'textbox',
   'textarea',
@@ -35,6 +70,14 @@ function slugFieldKey(label) {
     .replace(/[^a-z0-9]+/g, ' ')
     .trim()
     .replace(/\s+([a-z0-9])/g, (_match, letter) => letter.toUpperCase());
+}
+
+function slugBrowserKey(label) {
+  return String(label || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
 }
 
 function defaultFormLayout(fields) {
@@ -133,6 +176,15 @@ async function ensureAllDefaultConfigs() {
   await ensureDefaultUserConfig();
 }
 
+async function ensureDefaultBrowserButtons() {
+  for (const browser of defaultBrowserButtons) {
+    const existing = await repository.findBrowserButton(browser.browserKey);
+    if (!existing) {
+      await repository.upsertBrowserButton(browser);
+    }
+  }
+}
+
 async function getModuleConfig(moduleKey) {
   if (defaultModules.has(moduleKey)) {
     await ensureDefaultConfig(moduleKey);
@@ -156,6 +208,110 @@ async function listModules() {
   }));
 }
 
+function normalizeStringList(input) {
+  if (Array.isArray(input)) {
+    return input.map((item) => String(item).trim()).filter(Boolean);
+  }
+  return String(input || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function assertConfigKey(value, label) {
+  if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(String(value || ''))) {
+    throw new AppError(`${label} must start with a letter and use only letters, numbers, or underscores`, 422);
+  }
+}
+
+function normalizeBrowserFilter(input = {}, existing = {}) {
+  const where = String(input?.where ?? existing?.where ?? '').trim();
+  if (!where) return {};
+  if (/[;]/.test(where) || /--|\/\*/.test(where)) {
+    throw new AppError('SQL WHERE condition cannot include statement separators or comments', 422);
+  }
+  return { where };
+}
+
+function normalizeBrowserButton(input = {}, existing = null) {
+  const browserKey = existing?.browserKey || slugBrowserKey(input.browserKey || input.name);
+  if (!browserKey) throw new AppError('Browser key is required', 422);
+  assertConfigKey(browserKey, 'Browser key');
+
+  const name = String(input.name ?? existing?.name ?? '').trim();
+  const sourceModule = String(input.sourceModule ?? existing?.sourceModule ?? '').trim();
+  const sourceTable = String(input.sourceTable ?? existing?.sourceTable ?? '').trim();
+  const valueField = String(input.valueField ?? existing?.valueField ?? 'id').trim();
+  const displayField = String(input.displayField ?? existing?.displayField ?? '').trim();
+  if (!name || !sourceModule || !sourceTable || !valueField || !displayField) {
+    throw new AppError('Browser name, source, value field, and display field are required', 422);
+  }
+  [sourceModule, sourceTable, valueField, displayField].forEach((value) => assertConfigKey(value, 'Browser source settings'));
+
+  return {
+    browserKey,
+    name,
+    sourceModule,
+    sourceTable,
+    valueField,
+    displayField,
+    searchFields: normalizeStringList(input.searchFields ?? existing?.searchFields),
+    returnFields: normalizeStringList(input.returnFields ?? existing?.returnFields),
+    filter: normalizeBrowserFilter(input.filter, input.filter === undefined ? existing?.filter : {}),
+    system: Boolean(existing?.system || input.system),
+    enabled: input.enabled === undefined ? existing?.enabled !== false : Boolean(input.enabled)
+  };
+}
+
+function normalizeLookupConfig(input = {}, type = '') {
+  if (type !== 'browser_button') return {};
+  const browserButtonKey = String(input.browserButtonKey || '').trim();
+  return browserButtonKey ? { browserButtonKey } : {};
+}
+
+async function listBrowserButtons() {
+  await ensureDefaultBrowserButtons();
+  return repository.listBrowserButtons();
+}
+
+async function saveBrowserButton(input) {
+  await ensureDefaultBrowserButtons();
+  const browser = normalizeBrowserButton(input);
+  const existing = await repository.findBrowserButton(browser.browserKey);
+  if (existing && existing.system) {
+    throw new AppError('System browser buttons cannot be replaced', 422);
+  }
+  await repository.upsertBrowserButton(browser);
+  return listBrowserButtons();
+}
+
+async function updateBrowserButton(browserKey, input) {
+  await ensureDefaultBrowserButtons();
+  const existing = await repository.findBrowserButton(browserKey);
+  if (!existing) throw new AppError('Browser button not found', 404);
+  const browser = normalizeBrowserButton(input, existing);
+  await repository.upsertBrowserButton(browser);
+  return listBrowserButtons();
+}
+
+async function deleteBrowserButton(browserKey) {
+  const existing = await repository.findBrowserButton(browserKey);
+  if (!existing) throw new AppError('Browser button not found', 404);
+  if (existing.system) throw new AppError('System browser buttons cannot be deleted', 422);
+  const usageCount = await repository.browserButtonUsageCount(browserKey);
+  if (usageCount > 0) {
+    throw new AppError('Browser button is used by fields and cannot be deleted', 422);
+  }
+  await repository.deleteBrowserButton(browserKey);
+  return listBrowserButtons();
+}
+
+async function listArchivedFields(moduleKey) {
+  const module = await repository.findModuleByKey(moduleKey);
+  if (!module) throw new AppError('Module not found', 404);
+  return withFieldDataCounts(moduleKey, await repository.listArchivedFields(moduleKey));
+}
+
 function normalizeOptions(input) {
   if (Array.isArray(input)) {
     return input.map((option) => String(option).trim()).filter(Boolean);
@@ -177,6 +333,48 @@ function normalizeFormulaExpression(input) {
 
 function normalizeFormulaScript(input) {
   return String(input || '').trim();
+}
+
+function optionalNumber(value) {
+  if (value === '' || value === null || value === undefined) return undefined;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+}
+
+function normalizeValidationRules(input = {}) {
+  const rules = {};
+  const minLength = optionalNumber(input.minLength);
+  const maxLength = optionalNumber(input.maxLength);
+  const minValue = optionalNumber(input.minValue);
+  const maxValue = optionalNumber(input.maxValue);
+  if (minLength !== undefined) rules.minLength = Math.trunc(minLength);
+  if (maxLength !== undefined) rules.maxLength = Math.trunc(maxLength);
+  if (minValue !== undefined) rules.minValue = minValue;
+  if (maxValue !== undefined) rules.maxValue = maxValue;
+  if (rules.minLength !== undefined && rules.maxLength !== undefined && rules.minLength > rules.maxLength) {
+    throw new AppError('Minimum length cannot be greater than maximum length', 422);
+  }
+  if (rules.minValue !== undefined && rules.maxValue !== undefined && rules.minValue > rules.maxValue) {
+    throw new AppError('Minimum value cannot be greater than maximum value', 422);
+  }
+
+  const regex = String(input.regex || '').trim();
+  if (regex) {
+    try {
+      RegExp(regex);
+    } catch (_error) {
+      throw new AppError('Validation regex is invalid', 422);
+    }
+    rules.regex = regex;
+  }
+
+  const conditionalRequiredField = String(input.conditionalRequiredField || '').trim();
+  if (conditionalRequiredField) {
+    rules.conditionalRequiredField = conditionalRequiredField;
+    rules.conditionalRequiredValue = String(input.conditionalRequiredValue || '').trim();
+  }
+  if (input.unique) rules.unique = true;
+  return rules;
 }
 
 function normalizeFormulaFunctionName(input) {
@@ -244,6 +442,8 @@ async function createField(moduleKey, input) {
     formulaFunctionName,
     formulaFunctionBody: normalizeFormulaScript(input.formulaFunctionBody),
     formulaSql: normalizeFormulaScript(input.formulaSql),
+    validationRules: normalizeValidationRules(input.validationRules),
+    lookupConfig: normalizeLookupConfig(input.lookupConfig, input.type),
     required: Boolean(input.required),
     showInTable: input.showInTable !== false,
     showInForm: Boolean(input.required) || input.showInForm !== false,
@@ -278,7 +478,9 @@ async function updateField(moduleKey, fieldKey, input) {
     formulaJs: input.formulaJs === undefined ? undefined : normalizeFormulaScript(input.formulaJs),
     formulaFunctionName,
     formulaFunctionBody: input.formulaFunctionBody === undefined ? undefined : normalizeFormulaScript(input.formulaFunctionBody),
-    formulaSql: input.formulaSql === undefined ? undefined : normalizeFormulaScript(input.formulaSql)
+    formulaSql: input.formulaSql === undefined ? undefined : normalizeFormulaScript(input.formulaSql),
+    validationRules: input.validationRules === undefined ? undefined : normalizeValidationRules(input.validationRules),
+    lookupConfig: input.lookupConfig === undefined ? undefined : normalizeLookupConfig(input.lookupConfig, input.type || field.type)
   };
 
   if (updates.required) {
@@ -373,16 +575,39 @@ async function deleteField(moduleKey, fieldKey) {
   return getModuleConfig(moduleKey);
 }
 
+async function archiveField(moduleKey, fieldKey) {
+  const field = await repository.findField(moduleKey, fieldKey);
+  if (!field) throw new AppError('Field not found', 404);
+  if (field.locked) throw new AppError('System fields cannot be archived', 422);
+  await repository.archiveField(moduleKey, fieldKey);
+  return getModuleConfig(moduleKey);
+}
+
+async function unarchiveField(moduleKey, fieldKey) {
+  const field = await repository.findField(moduleKey, fieldKey);
+  if (!field) throw new AppError('Field not found', 404);
+  if (field.locked) throw new AppError('System fields cannot be restored', 422);
+  await repository.unarchiveField(moduleKey, fieldKey);
+  return getModuleConfig(moduleKey);
+}
+
 module.exports = {
   ensureDefaultCustomerConfig,
   ensureDefaultUserConfig,
   ensureAllDefaultConfigs,
   getModuleConfig,
   listModules,
+  listArchivedFields,
+  listBrowserButtons,
+  saveBrowserButton,
+  updateBrowserButton,
+  deleteBrowserButton,
   createField,
   updateField,
   renameDetailTable,
   saveFormLayout,
   publishFormLayout,
-  deleteField
+  deleteField,
+  archiveField,
+  unarchiveField
 };

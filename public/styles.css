@@ -403,6 +403,25 @@ button:focus {
   gap: 10px;
 }
 
+.validation-rule-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.validation-rule-wide {
+  grid-column: span 2;
+}
+
+.validation-rule-check {
+  align-self: end;
+  min-height: 42px;
+}
+
 .checkbox-grid label {
   display: flex;
   align-items: center;
@@ -1506,11 +1525,65 @@ td {
 
 .field-config-grid > label > input,
 .field-config-grid > label > select,
+.field-config-grid > label > textarea,
+.field-config-grid > label > .browser-checkbox-list,
 .field-config-grid .input-action {
   border: 0;
   border-left: 1px solid var(--line);
   border-radius: 0;
   min-height: 42px;
+}
+
+.field-config-grid > label > textarea {
+  resize: vertical;
+}
+
+.field-config-grid > label > .browser-checkbox-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  padding: 10px 12px;
+  background: white;
+}
+
+.browser-checkbox-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #1f2937;
+  font-weight: 700;
+}
+
+.browser-checkbox-option:has(input:checked) {
+  border-color: #93c5fd;
+  background: #eef7ff;
+  color: #0f4f8a;
+}
+
+.browser-checkbox-option input {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+.browser-checkbox-option span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-checkbox-empty {
+  margin: 0;
+  grid-column: 1 / -1;
+}
+
+.field-config-grid > label > select[multiple] {
+  min-height: 112px;
+  padding-block: 8px;
 }
 
 .field-config-grid .input-action {
@@ -1534,8 +1607,153 @@ td {
   background: white;
 }
 
+.field-config-grid > .validation-rule-grid {
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(4, minmax(140px, 1fr));
+  padding: 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: white;
+}
+
+.field-config-grid > .validation-rule-grid label {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.field-config-grid > .validation-rule-grid label > span {
+  padding: 0;
+}
+
+.field-config-grid > .validation-rule-grid input,
+.field-config-grid > .validation-rule-grid select {
+  width: 100%;
+  min-width: 0;
+}
+
+.field-config-grid > .validation-rule-grid .validation-rule-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+}
+
+.field-config-grid > .validation-rule-grid .validation-rule-check input {
+  width: auto;
+}
+
 .field-config-grid > .checkbox-grid label {
   display: flex;
+}
+
+.browser-button-workspace {
+  display: grid;
+  grid-template-columns: minmax(210px, 280px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.browser-source-panel {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.browser-source-heading {
+  display: grid;
+  gap: 2px;
+}
+
+.browser-source-heading small,
+.browser-button-toolbar small {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.browser-source-list {
+  display: grid;
+  gap: 6px;
+  max-height: 580px;
+  overflow: auto;
+}
+
+.browser-source-button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.browser-source-button:hover,
+.browser-source-button.is-active {
+  border-color: #bfdbfe;
+  background: #eef7ff;
+}
+
+.browser-source-button span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.browser-source-button strong,
+.browser-source-button small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.browser-source-button small {
+  color: var(--muted);
+}
+
+.browser-source-button em {
+  min-width: 28px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #475569;
+  font-style: normal;
+  text-align: center;
+}
+
+.browser-button-main {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.browser-button-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.browser-button-toolbar > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.browser-button-panel {
+  margin-bottom: 0;
+}
+
+.browser-button-table-wrap {
+  min-height: 320px;
 }
 
 .readonly-checkbox {

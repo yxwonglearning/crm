@@ -3,6 +3,7 @@ const countries = require('../countries/countries.repository');
 const moduleConfig = require('../sysadmin/module-config.service');
 const repository = require('./customers.repository');
 const { normalizePhone } = require('./phone');
+const { validateFieldValue } = require('../../shared/field-validation');
 
 const systemFieldKeys = new Set([
   'companyName',
@@ -166,6 +167,16 @@ async function customerFieldConfig() {
   return moduleConfig.getModuleConfig('customers');
 }
 
+async function validateConfiguredFields(input, fields, excludeId = null) {
+  for (const field of fields.filter((item) => item.tableType !== 'detail')) {
+    await validateFieldValue(field, input[field.fieldKey], input, {
+      uniqueChecker: field.validationRules?.unique
+        ? (uniqueField, value) => repository.countFieldValue(uniqueField, value, excludeId)
+        : null
+    });
+  }
+}
+
 function customFieldsFromInput(input, fields) {
   const customFields = {};
 
@@ -173,9 +184,6 @@ function customFieldsFromInput(input, fields) {
     .filter((field) => !systemFieldKeys.has(field.fieldKey) && field.tableType !== 'detail')
     .forEach((field) => {
       const value = input[field.fieldKey];
-      if (field.required && (value === undefined || value === null || String(value).trim() === '')) {
-        throw new AppError(`${field.label} is required`, 422);
-      }
       if (value !== undefined) {
         customFields[field.fieldKey] = normalizeCustomFieldValue(field, value);
       }
@@ -218,25 +226,23 @@ async function detailTablesFromInput(input) {
       fieldsByTable.get(field.detailTableName).push(field);
     });
 
-  fieldsByTable.forEach((fields, tableName) => {
+  for (const [tableName, fields] of fieldsByTable.entries()) {
     const rows = normalizeDetailRows(inputTables[tableName], fields);
-    rows.forEach((row) => {
-      fields.forEach((field) => {
-        const value = row[field.fieldKey];
-        if (field.required && (value === undefined || value === null || String(value).trim() === '')) {
-          throw new AppError(`${field.label} is required`, 422);
-        }
-      });
-    });
+    for (const row of rows) {
+      for (const field of fields) {
+        await validateFieldValue(field, row[field.fieldKey], row);
+      }
+    }
     detailTables[tableName] = rows;
-  });
+  }
 
   return detailTables;
 }
 
-async function hydrateCustomerInput(input, userId) {
+async function hydrateCustomerInput(input, userId, options = {}) {
   const config = await customerFieldConfig();
   const formulaInput = applyFormulaFields(input, config.fields);
+  await validateConfiguredFields(formulaInput, config.fields, options.excludeId || null);
   const country = await countries.findCountryById(input.countryId);
   if (!country) {
     throw new AppError('Selected country does not exist', 422);
@@ -281,7 +287,7 @@ async function updateCustomer(id, input, userId) {
     throw new AppError('Customer not found', 404);
   }
 
-  const customer = await hydrateCustomerInput(input, userId);
+  const customer = await hydrateCustomerInput(input, userId, { excludeId: id });
   customer.customFields = {
     ...parseCustomFields(existing.custom_fields),
     ...customer.customFields

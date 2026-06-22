@@ -11,6 +11,17 @@ function sqlIdentifier(identifier) {
   return `\`${identifier}\``;
 }
 
+const systemFieldColumns = {
+  companyName: 'company_name',
+  contactPerson: 'contact_person',
+  email: 'email',
+  countryId: 'country_id',
+  phoneNumber: 'phone_number',
+  status: 'status',
+  notes: 'notes',
+  ownerUserId: 'owner_user_id'
+};
+
 function baseSelect() {
   return `SELECT
       c.id,
@@ -164,6 +175,29 @@ async function updateCustomer(id, customer) {
   );
 }
 
+async function countFieldValue(field, value, excludeId = null) {
+  if (field.tableType === 'detail') return 0;
+  const values = [];
+  let condition;
+  const column = systemFieldColumns[field.fieldKey];
+  if (column) {
+    condition = `LOWER(COALESCE(CAST(${sqlIdentifier(column)} AS CHAR), '')) = LOWER(?)`;
+    values.push(String(value));
+  } else {
+    condition = `LOWER(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(custom_fields, ?)), '')) = LOWER(?)`;
+    values.push(`$.${JSON.stringify(String(field.fieldKey || ''))}`, String(value));
+  }
+  if (excludeId) {
+    condition += ' AND id <> ?';
+    values.push(excludeId);
+  }
+  const [rows] = await pool.execute(
+    `SELECT COUNT(*) AS count FROM customers WHERE ${condition}`,
+    values
+  );
+  return Number(rows[0]?.count || 0);
+}
+
 function normalizeDetailValue(field, value) {
   if (field.type === 'checkbox') return value ? 1 : 0;
   return value === '' ? null : value;
@@ -244,6 +278,7 @@ module.exports = {
   detailValuesByCustomerId,
   createCustomer,
   updateCustomer,
+  countFieldValue,
   upsertDetailRows,
   upsertDetailValues,
   deleteCustomers

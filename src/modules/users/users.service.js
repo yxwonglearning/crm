@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const { AppError } = require('../../shared/errors');
 const moduleConfig = require('../sysadmin/module-config.service');
 const repository = require('./users.repository');
+const { validateFieldValue } = require('../../shared/field-validation');
 
 const systemFieldKeys = new Set(['name', 'email', 'password', 'role', 'status']);
 
@@ -40,17 +41,27 @@ async function userFieldConfig() {
   return moduleConfig.getModuleConfig('users');
 }
 
-async function customFieldsFromInput(input) {
+async function validateConfiguredFields(input, fields, excludeId = null) {
+  for (const field of fields) {
+    if (excludeId && field.fieldKey === 'password' && (input.password === undefined || String(input.password).trim() === '')) {
+      continue;
+    }
+    await validateFieldValue(field, input[field.fieldKey], input, {
+      uniqueChecker: field.validationRules?.unique
+        ? (uniqueField, value) => repository.countFieldValue(uniqueField, value, excludeId)
+        : null
+    });
+  }
+}
+
+async function customFieldsFromInput(input, fields) {
   const config = await userFieldConfig();
   const customFields = {};
 
-  config.fields
+  (fields || config.fields)
     .filter((field) => !systemFieldKeys.has(field.fieldKey))
     .forEach((field) => {
       const value = input[field.fieldKey];
-      if (field.required && (value === undefined || value === null || String(value).trim() === '')) {
-        throw new AppError(`${field.label} is required`, 422);
-      }
       if (value !== undefined) {
         customFields[field.fieldKey] = normalizeCustomFieldValue(field, value);
       }
@@ -65,6 +76,8 @@ async function listUsers() {
 }
 
 async function createUser(input) {
+  const config = await userFieldConfig();
+  await validateConfiguredFields(input, config.fields);
   const password = String(input.password).trim();
   const passwordHash = await bcrypt.hash(password, 12);
   try {
@@ -74,7 +87,7 @@ async function createUser(input) {
       passwordHash,
       role: input.role,
       status: input.status,
-      customFields: await customFieldsFromInput(input)
+      customFields: await customFieldsFromInput(input, config.fields)
     });
     const created = await repository.findUserCredentialsById(id);
     if (!created || !await bcrypt.compare(password, created.password_hash)) {
@@ -96,6 +109,8 @@ async function updateUser(id, input) {
   }
 
   const updates = {};
+  const config = await userFieldConfig();
+  await validateConfiguredFields(input, config.fields, id);
   if (input.name) updates.name = input.name;
   if (input.email) updates.email = input.email.toLowerCase();
   if (input.role) updates.role = input.role;
@@ -106,7 +121,7 @@ async function updateUser(id, input) {
   }
   updates.custom_fields = JSON.stringify({
     ...parseCustomFields(existing.custom_fields),
-    ...await customFieldsFromInput(input)
+    ...await customFieldsFromInput(input, config.fields)
   });
 
   try {
