@@ -41,6 +41,17 @@ function parseOptions(value) {
   }
 }
 
+function parseJsonObject(value) {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (_error) {
+    return {};
+  }
+}
+
 function normalizeField(row) {
   return {
     id: row.id,
@@ -102,6 +113,34 @@ function sqlTypeForFieldType(type) {
     owner: 'BIGINT UNSIGNED NULL'
   };
   return map[type] || 'VARCHAR(255) NULL';
+}
+
+function moduleDataTable(moduleKey) {
+  const tables = {
+    customers: 'customers',
+    users: 'users'
+  };
+  return tables[moduleKey] || moduleKey;
+}
+
+function nonEmptyColumnCondition(column, type) {
+  const identifier = sqlIdentifier(column);
+  if (type === 'checkbox') {
+    return `${identifier} = 1`;
+  }
+  return `${identifier} IS NOT NULL AND TRIM(CAST(${identifier} AS CHAR)) <> ''`;
+}
+
+function customFieldJsonPath(fieldKey) {
+  return `$.${JSON.stringify(String(fieldKey || ''))}`;
+}
+
+function nonEmptyCustomFieldCondition(type) {
+  if (type === 'checkbox') {
+    return `JSON_UNQUOTE(JSON_EXTRACT(custom_fields, ?)) IN ('true', '1')`;
+  }
+  return `JSON_EXTRACT(custom_fields, ?) IS NOT NULL
+    AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(custom_fields, ?)), '') NOT IN ('', 'null')`;
 }
 
 async function upsertModule(module) {
@@ -183,6 +222,34 @@ async function findField(moduleKey, fieldKey) {
   return rows[0] ? normalizeField(rows[0]) : null;
 }
 
+async function listFormLayouts(moduleKey) {
+  const module = await findModuleByKey(moduleKey);
+  if (!module) return [];
+  const [rows] = await pool.execute(
+    `SELECT layout_state, form_type, layout_json
+     FROM crm_module_form_layouts
+     WHERE module_id = ?`,
+    [module.id]
+  );
+  return rows.map((row) => ({
+    state: row.layout_state,
+    formType: row.form_type,
+    layout: parseJsonObject(row.layout_json)
+  }));
+}
+
+async function upsertFormLayout(moduleKey, layoutState, formType, layout) {
+  const module = await findModuleByKey(moduleKey);
+  if (!module) return 0;
+  const [result] = await pool.execute(
+    `INSERT INTO crm_module_form_layouts (module_id, layout_state, form_type, layout_json)
+     VALUES (?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE layout_json = VALUES(layout_json)`,
+    [module.id, layoutState, formType, JSON.stringify(layout || {})]
+  );
+  return result.affectedRows;
+}
+
 async function createCustomField(moduleId, field) {
   const [result] = await pool.execute(
     `INSERT INTO crm_module_fields (
@@ -259,6 +326,37 @@ async function ensureDetailTableField(tableName, fieldKey, fieldType) {
   }
 }
 
+async function detailTableExists(tableName) {
+  const [rows] = await pool.execute(
+    `SELECT COUNT(*) AS count
+     FROM information_schema.TABLES
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
+    [tableName]
+  );
+  return Number(rows[0]?.count || 0) > 0;
+}
+
+async function renameDetailTable(moduleKey, oldTableName, newTableName) {
+  assertSafeIdentifier(oldTableName);
+  assertSafeIdentifier(newTableName);
+  const module = await findModuleByKey(moduleKey);
+  if (!module) return 0;
+
+  const oldExists = await detailTableExists(oldTableName);
+  const newExists = await detailTableExists(newTableName);
+  if (oldExists && !newExists) {
+    await pool.query(`RENAME TABLE ${sqlIdentifier(oldTableName)} TO ${sqlIdentifier(newTableName)}`);
+  }
+
+  const [result] = await pool.execute(
+    `UPDATE crm_module_fields
+     SET detail_table_name = ?
+     WHERE module_id = ? AND field_table = 'detail' AND detail_table_name = ?`,
+    [newTableName, module.id, oldTableName]
+  );
+  return result.affectedRows;
+}
+
 async function updateField(moduleKey, fieldKey, updates) {
   const module = await findModuleByKey(moduleKey);
   if (!module) return 0;
@@ -326,6 +424,34 @@ async function deleteField(moduleKey, fieldKey) {
   return result.affectedRows;
 }
 
+async function fieldDataCount(moduleKey, field) {
+  if (!field) return 0;
+
+  if (field.tableType === 'detail' && field.detailTableName) {
+    const [rows] = await pool.execute(
+      `SELECT COUNT(*) AS count
+       FROM ${sqlIdentifier(field.detailTableName)}
+       WHERE ${nonEmptyColumnCondition(field.fieldKey, field.type)}`,
+      []
+    );
+    return Number(rows[0]?.count || 0);
+  }
+
+  if (!field.dataKey) {
+    const jsonPath = customFieldJsonPath(field.fieldKey);
+    const values = field.type === 'checkbox' ? [jsonPath] : [jsonPath, jsonPath];
+    const [rows] = await pool.execute(
+      `SELECT COUNT(*) AS count
+       FROM ${sqlIdentifier(moduleDataTable(moduleKey))}
+       WHERE ${nonEmptyCustomFieldCondition(field.type)}`,
+      values
+    );
+    return Number(rows[0]?.count || 0);
+  }
+
+  return 0;
+}
+
 module.exports = {
   upsertModule,
   upsertField,
@@ -333,9 +459,13 @@ module.exports = {
   listModules,
   listFields,
   findField,
+  listFormLayouts,
+  upsertFormLayout,
   createCustomField,
   ensureDetailTableField,
+  renameDetailTable,
   updateField,
   nextSortOrder,
-  deleteField
+  deleteField,
+  fieldDataCount
 };

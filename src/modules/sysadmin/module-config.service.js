@@ -6,6 +6,8 @@ const defaultModules = new Map([
   [customerModule.moduleKey, { module: customerModule, fields: customerFields }],
   [userModule.moduleKey, { module: userModule, fields: userFields }]
 ]);
+const formTypes = ['add', 'edit', 'detail'];
+const layoutStates = ['draft', 'published'];
 const fieldTypes = new Set([
   'textbox',
   'textarea',
@@ -35,7 +37,56 @@ function slugFieldKey(label) {
     .replace(/\s+([a-z0-9])/g, (_match, letter) => letter.toUpperCase());
 }
 
-function modulePayload(module, fields) {
+function defaultFormLayout(fields) {
+  return {
+    order: fields.map((field) => field.fieldKey),
+    hidden: fields.filter((field) => !field.showInForm).map((field) => field.fieldKey)
+  };
+}
+
+function defaultFormLayouts(fields) {
+  const defaults = {};
+  layoutStates.forEach((state) => {
+    defaults[state] = {};
+    formTypes.forEach((type) => {
+      defaults[state][type] = defaultFormLayout(fields);
+    });
+  });
+  return defaults;
+}
+
+function normalizeLayout(layout, fallback) {
+  if (Array.isArray(layout)) {
+    return {
+      order: layout.map(String),
+      hidden: [...fallback.hidden]
+    };
+  }
+  return {
+    order: Array.isArray(layout?.order) ? layout.order.map(String) : [...fallback.order],
+    hidden: Array.isArray(layout?.hidden) ? layout.hidden.map(String) : [...fallback.hidden]
+  };
+}
+
+async function moduleFormLayouts(moduleKey, fields) {
+  const layouts = defaultFormLayouts(fields);
+  const globallyHiddenFieldKeys = fields.filter((field) => !field.showInForm).map((field) => field.fieldKey);
+  const savedLayouts = await repository.listFormLayouts(moduleKey);
+  savedLayouts.forEach((saved) => {
+    if (!layoutStates.includes(saved.state) || !formTypes.includes(saved.formType)) return;
+    layouts[saved.state][saved.formType] = normalizeLayout(saved.layout, layouts[saved.state][saved.formType]);
+  });
+  layoutStates.forEach((state) => {
+    formTypes.forEach((type) => {
+      const hidden = new Set(layouts[state][type].hidden);
+      globallyHiddenFieldKeys.forEach((fieldKey) => hidden.add(fieldKey));
+      layouts[state][type].hidden = Array.from(hidden);
+    });
+  });
+  return layouts;
+}
+
+function modulePayload(module, fields, formLayouts) {
   return {
     module: {
       id: module.id,
@@ -44,8 +95,16 @@ function modulePayload(module, fields) {
       description: module.description,
       enabled: Boolean(module.is_enabled)
     },
-    fields
+    fields,
+    formLayouts
   };
+}
+
+async function withFieldDataCounts(moduleKey, fields) {
+  return Promise.all(fields.map(async (field) => ({
+    ...field,
+    dataCount: field.locked ? 0 : await repository.fieldDataCount(moduleKey, field)
+  })));
 }
 
 async function ensureDefaultConfig(moduleKey) {
@@ -84,16 +143,17 @@ async function getModuleConfig(moduleKey) {
     throw new AppError('Module not found', 404);
   }
 
-  const fields = await repository.listFields(moduleKey);
-  return modulePayload(module, fields);
+  const fields = await withFieldDataCounts(moduleKey, await repository.listFields(moduleKey));
+  return modulePayload(module, fields, await moduleFormLayouts(moduleKey, fields));
 }
 
 async function listModules() {
   await ensureAllDefaultConfigs();
   const modules = await repository.listModules();
-  return Promise.all(modules.map(async (module) => ({
-    ...modulePayload(module, await repository.listFields(module.module_key))
-  })));
+  return Promise.all(modules.map(async (module) => {
+    const fields = await withFieldDataCounts(module.module_key, await repository.listFields(module.module_key));
+    return modulePayload(module, fields, await moduleFormLayouts(module.module_key, fields));
+  }));
 }
 
 function normalizeOptions(input) {
@@ -105,6 +165,10 @@ function normalizeOptions(input) {
     .split(',')
     .map((option) => option.trim())
     .filter(Boolean);
+}
+
+function isDropdownOptionFieldType(type) {
+  return type === 'dropdownbox' || type === 'select';
 }
 
 function normalizeFormulaExpression(input) {
@@ -127,6 +191,12 @@ function assertFormulaFunctionName(name) {
 
 function moduleTableBase(moduleKey) {
   return String(moduleKey || 'module').replace(/s$/, '') || 'module';
+}
+
+function assertDetailTableName(name) {
+  if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(String(name || ''))) {
+    throw new AppError('Detail table name must start with a letter and use only letters, numbers, or underscores', 422);
+  }
 }
 
 async function resolveDetailTableName(moduleKey, moduleId, input = {}) {
@@ -167,7 +237,7 @@ async function createField(moduleKey, input) {
     type: input.type,
     tableType,
     detailTableName,
-    options: input.type === 'dropdownbox' ? normalizeOptions(input.options) : [],
+    options: isDropdownOptionFieldType(input.type) ? normalizeOptions(input.options) : [],
     formulaExpression: normalizeFormulaExpression(input.formulaExpression),
     formulaEnabled: Boolean(input.formulaEnabled && normalizeFormulaExpression(input.formulaExpression)),
     formulaJs: normalizeFormulaScript(input.formulaJs),
@@ -202,7 +272,7 @@ async function updateField(moduleKey, fieldKey, input) {
 
   const updates = {
     ...input,
-    options: input.options === undefined ? undefined : (input.type || field.type) === 'dropdownbox' ? normalizeOptions(input.options) : [],
+    options: input.options === undefined ? undefined : isDropdownOptionFieldType(input.type || field.type) ? normalizeOptions(input.options) : [],
     formulaExpression: input.formulaExpression === undefined ? undefined : normalizeFormulaExpression(input.formulaExpression),
     formulaEnabled: input.formulaEnabled === undefined ? undefined : Boolean(input.formulaEnabled && normalizeFormulaExpression(input.formulaExpression ?? field.formulaExpression)),
     formulaJs: input.formulaJs === undefined ? undefined : normalizeFormulaScript(input.formulaJs),
@@ -245,10 +315,60 @@ async function updateField(moduleKey, fieldKey, input) {
   return getModuleConfig(moduleKey);
 }
 
+async function renameDetailTable(moduleKey, oldTableName, input) {
+  const newTableName = String(input.detailTableName || '').trim();
+  assertDetailTableName(oldTableName);
+  assertDetailTableName(newTableName);
+  if (oldTableName === newTableName) return getModuleConfig(moduleKey);
+
+  const fields = await repository.listFields(moduleKey);
+  const tableFields = fields.filter((field) => field.tableType === 'detail' && field.detailTableName === oldTableName);
+  if (!tableFields.length) throw new AppError('Detail table not found', 404);
+
+  const nameUsedByAnotherTable = fields.some((field) => (
+    field.tableType === 'detail'
+    && field.detailTableName === newTableName
+    && field.detailTableName !== oldTableName
+  ));
+  if (nameUsedByAnotherTable) {
+    throw new AppError('Detail table name already exists', 409);
+  }
+
+  await repository.renameDetailTable(moduleKey, oldTableName, newTableName);
+  return getModuleConfig(moduleKey);
+}
+
+async function saveFormLayout(moduleKey, state, formType, input) {
+  if (!layoutStates.includes(state)) throw new AppError('Unsupported layout state', 422);
+  if (!formTypes.includes(formType)) throw new AppError('Unsupported form type', 422);
+
+  const module = await repository.findModuleByKey(moduleKey);
+  if (!module) throw new AppError('Module not found', 404);
+
+  const fields = await repository.listFields(moduleKey);
+  const fallback = defaultFormLayout(fields);
+  const layout = normalizeLayout(input, fallback);
+  const knownFieldKeys = new Set(fields.map((field) => field.fieldKey));
+  layout.order = layout.order.filter((fieldKey, index, list) => knownFieldKeys.has(fieldKey) && list.indexOf(fieldKey) === index);
+  layout.hidden = layout.hidden.filter((fieldKey, index, list) => knownFieldKeys.has(fieldKey) && list.indexOf(fieldKey) === index);
+
+  await repository.upsertFormLayout(moduleKey, state, formType, layout);
+  return getModuleConfig(moduleKey);
+}
+
+async function publishFormLayout(moduleKey, formType, input) {
+  await saveFormLayout(moduleKey, 'draft', formType, input);
+  return saveFormLayout(moduleKey, 'published', formType, input);
+}
+
 async function deleteField(moduleKey, fieldKey) {
   const field = await repository.findField(moduleKey, fieldKey);
   if (!field) throw new AppError('Field not found', 404);
   if (field.locked) throw new AppError('System fields cannot be deleted', 422);
+  const dataCount = await repository.fieldDataCount(moduleKey, field);
+  if (dataCount > 0) {
+    throw new AppError('Fields with data cannot be deleted', 422);
+  }
   await repository.deleteField(moduleKey, fieldKey);
   return getModuleConfig(moduleKey);
 }
@@ -261,5 +381,8 @@ module.exports = {
   listModules,
   createField,
   updateField,
+  renameDetailTable,
+  saveFormLayout,
+  publishFormLayout,
   deleteField
 };

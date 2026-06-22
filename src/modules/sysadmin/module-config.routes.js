@@ -49,6 +49,14 @@ const fieldSchema = z.object({
 });
 
 const updateFieldSchema = fieldSchema.partial();
+const detailTableSchema = z.object({
+  detailTableName: z.string().trim().min(1).max(80)
+});
+const formLayoutSchema = z.object({
+  order: z.array(z.string().trim().min(1).max(80)).optional(),
+  hidden: z.array(z.string().trim().min(1).max(80)).optional()
+});
+const formTypeSchema = z.enum(['add', 'edit', 'detail']);
 
 sysadminRoutes.use(requireAuth, requireRole('admin'));
 
@@ -68,6 +76,23 @@ sysadminRoutes.post('/modules/:moduleKey/fields', asyncHandler(async (req, res) 
 sysadminRoutes.patch('/modules/:moduleKey/fields/:fieldKey', asyncHandler(async (req, res) => {
   const input = validate(updateFieldSchema, req.body);
   res.json(await service.updateField(req.params.moduleKey, req.params.fieldKey, input));
+}));
+
+sysadminRoutes.patch('/modules/:moduleKey/detail-tables/:tableName', asyncHandler(async (req, res) => {
+  const input = validate(detailTableSchema, req.body);
+  res.json(await service.renameDetailTable(req.params.moduleKey, req.params.tableName, input));
+}));
+
+sysadminRoutes.put('/modules/:moduleKey/form-layouts/draft/:formType', asyncHandler(async (req, res) => {
+  const formType = validate(formTypeSchema, req.params.formType);
+  const input = validate(formLayoutSchema, req.body);
+  res.json(await service.saveFormLayout(req.params.moduleKey, 'draft', formType, input));
+}));
+
+sysadminRoutes.post('/modules/:moduleKey/form-layouts/publish/:formType', asyncHandler(async (req, res) => {
+  const formType = validate(formTypeSchema, req.params.formType);
+  const input = validate(formLayoutSchema, req.body);
+  res.json(await service.publishFormLayout(req.params.moduleKey, formType, input));
 }));
 
 sysadminRoutes.delete('/modules/:moduleKey/fields/:fieldKey', asyncHandler(async (req, res) => {

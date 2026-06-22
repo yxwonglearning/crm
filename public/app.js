@@ -6,6 +6,7 @@ const state = {
   customers: [],
   customerFields: [],
   userFields: [],
+  formDesignLayouts: {},
   activeAdminSection: 'adminModulesSection',
   adminMenuCollapsed: false,
   activeConfigModule: 'customers',
@@ -15,7 +16,17 @@ const state = {
   batchDetailTables: [],
   batchEditRows: [],
   batchDraftRows: [],
+  batchSelectedRowIds: new Set(),
+  batchDeletedFieldKeys: new Set(),
   editingFormulaFieldKey: '',
+  activeFormDesignType: 'add',
+  selectedFormDesignFieldKey: '',
+  draggingFormDesignFieldKey: '',
+  dragOverFormDesignFieldKey: '',
+  draggingFormDesignDetailTable: '',
+  dragOverFormDesignDetailTable: '',
+  activeCustomerFormType: 'add',
+  activeUserFormType: 'add',
   selectedCustomerIds: new Set()
 };
 
@@ -65,6 +76,46 @@ function slugFieldKeyPreview(label) {
     .replace(/[^a-z0-9]+/g, ' ')
     .trim()
     .replace(/\s+([a-z0-9])/g, (_match, letter) => letter.toUpperCase());
+}
+
+function normalizeDetailTableNamePreview(value) {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_+/g, '_');
+  if (!normalized) return '';
+  return /^[a-z]/.test(normalized) ? normalized : `${activeModuleKeyBase()}_${normalized}`;
+}
+
+function tableKeySuffix(tableKey) {
+  if (!tableKey || tableKey === 'main') return '';
+  return titleCaseMessage(tableKey).replace(/[^A-Za-z0-9]/g, '');
+}
+
+function allDraftAndSavedFieldKeys(excludeRowId = '') {
+  return new Set([
+    ...activeConfigFields().map((field) => field.fieldKey),
+    ...state.batchDraftRows
+      .filter((row) => row.id !== excludeRowId)
+      .map((row) => row.fieldKey)
+      .filter(Boolean)
+  ]);
+}
+
+function uniqueFieldKeyForLabel(label, tableKey = 'main', excludeRowId = '') {
+  const baseKey = slugFieldKeyPreview(label);
+  if (!baseKey) return '';
+  const usedKeys = allDraftAndSavedFieldKeys(excludeRowId);
+  const tableKeyCandidate = `${baseKey}${tableKeySuffix(tableKey)}`;
+  let candidate = usedKeys.has(baseKey) && tableKeyCandidate !== baseKey ? tableKeyCandidate : baseKey;
+  let index = 2;
+  while (usedKeys.has(candidate)) {
+    candidate = `${tableKeyCandidate}${index}`;
+    index += 1;
+  }
+  return candidate;
 }
 
 function renderReadonlyCheckbox(checked) {
@@ -201,6 +252,10 @@ function renderFieldTypeOptions(selected = 'textbox', includeSelected = true) {
   )).join('');
 }
 
+function isDropdownOptionFieldType(type) {
+  return type === 'dropdownbox' || type === 'select';
+}
+
 function activeModuleKeyBase() {
   return state.activeConfigModule.replace(/s$/, '') || 'module';
 }
@@ -217,7 +272,7 @@ function syncFieldConfigTypeRows() {
   const type = form.elements.type.value;
   const tableType = form.elements.tableType.value;
 
-  $('#dropdownOptionsRow').hidden = type !== 'dropdownbox';
+  $('#dropdownOptionsRow').hidden = !isDropdownOptionFieldType(type);
   $('#browserButtonRow').hidden = type !== 'browser_button';
   $('#detailTableNameRow').hidden = tableType !== 'detail';
   form.elements.detailTableName.value = tableType === 'detail'
@@ -232,6 +287,658 @@ function tableLabel(tableKey) {
 
 function tableKeyForField(field) {
   return field.tableType === 'detail' ? field.detailTableName || generatedDetailTableName() : 'main';
+}
+
+const formDesignTypes = ['add', 'edit', 'detail'];
+
+function formDesignStorageKey(moduleKey = state.activeConfigModule) {
+  return `crm.formDesign.${moduleKey}`;
+}
+
+function moduleFields(moduleKey = state.activeConfigModule) {
+  return moduleKey === 'users' ? state.userFields : state.customerFields;
+}
+
+function defaultFormDesignOrder(moduleKey = state.activeConfigModule) {
+  return moduleFields(moduleKey).map((field) => field.fieldKey);
+}
+
+function defaultFormDesignHiddenFields(moduleKey = state.activeConfigModule) {
+  return moduleFields(moduleKey)
+    .filter((field) => !field.showInForm)
+    .map((field) => field.fieldKey);
+}
+
+function defaultFormDesignLayout(moduleKey = state.activeConfigModule) {
+  return {
+    order: defaultFormDesignOrder(moduleKey),
+    hidden: defaultFormDesignHiddenFields(moduleKey)
+  };
+}
+
+function defaultFormDesignLayouts(moduleKey = state.activeConfigModule) {
+  return {
+    draft: {
+      add: defaultFormDesignLayout(moduleKey),
+      edit: defaultFormDesignLayout(moduleKey),
+      detail: defaultFormDesignLayout(moduleKey)
+    },
+    published: {
+      add: defaultFormDesignLayout(moduleKey),
+      edit: defaultFormDesignLayout(moduleKey),
+      detail: defaultFormDesignLayout(moduleKey)
+    }
+  };
+}
+
+function normalizeFormDesignLayout(layout, fallback = defaultFormDesignLayout()) {
+  if (Array.isArray(layout)) {
+    return {
+      order: layout,
+      hidden: [...fallback.hidden]
+    };
+  }
+  return {
+    order: Array.isArray(layout?.order) ? layout.order : [...fallback.order],
+    hidden: Array.isArray(layout?.hidden) ? layout.hidden : [...fallback.hidden]
+  };
+}
+
+function readFormDesignLayouts(moduleKey = state.activeConfigModule) {
+  const defaults = defaultFormDesignLayouts(moduleKey);
+  const saved = state.formDesignLayouts[moduleKey] || JSON.parse(localStorage.getItem(formDesignStorageKey(moduleKey)) || 'null') || {};
+  formDesignTypes.forEach((type) => {
+    defaults.draft[type] = normalizeFormDesignLayout(saved.draft?.[type], defaults.draft[type]);
+    defaults.published[type] = normalizeFormDesignLayout(saved.published?.[type], defaults.published[type]);
+  });
+  return defaults;
+}
+
+function writeFormDesignLayouts(layouts, moduleKey = state.activeConfigModule) {
+  state.formDesignLayouts[moduleKey] = layouts;
+  localStorage.setItem(formDesignStorageKey(moduleKey), JSON.stringify(layouts));
+}
+
+function formDesignLayoutsEqual(left, right) {
+  return JSON.stringify(left || {}) === JSON.stringify(right || {});
+}
+
+function localFormDesignLayouts(moduleKey = state.activeConfigModule) {
+  return JSON.parse(localStorage.getItem(formDesignStorageKey(moduleKey)) || 'null') || null;
+}
+
+function rememberModuleConfig(moduleKey, config) {
+  if (config.formLayouts) {
+    const localLayouts = localFormDesignLayouts(moduleKey);
+    const defaultLayouts = defaultFormDesignLayouts(moduleKey);
+    const serverLooksDefault = formDesignLayoutsEqual(config.formLayouts, defaultLayouts);
+    writeFormDesignLayouts(localLayouts && serverLooksDefault ? localLayouts : config.formLayouts, moduleKey);
+  } else if (!state.formDesignLayouts[moduleKey]) {
+    writeFormDesignLayouts(readFormDesignLayouts(moduleKey), moduleKey);
+  }
+}
+
+function orderedFormDesignFields(type = state.activeFormDesignType) {
+  const layouts = readFormDesignLayouts();
+  const order = layouts.draft[type]?.order || [];
+  const fields = activeConfigFields();
+  const byKey = new Map(fields.map((field) => [field.fieldKey, field]));
+  return [
+    ...order.map((fieldKey) => byKey.get(fieldKey)).filter(Boolean),
+    ...fields.filter((field) => !order.includes(field.fieldKey))
+  ];
+}
+
+function updateFormDesignDraftOrder(type, fields) {
+  const layouts = readFormDesignLayouts();
+  layouts.draft[type].order = fields.map((field) => field.fieldKey);
+  writeFormDesignLayouts(layouts);
+}
+
+function formDesignHiddenFieldKeys(type = state.activeFormDesignType) {
+  const layouts = readFormDesignLayouts();
+  const hidden = new Set(layouts.draft[type]?.hidden || []);
+  activeConfigFields()
+    .filter((field) => !field.showInForm)
+    .forEach((field) => hidden.add(field.fieldKey));
+  return hidden;
+}
+
+function isFormDesignFieldVisible(field, type = state.activeFormDesignType) {
+  return Boolean(field.showInForm) && !formDesignHiddenFieldKeys(type).has(field.fieldKey);
+}
+
+function updateFormDesignFieldVisibility(fieldKeys, showInForm, type = state.activeFormDesignType) {
+  const layouts = readFormDesignLayouts();
+  const hidden = new Set(layouts.draft[type]?.hidden || []);
+  fieldKeys.forEach((fieldKey) => {
+    if (showInForm) {
+      hidden.delete(fieldKey);
+    } else {
+      hidden.add(fieldKey);
+    }
+  });
+  layouts.draft[type].hidden = Array.from(hidden);
+  writeFormDesignLayouts(layouts);
+}
+
+function syncFormDesignDisplayVisibility(visibilityByFieldKey, moduleKey = state.activeConfigModule) {
+  const layouts = readFormDesignLayouts(moduleKey);
+  ['draft', 'published'].forEach((stateKey) => {
+    formDesignTypes.forEach((type) => {
+      const hidden = new Set(layouts[stateKey]?.[type]?.hidden || []);
+      Object.entries(visibilityByFieldKey).forEach(([fieldKey, showInForm]) => {
+        if (showInForm) {
+          hidden.delete(fieldKey);
+        } else {
+          hidden.add(fieldKey);
+        }
+      });
+      layouts[stateKey][type].hidden = Array.from(hidden);
+    });
+  });
+  writeFormDesignLayouts(layouts, moduleKey);
+}
+
+function moveFormDesignField(fieldKey, direction) {
+  let fields = orderedFormDesignFields();
+  const index = fields.findIndex((field) => field.fieldKey === fieldKey);
+  const nextIndex = index + direction;
+  if (index < 0 || nextIndex < 0 || nextIndex >= fields.length) return;
+  const nextFields = [...fields];
+  [nextFields[index], nextFields[nextIndex]] = [nextFields[nextIndex], nextFields[index]];
+  updateFormDesignDraftOrder(state.activeFormDesignType, nextFields);
+  renderFormDesignDrawer();
+}
+
+function detailTableKeysFromFields(fields) {
+  return Array.from(new Set(fields
+    .filter((field) => field.tableType === 'detail' && field.detailTableName)
+    .map((field) => field.detailTableName)));
+}
+
+function applyDetailTableOrder(tableNames) {
+  const fields = orderedFormDesignFields();
+  const nonDetailFields = fields.filter((field) => field.tableType !== 'detail');
+  const detailFields = tableNames.flatMap((tableName) => fields.filter((field) => field.detailTableName === tableName));
+  updateFormDesignDraftOrder(state.activeFormDesignType, [...nonDetailFields, ...detailFields]);
+  renderFormDesignDrawer();
+}
+
+function moveFormDesignDetailTable(tableName, direction) {
+  const tableNames = detailTableKeysFromFields(orderedFormDesignFields().filter((field) => isFormDesignFieldVisible(field)));
+  const index = tableNames.indexOf(tableName);
+  const nextIndex = index + direction;
+  if (index < 0 || nextIndex < 0 || nextIndex >= tableNames.length) return;
+  [tableNames[index], tableNames[nextIndex]] = [tableNames[nextIndex], tableNames[index]];
+  applyDetailTableOrder(tableNames);
+}
+
+function reorderFormDesignDetailTable(draggedTableName, targetTableName) {
+  if (!draggedTableName || !targetTableName || draggedTableName === targetTableName) return;
+  const tableNames = detailTableKeysFromFields(orderedFormDesignFields().filter((field) => isFormDesignFieldVisible(field)));
+  const fromIndex = tableNames.indexOf(draggedTableName);
+  const toIndex = tableNames.indexOf(targetTableName);
+  if (fromIndex < 0 || toIndex < 0) return;
+  const [draggedTable] = tableNames.splice(fromIndex, 1);
+  tableNames.splice(toIndex, 0, draggedTable);
+  state.draggingFormDesignDetailTable = '';
+  state.dragOverFormDesignDetailTable = '';
+  applyDetailTableOrder(tableNames);
+}
+
+function moveFormDesignDetailField(fieldKey, direction) {
+  const fields = orderedFormDesignFields();
+  const field = fields.find((item) => item.fieldKey === fieldKey);
+  if (!field?.detailTableName) return;
+  const tableFields = fields.filter((item) => item.detailTableName === field.detailTableName);
+  const index = tableFields.findIndex((item) => item.fieldKey === fieldKey);
+  const nextIndex = index + direction;
+  if (index < 0 || nextIndex < 0 || nextIndex >= tableFields.length) return;
+  [tableFields[index], tableFields[nextIndex]] = [tableFields[nextIndex], tableFields[index]];
+  const nextFields = fields.map((item) => {
+    if (item.detailTableName !== field.detailTableName) return item;
+    return tableFields.shift();
+  });
+  state.selectedFormDesignFieldKey = fieldKey;
+  updateFormDesignDraftOrder(state.activeFormDesignType, nextFields);
+  renderFormDesignDrawer();
+}
+
+function reorderFormDesignField(draggedFieldKey, targetFieldKey) {
+  if (!draggedFieldKey || !targetFieldKey || draggedFieldKey === targetFieldKey) return;
+  const fields = orderedFormDesignFields();
+  const fromIndex = fields.findIndex((field) => field.fieldKey === draggedFieldKey);
+  const toIndex = fields.findIndex((field) => field.fieldKey === targetFieldKey);
+  if (fromIndex < 0 || toIndex < 0) return;
+  const nextFields = [...fields];
+  const [draggedField] = nextFields.splice(fromIndex, 1);
+  nextFields.splice(toIndex, 0, draggedField);
+  state.selectedFormDesignFieldKey = draggedFieldKey;
+  state.draggingFormDesignFieldKey = '';
+  state.dragOverFormDesignFieldKey = '';
+  updateFormDesignDraftOrder(state.activeFormDesignType, nextFields);
+  renderFormDesignDrawer();
+}
+
+function selectedFormDesignField() {
+  return findConfigField(state.selectedFormDesignFieldKey);
+}
+
+function formDesignAllowsFieldProperties() {
+  return state.activeFormDesignType !== 'detail';
+}
+
+function formDesignSelectedHelpText(selectedField) {
+  if (!formDesignAllowsFieldProperties()) {
+    return selectedField
+      ? 'Detail layout is display-only for field properties.'
+      : 'Click a field to arrange the detail layout.';
+  }
+  if (!selectedField) return 'Click a field to arrange or edit it.';
+  return 'Use the actions, double-click for formula, or right-click for field settings.';
+}
+
+function updateFormDesignSelectionUI() {
+  const selectedField = selectedFormDesignField();
+  $$('#formDesignCanvas [data-design-field]').forEach((card) => {
+    card.classList.toggle('is-selected', card.dataset.designField === state.selectedFormDesignFieldKey);
+  });
+  const label = $('#formDesignSelectedLabel');
+  const help = $('#formDesignSelectedHelp');
+  if (label) label.textContent = selectedField ? selectedField.label : 'Select a field';
+  if (help) {
+    help.textContent = formDesignSelectedHelpText(selectedField);
+  }
+  $$('[data-design-action="edit-field"], [data-design-action="formula"]').forEach((button) => {
+    button.disabled = !selectedField;
+  });
+}
+
+function selectFormDesignField(fieldKey) {
+  state.selectedFormDesignFieldKey = fieldKey;
+  updateFormDesignSelectionUI();
+}
+
+function requiredFieldMarker(field) {
+  return field.required ? ' <span class="required-text">*</span>' : '';
+}
+
+function labelTextWithRequired(field) {
+  return `${escapeHtml(field.label)}${requiredFieldMarker(field)}`;
+}
+
+function formLabelText(field) {
+  return `<span class="field-label-text">${labelTextWithRequired(field)}</span>`;
+}
+
+function formDesignFieldCard(field) {
+  return `
+    <article class="form-design-field form-design-preview-field ${field.fieldKey === state.selectedFormDesignFieldKey ? 'is-selected' : ''} ${field.fieldKey === state.draggingFormDesignFieldKey ? 'is-dragging' : ''} ${field.fieldKey === state.dragOverFormDesignFieldKey ? 'is-drag-over' : ''}" data-design-field="${escapeHtml(field.fieldKey)}" draggable="true" title="Drag to reorder. Double-click to configure formula.">
+      ${renderFormDesignMainField(field)}
+      <div class="form-design-field-meta">
+        ${field.formulaEnabled ? '<span class="formula-badge">fx</span>' : ''}
+      </div>
+    </article>
+  `;
+}
+
+function formDesignPaletteField(field) {
+  return `
+    <article class="form-design-field is-hidden ${field.fieldKey === state.draggingFormDesignFieldKey ? 'is-dragging' : ''}" data-design-field="${escapeHtml(field.fieldKey)}" data-design-palette-field="true" draggable="true" title="Drag onto the form to show this field.">
+      <div>
+        <strong>${escapeHtml(field.label)}</strong>
+        <span>${escapeHtml(fieldTypeLabel(field.type))}</span>
+      </div>
+      <div class="form-design-field-meta">
+        <span class="status-pill muted-pill">Hidden</span>
+        ${field.required ? '<span class="status-pill required-pill">Required</span>' : ''}
+        ${field.formulaEnabled ? '<span class="formula-badge">fx</span>' : ''}
+      </div>
+    </article>
+  `;
+}
+
+function hiddenDetailTableGroups(fields) {
+  return groupedHiddenDesignFields(fields).filter((group) => group.key.startsWith('detail:'));
+}
+
+function groupedHiddenDesignFields(fields) {
+  const groups = new Map();
+  const addFieldToGroup = (key, label, field) => {
+    if (!groups.has(key)) {
+      groups.set(key, { key, label, fields: [] });
+    }
+    groups.get(key).fields.push(field);
+  };
+
+  fields.forEach((field) => {
+    if (field.tableType === 'detail') {
+      const tableName = field.detailTableName || generatedDetailTableName();
+      addFieldToGroup(`detail:${tableName}`, tableLabel(tableName), field);
+      return;
+    }
+    addFieldToGroup('main', 'Main Table', field);
+  });
+
+  return Array.from(groups.values());
+}
+
+function renderHiddenFormDesignGroups(fields) {
+  if (!fields.length) {
+    return '<p class="muted">Every field is on this form.</p>';
+  }
+
+  return groupedHiddenDesignFields(fields).map((group) => `
+    <section class="form-design-palette-group">
+      <div class="form-design-palette-group-heading">
+        <strong>${escapeHtml(group.label)}</strong>
+        <span>${group.fields.length} fields</span>
+      </div>
+      <div class="form-design-palette-list">
+        ${group.fields.map(formDesignPaletteField).join('')}
+      </div>
+    </section>
+  `).join('');
+}
+
+function renderHiddenDetailTableInsertions(fields) {
+  const groups = hiddenDetailTableGroups(fields);
+  if (!groups.length) return '';
+  return `
+    <div class="form-design-detail-insertions">
+      ${groups.map((group) => {
+        const tableName = group.key.replace(/^detail:/, '');
+        return `
+          <button type="button" class="secondary small-button" data-show-detail-table="${escapeHtml(tableName)}">
+            Insert ${escapeHtml(group.label)}
+          </button>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function renderFormDesignPreviewControl(field) {
+  const formulaReadonly = field.formulaEnabled && field.formulaExpression
+    ? 'readonly data-formula-field="true"'
+    : '';
+  const placeholder = escapeHtml(field.label);
+  if (field.type === 'textarea') {
+    return `<textarea rows="4" placeholder="${placeholder}" ${formulaReadonly} disabled></textarea>`;
+  }
+
+  if (field.type === 'select' || field.type === 'dropdownbox') {
+    const options = (field.options?.length ? field.options : ['Select']).map((option, index) => (
+      `<option value="${escapeHtml(option)}" ${index === 0 ? 'selected' : ''}>${escapeHtml(titleCaseMessage(option))}</option>`
+    )).join('');
+    return `<select disabled>${options}</select>`;
+  }
+
+  if (field.type === 'country') {
+    const malaysia = malaysiaCountry();
+    const countries = state.countries.length ? state.countries : [{ id: '', name: 'Malaysia' }];
+    const options = countries.map((country) => (
+      `<option value="${country.id}" ${malaysia && Number(country.id) === Number(malaysia.id) ? 'selected' : ''}>${escapeHtml(country.name)}</option>`
+    )).join('');
+    return `<select disabled>${options}</select>`;
+  }
+
+  if (field.type === 'owner') {
+    const users = state.users.filter((user) => user.status === 'active');
+    const options = '<option value="">Unassigned</option>' + users
+      .map((user) => `<option value="${user.id}">${escapeHtml(user.name)}</option>`)
+      .join('');
+    return `<select disabled>${options}</select>`;
+  }
+
+  if (field.type === 'checkbox') {
+    return `<input type="checkbox" disabled>`;
+  }
+  if (field.type === 'browser_button') {
+    return `<button type="button" class="secondary browser-field-button" disabled>Browse</button>`;
+  }
+  if (field.type === 'attach_document') {
+    return `<input type="file" disabled>`;
+  }
+  if (field.type === 'image') {
+    return `<input type="file" accept="image/*" disabled>`;
+  }
+  const inputType = {
+    phone: 'tel',
+    textbox: 'text',
+    int: 'number',
+    decimals: 'number'
+  }[field.type] || field.type;
+  const step = field.type === 'int' ? 'step="1"' : field.type === 'decimals' ? 'step="any"' : '';
+  return `<input type="${escapeHtml(inputType)}" placeholder="${placeholder}" ${step} ${formulaReadonly} disabled>`;
+}
+
+function renderFormDesignMainField(field) {
+  const control = renderFormDesignPreviewControl(field);
+  if (field.type === 'country') {
+    return `
+      <div class="grid-two">
+        <label>
+          <span>${labelTextWithRequired(field)}</span>
+          ${control}
+        </label>
+        <label>
+          <span>Code</span>
+          <input value="+60" readonly disabled>
+        </label>
+      </div>
+    `;
+  }
+  return `
+    <label>
+      <span>${labelTextWithRequired(field)}</span>
+      ${control}
+    </label>
+  `;
+}
+
+function renderFormDesignDetailTable(group) {
+  const visibleTableNames = detailTableKeysFromFields(orderedFormDesignFields().filter((field) => isFormDesignFieldVisible(field)));
+  const tableIndex = visibleTableNames.indexOf(group.tableName);
+  return `
+    <section class="form-design-detail-table ${group.tableName === state.draggingFormDesignDetailTable ? 'is-dragging' : ''} ${group.tableName === state.dragOverFormDesignDetailTable ? 'is-drag-over' : ''}" data-design-detail-table="${escapeHtml(group.tableName)}">
+      <div class="form-design-detail-header">
+        <div class="form-design-detail-title">
+          <button type="button" class="detail-table-drag-handle" draggable="true" data-design-detail-table-handle="${escapeHtml(group.tableName)}" aria-label="Drag ${escapeHtml(group.tableName)} detail table">::</button>
+          <label>
+            <span>Detail Table Name</span>
+            <input value="${escapeHtml(group.tableName)}" data-detail-table-name-input="${escapeHtml(group.tableName)}" aria-label="Detail table name">
+          </label>
+        </div>
+        <div class="form-design-detail-actions">
+          <span>${group.fields.length} fields</span>
+          <button type="button" class="secondary small-button" data-move-detail-table="${escapeHtml(group.tableName)}" data-direction="-1" ${tableIndex <= 0 ? 'disabled' : ''}>Up</button>
+          <button type="button" class="secondary small-button" data-move-detail-table="${escapeHtml(group.tableName)}" data-direction="1" ${tableIndex === visibleTableNames.length - 1 ? 'disabled' : ''}>Down</button>
+          <button type="button" class="secondary small-button" data-hide-detail-table="${escapeHtml(group.tableName)}">Hide</button>
+        </div>
+      </div>
+      <div class="table-wrap form-design-detail-preview">
+        <table>
+          <thead>
+            <tr>
+              <th class="select-cell"><input type="checkbox" disabled></th>
+              <th>No.</th>
+              ${group.fields.map((field, index) => `
+                <th>
+                  <div class="form-design-detail-column-head">
+                    <span>${labelTextWithRequired(field)}</span>
+                    <span class="form-design-column-actions">
+                      <button type="button" class="secondary small-button" data-move-detail-field="${escapeHtml(field.fieldKey)}" data-direction="-1" ${index <= 0 ? 'disabled' : ''}>Left</button>
+                      <button type="button" class="secondary small-button" data-move-detail-field="${escapeHtml(field.fieldKey)}" data-direction="1" ${index === group.fields.length - 1 ? 'disabled' : ''}>Right</button>
+                    </span>
+                  </div>
+                </th>
+              `).join('')}
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="select-cell"><input type="checkbox" disabled></td>
+              <td>1</td>
+              ${group.fields.map((field) => `
+                <td>
+                  <div class="form-design-detail-cell ${field.fieldKey === state.selectedFormDesignFieldKey ? 'is-selected' : ''} ${field.fieldKey === state.draggingFormDesignFieldKey ? 'is-dragging' : ''} ${field.fieldKey === state.dragOverFormDesignFieldKey ? 'is-drag-over' : ''}" data-design-field="${escapeHtml(field.fieldKey)}" draggable="true" title="Drag to reorder. Double-click to configure formula.">
+                    ${renderFormDesignPreviewControl(field)}
+                  </div>
+                </td>
+              `).join('')}
+              <td><button type="button" class="secondary small-button" disabled>Remove</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function groupedDetailDesignFields(fields) {
+  const groups = new Map();
+  fields
+    .filter((field) => field.tableType === 'detail')
+    .forEach((field) => {
+      const tableName = field.detailTableName || generatedDetailTableName();
+      if (!groups.has(tableName)) {
+        groups.set(tableName, []);
+      }
+      groups.get(tableName).push(field);
+    });
+  return Array.from(groups.entries()).map(([tableName, groupFields]) => ({ tableName, fields: groupFields }));
+}
+
+function copyFormDesignLayout(sourceType) {
+  if (!formDesignTypes.includes(sourceType) || sourceType === state.activeFormDesignType) return;
+  const layouts = readFormDesignLayouts();
+  layouts.draft[state.activeFormDesignType] = {
+    order: [...(layouts.draft[sourceType]?.order || defaultFormDesignOrder())],
+    hidden: [...(layouts.draft[sourceType]?.hidden || [])]
+  };
+  writeFormDesignLayouts(layouts);
+  renderFormDesignDrawer();
+  toast(`Copied ${titleCaseMessage(sourceType)} layout.`);
+}
+
+function activeFormDesignLayout() {
+  const layouts = readFormDesignLayouts();
+  return layouts.draft[state.activeFormDesignType] || defaultFormDesignLayout();
+}
+
+async function saveFormDesignDraft() {
+  const fields = orderedFormDesignFields();
+  updateFormDesignDraftOrder(state.activeFormDesignType, fields);
+  const formName = titleCaseMessage(state.activeFormDesignType);
+  try {
+    const config = await api(`/api/sysadmin/modules/${state.activeConfigModule}/form-layouts/draft/${state.activeFormDesignType}`, {
+      method: 'PUT',
+      body: JSON.stringify(activeFormDesignLayout())
+    });
+    setModuleConfig(state.activeConfigModule, config.fields, config.formLayouts);
+    showSuccessPrompt('Draft Saved', `${formName} form draft saved successfully.`);
+    toast(`${formName} Form Draft Saved Successfully.`);
+  } catch (error) {
+    toast(titleCaseMessage(error.message), 'error');
+  }
+}
+
+async function publishFormDesign() {
+  const layouts = readFormDesignLayouts();
+  layouts.published[state.activeFormDesignType] = {
+    order: [...(layouts.draft[state.activeFormDesignType]?.order || defaultFormDesignOrder())],
+    hidden: [...(layouts.draft[state.activeFormDesignType]?.hidden || [])]
+  };
+  writeFormDesignLayouts(layouts);
+  const formName = titleCaseMessage(state.activeFormDesignType);
+  try {
+    const config = await api(`/api/sysadmin/modules/${state.activeConfigModule}/form-layouts/publish/${state.activeFormDesignType}`, {
+      method: 'POST',
+      body: JSON.stringify(layouts.draft[state.activeFormDesignType])
+    });
+    setModuleConfig(state.activeConfigModule, config.fields, config.formLayouts);
+    showSuccessPrompt('Form Published', `${formName} form published successfully.`);
+    toast(`${formName} Form Published Successfully.`);
+  } catch (error) {
+    toast(titleCaseMessage(error.message), 'error');
+  }
+}
+
+async function setFormDesignFieldVisibility(fieldKey, showInForm) {
+  const field = findConfigField(fieldKey);
+  if (!field) return;
+  updateFormDesignFieldVisibility([fieldKey], showInForm);
+  if (field.showInForm !== showInForm) {
+    try {
+      const config = await api(`/api/sysadmin/modules/${state.activeConfigModule}/fields/${fieldKey}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ showInForm })
+      });
+      syncFormDesignDisplayVisibility({ [fieldKey]: showInForm });
+      setModuleConfig(state.activeConfigModule, config.fields, config.formLayouts);
+    } catch (error) {
+      toast(titleCaseMessage(error.message), 'error');
+      renderFormDesignDrawer();
+      return;
+    }
+  }
+  state.selectedFormDesignFieldKey = fieldKey;
+  renderFormDesignDrawer();
+  toast(showInForm ? 'Field Added To This Form.' : 'Field Removed From This Form.');
+}
+
+async function setFormDesignDetailTableVisibility(tableName, showInForm) {
+  const fields = activeConfigFields()
+    .filter((field) => field.tableType === 'detail' && field.detailTableName === tableName && isFormDesignFieldVisible(field) !== showInForm);
+  if (!fields.length) return;
+  updateFormDesignFieldVisibility(fields.map((field) => field.fieldKey), showInForm);
+  try {
+    let latestConfig = null;
+    for (const field of fields) {
+      if (field.showInForm === showInForm) continue;
+      latestConfig = await api(`/api/sysadmin/modules/${state.activeConfigModule}/fields/${field.fieldKey}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ showInForm })
+      });
+    }
+    syncFormDesignDisplayVisibility(Object.fromEntries(fields.map((field) => [field.fieldKey, showInForm])));
+    if (latestConfig) {
+      setModuleConfig(state.activeConfigModule, latestConfig.fields, latestConfig.formLayouts);
+    }
+  } catch (error) {
+    toast(titleCaseMessage(error.message), 'error');
+    renderFormDesignDrawer();
+    return;
+  }
+  renderFormDesignDrawer();
+  toast(showInForm ? 'Detail Table Added To This Form.' : 'Detail Table Hidden From This Form.');
+}
+
+async function renameFormDesignDetailTable(oldTableName, newTableName) {
+  const nextTableName = normalizeDetailTableNamePreview(newTableName);
+  if (!nextTableName) {
+    toast('Detail Table Name is required.', 'error');
+    renderFormDesignDrawer();
+    return;
+  }
+  if (nextTableName === oldTableName) {
+    renderFormDesignDrawer();
+    return;
+  }
+  try {
+    const config = await api(`/api/sysadmin/modules/${state.activeConfigModule}/detail-tables/${encodeURIComponent(oldTableName)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ detailTableName: nextTableName })
+    });
+    setModuleConfig(state.activeConfigModule, config.fields, config.formLayouts);
+    toast('Detail Table Renamed.');
+  } catch (error) {
+    toast(titleCaseMessage(error.message), 'error');
+    renderFormDesignDrawer();
+  }
 }
 
 function batchExistingTables() {
@@ -267,6 +974,7 @@ function batchRowFromField(field) {
     id: `existing-${field.fieldKey}`,
     existing: true,
     locked: Boolean(field.locked),
+    dataCount: Number(field.dataCount || 0),
     tableKey: tableKeyForField(field),
     fieldKey: field.fieldKey,
     databaseFieldName: field.dataKey || field.fieldKey,
@@ -283,6 +991,12 @@ function batchRowFromField(field) {
 function findBatchRow(rowId) {
   return state.batchEditRows.find((row) => row.id === rowId)
     || state.batchDraftRows.find((row) => row.id === rowId);
+}
+
+function canDeleteBatchRow(row) {
+  if (!row) return false;
+  if (!row.existing) return true;
+  return !row.locked && Number(row.dataCount || 0) === 0;
 }
 
 function createBatchDraftRow(tableKey = state.batchActiveTable) {
@@ -324,22 +1038,39 @@ function renderBatchRows() {
   const body = $('#batchFieldRows');
   if (!body) return;
   const rows = batchRowsForActiveTable();
+  const selectableRows = rows.filter((item) => canDeleteBatchRow(item.row));
+  const selectedSelectableRows = selectableRows.filter((item) => state.batchSelectedRowIds.has(item.row.id));
+  const selectAll = $('#selectAllBatchFields');
+  if (selectAll) {
+    selectAll.disabled = selectableRows.length === 0;
+    selectAll.checked = selectableRows.length > 0 && selectedSelectableRows.length === selectableRows.length;
+    selectAll.indeterminate = selectedSelectableRows.length > 0 && selectedSelectableRows.length < selectableRows.length;
+  }
+  const deleteButton = $('#deleteSelectedBatchFields');
+  if (deleteButton) {
+    deleteButton.disabled = selectedSelectableRows.length === 0;
+  }
   body.innerHTML = rows.map((item) => {
     const row = item.row;
     const isExisting = item.existing;
-    const status = isExisting ? '<span class="muted">Saved</span>' : `<button type="button" class="link-button" data-remove-batch-row="${escapeHtml(row.id)}">Remove</button>`;
+    const canDelete = canDeleteBatchRow(row);
+    const deleteTitle = row.locked
+      ? 'System field cannot be deleted'
+      : (Number(row.dataCount || 0) > 0 ? 'Field has data and cannot be deleted' : 'Select field for delete');
     return `
       <tr class="${isExisting ? 'is-existing' : ''}" data-batch-row="${escapeHtml(row.id)}" ${isExisting ? 'data-existing-batch-row="true"' : ''}>
+        <td class="batch-select-column">
+          <input name="deleteRow" type="checkbox" aria-label="Select ${escapeHtml(row.label || row.fieldKey || 'field')} for delete" title="${escapeHtml(deleteTitle)}" ${state.batchSelectedRowIds.has(row.id) ? 'checked' : ''} ${canDelete ? '' : 'disabled'}>
+        </td>
         <td><input name="label" value="${escapeHtml(row.label)}" placeholder="Field name"></td>
-        <td><input name="fieldKey" value="${escapeHtml(row.fieldKey)}" placeholder="Auto" readonly></td>
+        <td><input name="fieldKey" value="${escapeHtml(row.fieldKey)}" placeholder="Auto" ${isExisting ? 'readonly' : ''}></td>
         <td><input name="databaseFieldName" value="${escapeHtml(row.databaseFieldName || row.fieldKey)}" placeholder="Auto" readonly></td>
         <td><select name="type" ${row.locked ? 'disabled' : ''}>${renderFieldTypeOptions(row.type, isExisting)}</select></td>
-        <td><input name="options" value="${escapeHtml(row.options)}" placeholder="Option A, Option B" ${row.type === 'dropdownbox' ? '' : 'hidden'}></td>
+        <td><input name="options" value="${escapeHtml(row.options)}" placeholder="Option A, Option B" ${isDropdownOptionFieldType(row.type) ? '' : 'hidden'}></td>
         <td>${batchEditableCheckbox('showInTable', row.showInTable)}</td>
         <td>${batchEditableCheckbox('showInForm', row.showInForm)}</td>
         <td>${batchEditableCheckbox('showInImport', row.showInImport)}</td>
         <td>${batchEditableCheckbox('required', row.required)}</td>
-        <td>${status}</td>
       </tr>
     `;
   }).join('') || '<tr><td colspan="10">No fields in this table yet.</td></tr>';
@@ -362,6 +1093,8 @@ function openBatchFieldModal() {
     .filter((value, index, list) => list.indexOf(value) === index);
   state.batchEditRows = activeConfigFields().map(batchRowFromField);
   state.batchDraftRows = [];
+  state.batchSelectedRowIds = new Set();
+  state.batchDeletedFieldKeys = new Set();
   renderBatchFieldModal();
   $('#batchFieldModal').hidden = false;
   document.body.classList.add('modal-open');
@@ -375,10 +1108,14 @@ function closeBatchFieldModal() {
   document.body.classList.remove('modal-open');
 }
 
-function renderFieldProperties() {
+function renderFieldProperties(fieldKey = '') {
   const body = $('#fieldPropertiesRows');
   if (!body) return;
-  body.innerHTML = activeConfigFields().map((field) => {
+  const selectedFieldKey = typeof fieldKey === 'string' ? fieldKey : '';
+  const fields = selectedFieldKey
+    ? activeConfigFields().filter((field) => field.fieldKey === selectedFieldKey)
+    : activeConfigFields();
+  body.innerHTML = fields.map((field) => {
     return `
       <tr data-properties-field="${escapeHtml(field.fieldKey)}">
         <td>
@@ -399,8 +1136,8 @@ function propertyCheckbox(name, checked, disabled = false) {
   return `<input name="${escapeHtml(name)}" type="checkbox" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}>`;
 }
 
-function openFieldPropertiesModal() {
-  renderFieldProperties();
+function openFieldPropertiesModal(fieldKey = '') {
+  renderFieldProperties(typeof fieldKey === 'string' ? fieldKey : '');
   $('#fieldPropertiesModal').hidden = false;
   document.body.classList.add('modal-open');
 }
@@ -409,8 +1146,11 @@ function closeFieldPropertiesModal() {
   const modal = $('#fieldPropertiesModal');
   if (!modal) return;
   resetModalFullscreen(modal);
+  modal.classList.remove('is-over-drawer');
   modal.hidden = true;
-  document.body.classList.remove('modal-open');
+  if ($('#formDesignDrawer')?.hidden !== false) {
+    document.body.classList.remove('modal-open');
+  }
 }
 
 function renderFormulaTargets(selectedFieldKey = '') {
@@ -573,7 +1313,7 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
 function setModalFullscreen(modal, enabled) {
-  const card = modal?.querySelector('.modal-card');
+  const card = modal?.querySelector('.modal-card, .form-design-drawer');
   const button = card?.querySelector('[data-modal-fullscreen]');
   if (!card || !button) return;
   modal.classList.toggle('is-fullscreen', enabled);
@@ -589,7 +1329,7 @@ function resetModalFullscreen(modal) {
 
 function toggleModalFullscreen(button) {
   const modal = button.closest('.modal-backdrop');
-  const card = button.closest('.modal-card');
+  const card = button.closest('.modal-card, .form-design-drawer');
   if (!modal || !card) return;
   setModalFullscreen(modal, !card.classList.contains('is-fullscreen'));
 }
@@ -602,6 +1342,20 @@ function toast(message, type = 'ok') {
   setTimeout(() => {
     element.hidden = true;
   }, 4200);
+}
+
+function showSuccessPrompt(title, message) {
+  $('#successPromptTitle').textContent = title;
+  $('#successPromptMessage').textContent = message;
+  $('#successPrompt').hidden = false;
+  document.body.classList.add('modal-open');
+}
+
+function closeSuccessPrompt() {
+  $('#successPrompt').hidden = true;
+  if ($$('.modal-backdrop').every((modal) => modal.id === 'successPrompt' || modal.hidden)) {
+    document.body.classList.remove('modal-open');
+  }
 }
 
 async function api(path, options = {}) {
@@ -635,6 +1389,7 @@ function showView(id) {
   closeDeleteCustomerModal();
   closeUserModal();
   closeFieldConfigModal();
+  closeFormDesignDrawer();
   closeFormulaBuilderModal();
   $('#loginView').hidden = id !== 'loginView';
   $$('.view').forEach((view) => {
@@ -732,7 +1487,7 @@ function tableFields() {
 }
 
 function formFields() {
-  return state.customerFields.filter((field) => field.showInForm);
+  return customerPublishedFormFields(state.activeCustomerFormType);
 }
 
 function mainFormFields() {
@@ -752,12 +1507,47 @@ function detailFormGroups() {
   return Array.from(groups.entries()).map(([tableName, fields]) => ({ tableName, fields }));
 }
 
+function customerPublishedFormFields(type = 'add') {
+  const fields = state.customerFields;
+  const defaults = {
+    order: fields.map((field) => field.fieldKey),
+    hidden: fields.filter((field) => !field.showInForm).map((field) => field.fieldKey)
+  };
+  const saved = readFormDesignLayouts('customers');
+  const rawLayout = saved.published?.[type];
+  const layout = Array.isArray(rawLayout)
+    ? { order: rawLayout, hidden: defaults.hidden }
+    : {
+      order: Array.isArray(rawLayout?.order) ? rawLayout.order : defaults.order,
+      hidden: Array.isArray(rawLayout?.hidden) ? rawLayout.hidden : defaults.hidden
+    };
+  const hidden = new Set(layout.hidden);
+  fields
+    .filter((field) => !field.showInForm)
+    .forEach((field) => hidden.add(field.fieldKey));
+  const byKey = new Map(fields.map((field) => [field.fieldKey, field]));
+  return [
+    ...layout.order.map((fieldKey) => byKey.get(fieldKey)).filter(Boolean),
+    ...fields.filter((field) => !layout.order.includes(field.fieldKey))
+  ].filter((field) => !hidden.has(field.fieldKey));
+}
+
 function userTableFields() {
   return state.userFields.filter((field) => field.showInTable);
 }
 
 function userFormFields() {
-  return state.userFields.filter((field) => field.showInForm);
+  const fields = state.userFields;
+  const layout = readFormDesignLayouts('users').published?.[state.activeUserFormType] || defaultFormDesignLayout('users');
+  const hidden = new Set(layout.hidden || []);
+  fields
+    .filter((field) => !field.showInForm)
+    .forEach((field) => hidden.add(field.fieldKey));
+  const byKey = new Map(fields.map((field) => [field.fieldKey, field]));
+  return [
+    ...(layout.order || []).map((fieldKey) => byKey.get(fieldKey)).filter(Boolean),
+    ...fields.filter((field) => !(layout.order || []).includes(field.fieldKey))
+  ].filter((field) => !hidden.has(field.fieldKey));
 }
 
 function renderCustomerTableHead() {
@@ -856,11 +1646,11 @@ function renderMainCustomerField(field, customer = null) {
     return `
       <div class="grid-two">
         <label>
-          ${escapeHtml(field.label)}
+          ${formLabelText(field)}
           ${control}
         </label>
         <label>
-          Code
+          <span class="field-label-text">Code</span>
           <input id="dialCode" readonly>
         </label>
       </div>
@@ -868,7 +1658,7 @@ function renderMainCustomerField(field, customer = null) {
   }
   return `
     <label>
-      ${escapeHtml(field.label)}
+      ${formLabelText(field)}
       ${control}
     </label>
   `;
@@ -1146,9 +1936,10 @@ function renderGenericFieldInput(field, value = '', editing = false) {
   const required = field.required && !(field.fieldKey === 'password' && editing) ? 'required' : '';
   const name = `name="${escapeHtml(field.fieldKey)}"`;
   const autocomplete = field.fieldKey === 'password' ? 'autocomplete="new-password"' : '';
+  const formulaReadonly = field.formulaEnabled && field.formulaExpression ? 'readonly data-formula-field="true"' : '';
 
   if (field.type === 'textarea') {
-    return `<textarea ${name} rows="4" ${required}>${escapeHtml(value)}</textarea>`;
+    return `<textarea ${name} rows="4" ${required} ${formulaReadonly}>${escapeHtml(value)}</textarea>`;
   }
   if (field.type === 'select' || field.type === 'dropdownbox') {
     const options = (field.options || []).map((option) => (
@@ -1180,7 +1971,7 @@ function renderGenericFieldInput(field, value = '', editing = false) {
   }[field.type] || field.type;
   const minlength = field.fieldKey === 'password' ? 'minlength="8"' : '';
   const step = field.type === 'int' ? 'step="1"' : field.type === 'decimals' ? 'step="any"' : '';
-  return `<input ${name} type="${escapeHtml(inputType)}" value="${escapeHtml(value)}" ${step} ${minlength} ${required} ${autocomplete}>`;
+  return `<input ${name} type="${escapeHtml(inputType)}" value="${escapeHtml(value)}" ${step} ${minlength} ${required} ${autocomplete} ${formulaReadonly}>`;
 }
 
 function renderUserFormFields(user = null) {
@@ -1188,7 +1979,7 @@ function renderUserFormFields(user = null) {
   $('#userFormFields').innerHTML = userFormFields().map((field) => {
     const input = `
       <label>
-        ${escapeHtml(field.label)}
+        ${labelTextWithRequired(field)}
         ${renderGenericFieldInput(field, valueForUserForm(user, field), editing)}
       </label>
     `;
@@ -1255,6 +2046,97 @@ function renderFormModuleList() {
   `).join('') || '<p class="muted module-list-empty">No forms found.</p>';
 }
 
+function renderFormDesignDrawer() {
+  const canvas = $('#formDesignCanvas');
+  if (!canvas) return;
+  const module = configModules.find((item) => item.key === state.activeConfigModule);
+  let fields = orderedFormDesignFields();
+  if (state.selectedFormDesignFieldKey && !fields.some((field) => field.fieldKey === state.selectedFormDesignFieldKey)) {
+    state.selectedFormDesignFieldKey = '';
+  }
+  const selectedField = selectedFormDesignField();
+  const selectedIndex = fields.findIndex((field) => field.fieldKey === state.selectedFormDesignFieldKey);
+  const hiddenFields = fields.filter((field) => !isFormDesignFieldVisible(field));
+  const visibleFields = fields.filter((field) => isFormDesignFieldVisible(field));
+  const mainFields = visibleFields.filter((field) => field.tableType !== 'detail');
+  const detailGroups = groupedDetailDesignFields(visibleFields);
+  const allFields = fields;
+  fields = mainFields;
+  $('#formDesignTitle').textContent = `Form Design - ${module?.name || titleCaseMessage(state.activeConfigModule)}`;
+  $$('[data-form-design-type]').forEach((button) => {
+    button.classList.toggle('is-active', button.dataset.formDesignType === state.activeFormDesignType);
+  });
+  const source = $('#copyFormDesignSource');
+  if (source) {
+    source.value = formDesignTypes.find((type) => type !== state.activeFormDesignType) || 'add';
+    Array.from(source.options).forEach((option) => {
+      option.disabled = option.value === state.activeFormDesignType;
+    });
+  }
+  canvas.innerHTML = `
+    <div class="form-design-actionbar">
+      <div>
+        <strong id="formDesignSelectedLabel">${selectedField ? escapeHtml(selectedField.label) : 'Select a field'}</strong>
+        <span id="formDesignSelectedHelp">${escapeHtml(formDesignSelectedHelpText(selectedField))}</span>
+      </div>
+      <div class="form-design-actions">
+        <button type="button" class="secondary small-button" data-design-action="add-field">Add Field</button>
+        <button type="button" class="secondary small-button" data-design-action="edit-field" ${selectedField ? '' : 'disabled'}>Edit Field</button>
+        <button type="button" class="secondary small-button" data-design-action="formula" ${selectedField ? '' : 'disabled'}>Formula</button>
+      </div>
+    </div>
+    <div class="form-design-workspace">
+      <div class="form-design-section form-design-dropzone" data-design-dropzone="form">
+        <div class="form-design-preview-card">
+          <div class="form-design-section-heading">
+            <strong>${escapeHtml(titleCaseMessage(state.activeFormDesignType))} Form</strong>
+            <span>${mainFields.length} main fields</span>
+          </div>
+          <div class="form-design-grid">
+            ${fields.map(formDesignFieldCard).join('') || '<p class="muted">No fields available for this form.</p>'}
+          </div>
+          <div class="form-design-detail-area form-design-dropzone" data-design-dropzone="form">
+            <div class="form-design-section-heading">
+              <strong>Detail Tables</strong>
+              <span>${detailGroups.length} tables</span>
+            </div>
+            ${renderHiddenDetailTableInsertions(hiddenFields)}
+            ${detailGroups.map(renderFormDesignDetailTable).join('') || '<p class="muted">No detail tables yet. Add a field and set Table Type to Detail Table.</p>'}
+          </div>
+        </div>
+      </div>
+      <aside class="form-design-palette" data-design-dropzone="palette">
+        <div class="form-design-section-heading">
+          <strong>Not On Form</strong>
+          <span>${hiddenFields.length} fields</span>
+        </div>
+        <div class="form-design-palette-groups">
+          ${renderHiddenFormDesignGroups(hiddenFields)}
+        </div>
+      </aside>
+    </div>
+  `;
+}
+
+function openFormDesignDrawer() {
+  state.activeFormDesignType = state.activeFormDesignType || 'add';
+  renderFormDesignDrawer();
+  $('#formDesignDrawer').hidden = false;
+  document.body.classList.add('modal-open');
+}
+
+function closeFormDesignDrawer() {
+  const drawer = $('#formDesignDrawer');
+  if (!drawer) return;
+  resetModalFullscreen(drawer);
+  state.draggingFormDesignFieldKey = '';
+  state.dragOverFormDesignFieldKey = '';
+  state.draggingFormDesignDetailTable = '';
+  state.dragOverFormDesignDetailTable = '';
+  drawer.hidden = true;
+  document.body.classList.remove('modal-open');
+}
+
 function activeConfigFields() {
   return state.activeConfigModule === 'users' ? state.userFields : state.customerFields;
 }
@@ -1270,6 +2152,7 @@ function clearFieldConfigForm() {
   form.elements.type.innerHTML = renderFieldTypeOptions('textbox', false);
   form.elements.dataKeyPreview.value = '';
   form.elements.databaseFieldName.value = '';
+  form.elements.dataKeyPreview.readOnly = false;
   form.elements.tableType.value = 'main';
   form.elements.detailTableName.value = '';
   form.elements.browserModulePreview.value = '';
@@ -1299,6 +2182,7 @@ function openFieldConfigModal(field = null) {
     form.elements.label.value = field.label;
     form.elements.dataKeyPreview.value = field.fieldKey;
     form.elements.databaseFieldName.value = field.dataKey || field.fieldKey;
+    form.elements.dataKeyPreview.readOnly = true;
     form.elements.tableType.value = field.tableType || 'main';
     form.elements.detailTableName.value = field.detailTableName || '';
     form.elements.type.innerHTML = renderFieldTypeOptions(field.type);
@@ -1327,11 +2211,17 @@ function closeFieldConfigModal() {
   const modal = $('#fieldConfigModal');
   if (!modal) return;
   resetModalFullscreen(modal);
+  modal.classList.remove('is-over-drawer');
   modal.hidden = true;
-  document.body.classList.remove('modal-open');
+  if ($('#formDesignDrawer')?.hidden !== false) {
+    document.body.classList.remove('modal-open');
+  }
 }
 
-function setModuleConfig(moduleKey, fields) {
+function setModuleConfig(moduleKey, fields, formLayouts = null) {
+  if (formLayouts) {
+    writeFormDesignLayouts(formLayouts, moduleKey);
+  }
   if (moduleKey === 'users') {
     state.userFields = fields;
     renderUserFormFields();
@@ -1342,6 +2232,9 @@ function setModuleConfig(moduleKey, fields) {
     renderCustomers();
   }
   renderFieldConfig();
+  if (!$('#formDesignDrawer')?.hidden) {
+    renderFormDesignDrawer();
+  }
 }
 
 function escapeHtml(value) {
@@ -1406,6 +2299,8 @@ async function loadBootstrap() {
   state.users = users.users;
   state.customerFields = customerConfig.fields;
   state.userFields = userConfig.fields;
+  rememberModuleConfig('customers', customerConfig);
+  rememberModuleConfig('users', userConfig);
   renderCountries();
   renderUsers();
   renderOwners();
@@ -1431,6 +2326,7 @@ async function loadCustomers() {
 }
 
 function clearCustomerForm() {
+  state.activeCustomerFormType = 'add';
   $('#customerForm').reset();
   $('#customerForm [name="id"]').value = '';
   $('#customerFormTitle').textContent = 'Add Customer';
@@ -1489,6 +2385,7 @@ function closeDeleteCustomerModal() {
 
 function clearUserForm() {
   const form = $('#userForm');
+  state.activeUserFormType = 'add';
   form.reset();
   form.elements.id.value = '';
   renderUserFormFields();
@@ -1515,6 +2412,7 @@ function editCustomer(id) {
   if (!customer) return;
 
   const form = $('#customerForm');
+  state.activeCustomerFormType = 'edit';
   form.elements.id.value = customer.id;
   renderCustomerFormFields(customer);
   $('#customerFormTitle').textContent = 'Edit Customer';
@@ -1526,6 +2424,7 @@ function editUser(id) {
   if (!user) return;
 
   const form = $('#userForm');
+  state.activeUserFormType = 'edit';
   form.elements.id.value = user.id;
   renderUserFormFields(user);
   $('#userFormTitle').textContent = 'Edit User';
@@ -1535,12 +2434,12 @@ function editUser(id) {
 
 async function refreshCustomerConfig() {
   const config = await api('/api/customers/config');
-  setModuleConfig('customers', config.fields);
+  setModuleConfig('customers', config.fields, config.formLayouts);
 }
 
 async function refreshModuleConfig(moduleKey) {
   const config = await api(`/api/${moduleKey}/config`);
-  setModuleConfig(moduleKey, config.fields);
+  setModuleConfig(moduleKey, config.fields, config.formLayouts);
 }
 
 function customerFormData(form) {
@@ -1771,6 +2670,9 @@ function bindEvents() {
     if (!$('#fieldPropertiesModal').hidden) {
       closeFieldPropertiesModal();
     }
+    if (!$('#formDesignDrawer').hidden) {
+      closeFormDesignDrawer();
+    }
     if (!$('#formulaBuilderModal').hidden) {
       closeFormulaBuilderModal();
     }
@@ -1804,9 +2706,16 @@ function bindEvents() {
   });
 
   $('#addFieldButton').addEventListener('click', () => openFieldConfigModal());
-  $('#formDesignButton').addEventListener('click', () => openFormulaBuilderModal());
+  $('#formulaButton').addEventListener('click', () => openFormulaBuilderModal());
+  $('#formDesignButton').addEventListener('click', openFormDesignDrawer);
   $('#batchAddFieldsButton').addEventListener('click', openBatchFieldModal);
   $('#fieldPropertiesButton').addEventListener('click', openFieldPropertiesModal);
+  $('#closeSuccessPrompt').addEventListener('click', closeSuccessPrompt);
+  $('#successPrompt').addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) {
+      closeSuccessPrompt();
+    }
+  });
   $('#closeFieldConfigModal').addEventListener('click', closeFieldConfigModal);
   $('#clearFieldConfigForm').addEventListener('click', clearFieldConfigForm);
   $('#deleteFieldConfigButton').addEventListener('click', async () => {
@@ -1817,7 +2726,7 @@ function bindEvents() {
       const config = await api(`/api/sysadmin/modules/${moduleKey}/fields/${fieldKey}`, {
         method: 'DELETE'
       });
-      setModuleConfig(moduleKey, config.fields);
+      setModuleConfig(moduleKey, config.fields, config.formLayouts);
       closeFieldConfigModal();
       toast('Field Deleted.');
     } catch (error) {
@@ -1865,6 +2774,34 @@ function bindEvents() {
     createBatchDraftRow();
     renderBatchRows();
   });
+  $('#selectAllBatchFields').addEventListener('change', (event) => {
+    const rows = batchRowsForActiveTable().map((item) => item.row).filter(canDeleteBatchRow);
+    rows.forEach((row) => {
+      if (event.target.checked) {
+        state.batchSelectedRowIds.add(row.id);
+      } else {
+        state.batchSelectedRowIds.delete(row.id);
+      }
+    });
+    renderBatchRows();
+  });
+  $('#deleteSelectedBatchFields').addEventListener('click', () => {
+    const selectedIds = new Set(state.batchSelectedRowIds);
+    if (!selectedIds.size) return;
+    const deletableSelectedRows = [
+      ...state.batchEditRows,
+      ...state.batchDraftRows
+    ].filter((row) => selectedIds.has(row.id) && canDeleteBatchRow(row));
+    deletableSelectedRows.forEach((row) => {
+      if (row.existing) {
+        state.batchDeletedFieldKeys.add(row.fieldKey);
+      }
+    });
+    state.batchEditRows = state.batchEditRows.filter((row) => !selectedIds.has(row.id) || !canDeleteBatchRow(row));
+    state.batchDraftRows = state.batchDraftRows.filter((row) => !selectedIds.has(row.id) || !canDeleteBatchRow(row));
+    state.batchSelectedRowIds = new Set();
+    renderBatchRows();
+  });
   $('#batchFieldRows').addEventListener('input', (event) => {
     const rowElement = event.target.closest('[data-batch-row]');
     if (!rowElement) return;
@@ -1873,11 +2810,16 @@ function bindEvents() {
     if (event.target.name === 'label') {
       row.label = event.target.value;
       if (!row.existing) {
-        row.fieldKey = slugFieldKeyPreview(row.label);
+        row.fieldKey = uniqueFieldKeyForLabel(row.label, row.tableKey, row.id);
         row.databaseFieldName = row.fieldKey;
         rowElement.querySelector('[name="fieldKey"]').value = row.fieldKey;
         rowElement.querySelector('[name="databaseFieldName"]').value = row.fieldKey;
       }
+    } else if (event.target.name === 'fieldKey' && !row.existing) {
+      row.fieldKey = slugFieldKeyPreview(event.target.value);
+      row.databaseFieldName = row.fieldKey;
+      event.target.value = row.fieldKey;
+      rowElement.querySelector('[name="databaseFieldName"]').value = row.fieldKey;
     } else if (event.target.name === 'options') {
       row.options = event.target.value;
     }
@@ -1887,6 +2829,15 @@ function bindEvents() {
     if (!rowElement) return;
     const row = findBatchRow(rowElement.dataset.batchRow);
     if (!row) return;
+    if (event.target.name === 'deleteRow') {
+      if (event.target.checked) {
+        state.batchSelectedRowIds.add(row.id);
+      } else {
+        state.batchSelectedRowIds.delete(row.id);
+      }
+      renderBatchRows();
+      return;
+    }
     if (event.target.name === 'type') {
       row.type = event.target.value;
       renderBatchRows();
@@ -1908,6 +2859,208 @@ function bindEvents() {
     if (event.target === event.currentTarget) {
       closeFieldPropertiesModal();
     }
+  });
+  $('#closeFormDesignDrawer').addEventListener('click', closeFormDesignDrawer);
+  $('#cancelFormDesignButton').addEventListener('click', closeFormDesignDrawer);
+  $('#saveFormDesignDraftButton').addEventListener('click', saveFormDesignDraft);
+  $('#publishFormDesignButton').addEventListener('click', publishFormDesign);
+  $('#copyFormDesignButton').addEventListener('click', () => {
+    copyFormDesignLayout($('#copyFormDesignSource').value);
+  });
+  $('#formDesignDrawer').addEventListener('click', async (event) => {
+    if (event.target === event.currentTarget) {
+      closeFormDesignDrawer();
+    }
+  });
+  $('#formDesignDrawer').addEventListener('click', async (event) => {
+    const typeButton = event.target.closest('[data-form-design-type]');
+    if (typeButton) {
+      state.activeFormDesignType = typeButton.dataset.formDesignType;
+      renderFormDesignDrawer();
+      return;
+    }
+    const showDetailButton = event.target.closest('[data-show-detail-table]');
+    if (showDetailButton) {
+      await setFormDesignDetailTableVisibility(showDetailButton.dataset.showDetailTable, true);
+      return;
+    }
+    const hideDetailButton = event.target.closest('[data-hide-detail-table]');
+    if (hideDetailButton) {
+      await setFormDesignDetailTableVisibility(hideDetailButton.dataset.hideDetailTable, false);
+      return;
+    }
+    const moveDetailTableButton = event.target.closest('[data-move-detail-table]');
+    if (moveDetailTableButton) {
+      moveFormDesignDetailTable(moveDetailTableButton.dataset.moveDetailTable, Number(moveDetailTableButton.dataset.direction || 0));
+      return;
+    }
+    const moveDetailFieldButton = event.target.closest('[data-move-detail-field]');
+    if (moveDetailFieldButton) {
+      moveFormDesignDetailField(moveDetailFieldButton.dataset.moveDetailField, Number(moveDetailFieldButton.dataset.direction || 0));
+      return;
+    }
+    const fieldCard = event.target.closest('[data-design-field]');
+    if (fieldCard) {
+      selectFormDesignField(fieldCard.dataset.designField);
+      return;
+    }
+    const actionButton = event.target.closest('[data-design-action]');
+    if (!actionButton) return;
+    const field = selectedFormDesignField();
+    if (actionButton.dataset.designAction === 'add-field') {
+      openFieldConfigModal();
+      $('#fieldConfigModal').classList.add('is-over-drawer');
+      return;
+    }
+    if (!field) return;
+    if (actionButton.dataset.designAction === 'edit-field') {
+      openFieldConfigModal(field);
+      $('#fieldConfigModal').classList.add('is-over-drawer');
+      return;
+    }
+    if (actionButton.dataset.designAction === 'formula') {
+      openFormulaBuilderModal(field.fieldKey);
+      return;
+    }
+  });
+  $('#formDesignCanvas').addEventListener('keydown', (event) => {
+    const input = event.target.closest('[data-detail-table-name-input]');
+    if (!input) return;
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      input.blur();
+    } else if (event.key === 'Escape') {
+      input.value = input.dataset.detailTableNameInput;
+      input.blur();
+    }
+  });
+  $('#formDesignCanvas').addEventListener('change', (event) => {
+    const input = event.target.closest('[data-detail-table-name-input]');
+    if (!input) return;
+    const oldTableName = input.dataset.detailTableNameInput;
+    const nextTableName = normalizeDetailTableNamePreview(input.value);
+    input.value = nextTableName || oldTableName;
+    renameFormDesignDetailTable(oldTableName, input.value);
+  });
+  $('#formDesignCanvas').addEventListener('contextmenu', (event) => {
+    const fieldCard = event.target.closest('[data-design-field]');
+    if (!fieldCard) return;
+    event.preventDefault();
+    if (!formDesignAllowsFieldProperties()) {
+      return;
+    }
+    const field = findConfigField(fieldCard.dataset.designField);
+    if (!field) return;
+    state.selectedFormDesignFieldKey = field.fieldKey;
+    renderFormDesignDrawer();
+    openFieldPropertiesModal(field.fieldKey);
+    $('#fieldPropertiesModal').classList.add('is-over-drawer');
+  });
+  $('#formDesignCanvas').addEventListener('dragstart', (event) => {
+    const detailTableHandle = event.target.closest('[data-design-detail-table-handle]');
+    if (detailTableHandle) {
+      state.draggingFormDesignDetailTable = detailTableHandle.dataset.designDetailTableHandle;
+      state.dragOverFormDesignDetailTable = '';
+      state.draggingFormDesignFieldKey = '';
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/x-detail-table', state.draggingFormDesignDetailTable);
+      detailTableHandle.closest('[data-design-detail-table]')?.classList.add('is-dragging');
+      return;
+    }
+    const fieldCard = event.target.closest('[data-design-field]');
+    if (!fieldCard) return;
+    state.draggingFormDesignFieldKey = fieldCard.dataset.designField;
+    state.selectedFormDesignFieldKey = fieldCard.dataset.designField;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', fieldCard.dataset.designField);
+    fieldCard.classList.add('is-dragging');
+  });
+  $('#formDesignCanvas').addEventListener('dragover', (event) => {
+    if (state.draggingFormDesignDetailTable) {
+      const detailTable = event.target.closest('[data-design-detail-table]');
+      if (!detailTable) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      const nextDragOver = detailTable.dataset.designDetailTable || '';
+      if (state.dragOverFormDesignDetailTable !== nextDragOver) {
+        state.dragOverFormDesignDetailTable = nextDragOver;
+        $$('#formDesignCanvas [data-design-detail-table]').forEach((table) => {
+          table.classList.toggle('is-drag-over', table.dataset.designDetailTable === state.dragOverFormDesignDetailTable);
+        });
+      }
+      return;
+    }
+    const fieldCard = event.target.closest('[data-design-field]');
+    const dropzone = event.target.closest('[data-design-dropzone]');
+    if ((!fieldCard && !dropzone) || !state.draggingFormDesignFieldKey) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    const nextDragOver = fieldCard?.dataset.designField || '';
+    if (state.dragOverFormDesignFieldKey !== nextDragOver) {
+      state.dragOverFormDesignFieldKey = nextDragOver;
+      $$('#formDesignCanvas [data-design-field]').forEach((card) => {
+        card.classList.toggle('is-drag-over', card.dataset.designField === state.dragOverFormDesignFieldKey);
+      });
+    }
+    $$('#formDesignCanvas [data-design-dropzone]').forEach((zone) => {
+      zone.classList.toggle('is-drop-active', zone === dropzone && !fieldCard);
+    });
+  });
+  $('#formDesignCanvas').addEventListener('dragleave', (event) => {
+    if (!event.relatedTarget || $('#formDesignCanvas').contains(event.relatedTarget)) return;
+    state.dragOverFormDesignFieldKey = '';
+    state.dragOverFormDesignDetailTable = '';
+    $$('#formDesignCanvas [data-design-field]').forEach((card) => card.classList.remove('is-drag-over'));
+    $$('#formDesignCanvas [data-design-detail-table]').forEach((table) => table.classList.remove('is-drag-over'));
+    $$('#formDesignCanvas [data-design-dropzone]').forEach((zone) => zone.classList.remove('is-drop-active'));
+  });
+  $('#formDesignCanvas').addEventListener('drop', async (event) => {
+    if (state.draggingFormDesignDetailTable) {
+      const detailTable = event.target.closest('[data-design-detail-table]');
+      if (!detailTable) return;
+      event.preventDefault();
+      const draggedTableName = event.dataTransfer.getData('text/x-detail-table') || state.draggingFormDesignDetailTable;
+      reorderFormDesignDetailTable(draggedTableName, detailTable.dataset.designDetailTable);
+      return;
+    }
+    const fieldCard = event.target.closest('[data-design-field]');
+    const dropzone = event.target.closest('[data-design-dropzone]');
+    if (!fieldCard && !dropzone) return;
+    event.preventDefault();
+    const draggedFieldKey = event.dataTransfer.getData('text/plain') || state.draggingFormDesignFieldKey;
+    const draggedField = findConfigField(draggedFieldKey);
+    if (!draggedField) return;
+    if (dropzone?.dataset.designDropzone === 'palette' || fieldCard?.dataset.designPaletteField) {
+      await setFormDesignFieldVisibility(draggedFieldKey, false);
+    } else if (fieldCard) {
+      if (!isFormDesignFieldVisible(draggedField)) {
+        await setFormDesignFieldVisibility(draggedFieldKey, true);
+      }
+      reorderFormDesignField(draggedFieldKey, fieldCard.dataset.designField);
+    } else if (dropzone?.dataset.designDropzone === 'form') {
+      await setFormDesignFieldVisibility(draggedFieldKey, true);
+    }
+  });
+  $('#formDesignCanvas').addEventListener('dragend', () => {
+    state.draggingFormDesignFieldKey = '';
+    state.dragOverFormDesignFieldKey = '';
+    state.draggingFormDesignDetailTable = '';
+    state.dragOverFormDesignDetailTable = '';
+    $$('#formDesignCanvas [data-design-field]').forEach((card) => {
+      card.classList.remove('is-dragging', 'is-drag-over');
+    });
+    $$('#formDesignCanvas [data-design-detail-table]').forEach((table) => {
+      table.classList.remove('is-dragging', 'is-drag-over');
+    });
+    $$('#formDesignCanvas [data-design-dropzone]').forEach((zone) => zone.classList.remove('is-drop-active'));
+  });
+  $('#formDesignCanvas').addEventListener('dblclick', (event) => {
+    const fieldCard = event.target.closest('[data-design-field]');
+    if (!fieldCard) return;
+    event.preventDefault();
+    state.selectedFormDesignFieldKey = fieldCard.dataset.designField;
+    updateFormDesignSelectionUI();
+    openFormulaBuilderModal(fieldCard.dataset.designField);
   });
   $('#closeFormulaBuilderModal').addEventListener('click', closeFormulaBuilderModal);
   $('#cancelFormulaButton').addEventListener('click', closeFormulaBuilderModal);
@@ -1990,7 +3143,7 @@ function bindEvents() {
           formulaSql
         })
       });
-      setModuleConfig(state.activeConfigModule, config.fields);
+      setModuleConfig(state.activeConfigModule, config.fields, config.formLayouts);
       closeFormulaBuilderModal();
       toast('Formula Saved.');
     } catch (error) {
@@ -2007,7 +3160,20 @@ function bindEvents() {
     const data = serializeForm(form);
     const moduleKey = state.activeConfigModule;
     const fieldKey = data.fieldKey;
-    delete data.fieldKey;
+    if (!fieldKey) {
+      data.fieldKey = slugFieldKeyPreview(data.dataKeyPreview || data.label);
+      if (!data.fieldKey) {
+        toast('Data Key is required.', 'error');
+        return;
+      }
+      if (findConfigField(data.fieldKey)) {
+        toast(`Data Key ${data.fieldKey} already exists. Use a different key.`, 'error');
+        return;
+      }
+    }
+    if (fieldKey) {
+      delete data.fieldKey;
+    }
     delete data.dataKeyPreview;
     delete data.databaseFieldName;
     delete data.browserModulePreview;
@@ -2015,7 +3181,7 @@ function bindEvents() {
     data.showInTable = form.elements.showInTable.checked;
     data.showInForm = form.elements.showInForm.checked;
     data.showInImport = form.elements.showInImport.checked;
-    if (data.type !== 'dropdownbox') {
+    if (!isDropdownOptionFieldType(data.type)) {
       data.options = [];
     }
     if (data.tableType !== 'detail') {
@@ -2028,7 +3194,7 @@ function bindEvents() {
         method: fieldKey ? 'PATCH' : 'POST',
         body: JSON.stringify(data)
       });
-      setModuleConfig(moduleKey, config.fields);
+      setModuleConfig(moduleKey, config.fields, config.formLayouts);
       closeFieldConfigModal();
       toast(fieldKey ? 'Field Saved.' : 'Field Added.');
     } catch (error) {
@@ -2046,20 +3212,65 @@ function bindEvents() {
   $('#fieldConfigForm [name="label"]').addEventListener('input', (event) => {
     const form = event.currentTarget.form;
     if (form.elements.fieldKey.value) return;
-    const preview = slugFieldKeyPreview(event.currentTarget.value);
+    const tableKey = form.elements.tableType.value === 'detail'
+      ? (form.elements.detailTableName.value || generatedDetailTableName())
+      : 'main';
+    const preview = uniqueFieldKeyForLabel(event.currentTarget.value, tableKey);
     form.elements.dataKeyPreview.value = preview;
     form.elements.databaseFieldName.value = preview;
   });
+  $('#fieldConfigForm [name="dataKeyPreview"]').addEventListener('input', (event) => {
+    const form = event.currentTarget.form;
+    if (form.elements.fieldKey.value) return;
+    const preview = slugFieldKeyPreview(event.currentTarget.value);
+    event.currentTarget.value = preview;
+    form.elements.databaseFieldName.value = preview;
+  });
   $('#fieldConfigForm [name="type"]').addEventListener('change', syncFieldConfigTypeRows);
-  $('#fieldConfigForm [name="tableType"]').addEventListener('change', syncFieldConfigTypeRows);
+  $('#fieldConfigForm [name="tableType"]').addEventListener('change', (event) => {
+    syncFieldConfigTypeRows();
+    const form = event.currentTarget.form;
+    if (form.elements.fieldKey.value || !form.elements.label.value.trim()) return;
+    const tableKey = form.elements.tableType.value === 'detail'
+      ? (form.elements.detailTableName.value || generatedDetailTableName())
+      : 'main';
+    const preview = uniqueFieldKeyForLabel(form.elements.label.value, tableKey);
+    form.elements.dataKeyPreview.value = preview;
+    form.elements.databaseFieldName.value = preview;
+  });
+  $('#fieldConfigForm [name="detailTableName"]').addEventListener('input', (event) => {
+    const form = event.currentTarget.form;
+    if (form.elements.fieldKey.value || form.elements.tableType.value !== 'detail' || !form.elements.label.value.trim()) return;
+    const preview = uniqueFieldKeyForLabel(form.elements.label.value, event.currentTarget.value || generatedDetailTableName());
+    form.elements.dataKeyPreview.value = preview;
+    form.elements.databaseFieldName.value = preview;
+  });
 
   $('#batchFieldForm').addEventListener('submit', async (event) => {
     event.preventDefault();
     const existingRows = state.batchEditRows.filter((row) => row.label.trim());
     const newRows = state.batchDraftRows.filter((row) => row.label.trim());
-    if (!existingRows.length && !newRows.length) {
+    const deletedFieldKeys = Array.from(state.batchDeletedFieldKeys);
+    if (!existingRows.length && !newRows.length && !deletedFieldKeys.length) {
       toast('Add or edit at least one field.', 'error');
       return;
+    }
+    for (const row of newRows) {
+      row.fieldKey = slugFieldKeyPreview(row.fieldKey || row.label);
+      row.databaseFieldName = row.fieldKey;
+      if (!row.fieldKey) {
+        toast('Data Key is required for every new field.', 'error');
+        return;
+      }
+    }
+    const newFieldKeys = new Set();
+    const savedFieldKeys = new Set(activeConfigFields().map((field) => field.fieldKey));
+    for (const row of newRows) {
+      if (savedFieldKeys.has(row.fieldKey) || newFieldKeys.has(row.fieldKey)) {
+        toast(`Data Key ${row.fieldKey} already exists. Use a different key.`, 'error');
+        return;
+      }
+      newFieldKeys.add(row.fieldKey);
     }
 
     const submitButton = $('#saveBatchFieldsButton');
@@ -2067,13 +3278,18 @@ function bindEvents() {
     submitButton.textContent = 'Saving...';
     try {
       let latestConfig = null;
+      for (const fieldKey of deletedFieldKeys) {
+        latestConfig = await api(`/api/sysadmin/modules/${state.activeConfigModule}/fields/${fieldKey}`, {
+          method: 'DELETE'
+        });
+      }
       for (const row of existingRows) {
         latestConfig = await api(`/api/sysadmin/modules/${state.activeConfigModule}/fields/${row.fieldKey}`, {
           method: 'PATCH',
           body: JSON.stringify({
             label: row.label,
             type: row.type,
-            options: row.type === 'dropdownbox' ? row.options : [],
+            options: isDropdownOptionFieldType(row.type) ? row.options : [],
             showInTable: row.showInTable,
             showInForm: row.showInForm,
             showInImport: row.showInImport,
@@ -2090,7 +3306,7 @@ function bindEvents() {
             type: row.type,
             tableType: row.tableKey === 'main' ? 'main' : 'detail',
             detailTableName: row.tableKey === 'main' ? '' : row.tableKey,
-            options: row.type === 'dropdownbox' ? row.options : [],
+            options: isDropdownOptionFieldType(row.type) ? row.options : [],
             showInTable: row.showInTable,
             showInForm: row.showInForm,
             showInImport: row.showInImport,
@@ -2099,10 +3315,12 @@ function bindEvents() {
         });
       }
       if (latestConfig) {
-        setModuleConfig(state.activeConfigModule, latestConfig.fields);
+        setModuleConfig(state.activeConfigModule, latestConfig.fields, latestConfig.formLayouts);
       }
       closeBatchFieldModal();
-      toast(`Saved ${existingRows.length + newRows.length} Field${existingRows.length + newRows.length === 1 ? '' : 's'}.`);
+      const savedCount = existingRows.length + newRows.length;
+      const changeCount = savedCount + deletedFieldKeys.length;
+      toast(`Saved ${changeCount} Field${changeCount === 1 ? '' : 's'}.`);
     } catch (error) {
       toast(titleCaseMessage(error.message), 'error');
     } finally {
@@ -2119,11 +3337,13 @@ function bindEvents() {
     submitButton.textContent = 'Saving...';
     try {
       let latestConfig = null;
+      const visibilityByFieldKey = {};
       for (const row of rows) {
         const field = findConfigField(row.dataset.propertiesField);
         if (!field) continue;
         const showInForm = row.querySelector('[name="showInForm"]').checked;
-        const required = row.querySelector('[name="required"]').checked;
+        const required = showInForm && row.querySelector('[name="required"]').checked;
+        visibilityByFieldKey[field.fieldKey] = showInForm;
         latestConfig = await api(`/api/sysadmin/modules/${state.activeConfigModule}/fields/${field.fieldKey}`, {
           method: 'PATCH',
           body: JSON.stringify({
@@ -2132,8 +3352,9 @@ function bindEvents() {
           })
         });
       }
+      syncFormDesignDisplayVisibility(visibilityByFieldKey);
       if (latestConfig) {
-        setModuleConfig(state.activeConfigModule, latestConfig.fields);
+        setModuleConfig(state.activeConfigModule, latestConfig.fields, latestConfig.formLayouts);
       }
       closeFieldPropertiesModal();
       toast('Field Properties Saved.');
@@ -2143,6 +3364,14 @@ function bindEvents() {
       submitButton.disabled = false;
       submitButton.textContent = 'Save';
     }
+  });
+
+  $('#fieldPropertiesRows').addEventListener('change', (event) => {
+    if (event.target.name !== 'showInForm') return;
+    const row = event.target.closest('[data-properties-field]');
+    const requiredInput = row?.querySelector('[name="required"]');
+    if (!requiredInput || event.target.checked) return;
+    requiredInput.checked = false;
   });
 
   $('#addUserButton').addEventListener('click', () => {

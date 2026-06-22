@@ -21,7 +21,8 @@ The CRM is usable locally for customer, user, import, and early low-code configu
 - Configurable fields for main table and detail table placement.
 - Batch Edit fields workflow with editable existing fields, new field rows, and main/detail table tabs.
 - Field Properties grid for display and required flags.
-- Formula Builder with formula expressions, reusable custom helper functions, and SQL capture storage.
+- Formula workspace with formula expressions, reusable custom helper functions, and SQL capture storage.
+- Backend-backed Form Design drawer for per-form-type visual field ordering with draft/publish controls.
 - All pop-out modals include a fullscreen/enlarge button.
 - Customer detail-table data entry inside the Add/Edit Customer modal.
 - Detail-table row controls:
@@ -115,7 +116,8 @@ Admins should have a dedicated portal for configuring the CRM:
    - Supported configurable field types currently include textbox, textarea, checkbox, dropdownbox, int, decimals, browser button placeholder, date, attach document placeholder, and image placeholder.
    - System field types such as email, phone, country, owner, password, and status are supported by existing modules.
    - `Field Properties` currently saves display and required settings.
-   - `Form Design` opens the Formula Builder for formula expressions, reusable custom functions, and SQL capture notes.
+   - `Formula` opens the Formula Builder for formula expressions, reusable custom functions, and SQL capture notes.
+   - `Form Design` opens a right-side visual drawer for Add, Edit, and Detail form layouts. Draft and published layouts are stored in module configuration.
    - Formula fields are evaluated on the customer form and server save path.
    - Still missing: form sections, tabs, layout controls, sort/reorder controls, validation rules, import/export mapping controls, real lookup/browser-button behavior, editability enforcement, field-level permissions, audit logs, and versioning.
 4. Phase 4: Module Page Publisher - planned
@@ -159,15 +161,19 @@ Admins should have a dedicated portal for configuring the CRM:
 - Existing field keys and database field names stay read-only in Batch Edit so saved data mappings remain stable.
 - Locked/system fields keep protected type/table settings, but formula settings and common display flags can still be saved.
 - `Field Properties` opens a read/write properties grid for the selected form. Phase 1 saves display and required flags; editability and disable-manual-input are UI scaffolding for future permissions and browser-button phases.
-- `Form Design` currently opens the Formula Builder. It supports field variables, basic operators, built-in functions, reusable custom helper functions, and SQL capture text. The SQL capture tab stores notes/configuration only; execution is planned for a later guarded backend phase.
+- `Formula` opens the Formula Builder. It supports field variables, basic operators, built-in functions, reusable custom helper functions, and SQL capture text. The SQL capture tab stores notes/configuration only; execution is planned for a later guarded backend phase.
+- `Form Design` opens a right-side drawer above Form Builder. It has Add, Edit, and Detail form types, form-preview field controls, drag/drop ordering, a hidden-field palette, copy-layout controls, Save Draft, and Publish. Draft and published layouts are stored on the backend; the published Add/Edit layouts drive the actual customer and user forms. Hidden fields can be dragged from the side palette onto the form, which turns on `Show In Form`; visible fields can be dragged back to the palette to hide them.
+- Double-clicking a field opens Formula Builder for that field. Right-clicking a field opens its field configuration. Add/Edit Field opens above Form Design without closing the drawer.
+- Form Design separates main fields from detail-table fields. Detail-table names are shown in their own lower area with a table-style preview; renaming the actual detail table key needs backend migration safeguards before it should be editable.
+- Formula-enabled fields are treated as read-only calculated fields in customer main forms.
 - Form Builder is for field configuration only. Bulk duplicate/delete controls should not be used there.
 - Detail-table row duplicate/delete is for data entry rows inside Add/Edit Customer, not for Form Builder fields.
 - Detail-table row delete keeps one blank row when every row is selected, so the table remains ready for input.
 
 ### Form Builder Still Missing
 
-- Form layout designer for sections, columns, tabs, grouping, and field placement.
-- Field ordering/reordering controls in tables and forms.
+- Full form layout designer for sections, columns, tabs, grouping, and field placement.
+- Drag/drop field reordering and richer placement controls in tables and forms.
 - Advanced validation rules such as min/max, regex, conditional required, uniqueness, and cross-field checks.
 - Bulk duplicate/delete/archive controls for configurable fields, with safeguards for existing data.
 - Real Browser Button and lookup fields connected to master-data/browser modules.
@@ -176,7 +182,7 @@ Admins should have a dedicated portal for configuring the CRM:
 - Import/export mapping controls per module and per field.
 - Formula dependency checks, circular-reference detection, and safer custom-function sandboxing.
 - SQL capture execution behind guarded backend endpoints.
-- Form versioning, draft/publish workflow, rollback, and audit logs for configuration changes.
+- Form version history, rollback, and audit logs for configuration changes.
 
 ## What Has Been Done
 
@@ -271,6 +277,9 @@ Admins should have a dedicated portal for configuring the CRM:
 - Added Batch Edit modal for editing existing fields and adding multiple new fields.
 - Added detail-table tabs inside Batch Edit.
 - Added Field Properties modal for display and required settings.
+- Renamed the current formula entry point to `Formula`.
+- Added Form Design drawer scaffolding with Add/Edit/Detail layouts, copy controls, draft/publish actions, visual field ordering, hidden/formula indicators, and double-click formula access.
+- Added backend storage for Form Design draft/published layouts and applied published layouts to actual customer/user forms.
 - Added Formula Builder for formula expressions, built-in functions, custom helper functions, and SQL capture storage.
 - Added formula database columns and server-side formula evaluation for customer saves.
 - Added fullscreen/enlarge controls to pop-out modals.
@@ -408,7 +417,8 @@ Immediate testing:
 22. Test Add Field.
 23. Test Batch Edit existing field rows, new field rows, and detail table tabs.
 24. Test Field Properties display/required settings.
-25. Test Form Design formulas and custom helper functions.
+25. Test Formula workspace formulas and custom helper functions.
+26. Test Form Design drawer form-type switching, copy layout, draft/publish, field move controls, and double-click formula access.
 
 Security cleanup:
 1. Create your real admin user.

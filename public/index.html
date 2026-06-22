@@ -243,6 +243,7 @@
                   <p>Configure module fields, table columns, forms, and import columns.</p>
                 </div>
                 <div class="toolbar-actions">
+                  <button type="button" class="secondary" id="formulaButton">Formula</button>
                   <button type="button" class="secondary" id="formDesignButton">Form Design</button>
                   <button type="button" id="addFieldButton">Add Field</button>
                   <button type="button" class="secondary" id="batchAddFieldsButton">Batch Edit</button>
@@ -339,7 +340,7 @@
                 </label>
                 <label>
                   <span>Data Key</span>
-                  <input name="dataKeyPreview" placeholder="Auto generated" readonly>
+                  <input name="dataKeyPreview" placeholder="Auto generated">
                 </label>
                 <label>
                   <span>Database Field Name</span>
@@ -402,6 +403,7 @@
               <div class="batch-toolbar">
                 <strong id="batchActiveTableLabel">Main Table</strong>
                 <div class="toolbar-actions">
+                  <button type="button" class="danger-button" id="deleteSelectedBatchFields" disabled>Delete</button>
                   <button type="button" class="secondary" id="addBatchFieldRow">Add Row</button>
                 </div>
               </div>
@@ -409,6 +411,9 @@
                 <table class="batch-field-table">
                   <thead>
                     <tr>
+                      <th class="batch-select-column">
+                        <input type="checkbox" id="selectAllBatchFields" aria-label="Select deletable fields">
+                      </th>
                       <th>Field Name</th>
                       <th>Data Key</th>
                       <th>Database Field Name</th>
@@ -418,7 +423,6 @@
                       <th>Show In Form</th>
                       <th>Import</th>
                       <th>Required</th>
-                      <th></th>
                     </tr>
                   </thead>
                   <tbody id="batchFieldRows"></tbody>
@@ -460,6 +464,43 @@
                 <button type="button" class="secondary" id="cancelFieldPropertiesButton">Cancel</button>
               </div>
             </form>
+          </div>
+
+          <div id="formDesignDrawer" class="modal-backdrop drawer-backdrop" hidden>
+            <aside class="panel form-design-drawer" aria-label="Form Design">
+              <div class="modal-header">
+                <div>
+                  <h2 id="formDesignTitle">Form Design</h2>
+                  <p class="muted">Arrange fields by form type. Double-click a field to configure its formula.</p>
+                </div>
+                <div class="modal-title-actions">
+                  <button type="button" class="icon-button fullscreen-button" data-modal-fullscreen aria-label="Enlarge to full screen" aria-pressed="false" title="Enlarge to full screen"></button>
+                  <button type="button" class="icon-button" id="closeFormDesignDrawer" aria-label="Close">x</button>
+                </div>
+              </div>
+              <div class="form-design-toolbar">
+                <div class="segmented-control" role="tablist" aria-label="Form type">
+                  <button type="button" class="is-active" data-form-design-type="add">Add</button>
+                  <button type="button" data-form-design-type="edit">Edit</button>
+                  <button type="button" data-form-design-type="detail">Detail</button>
+                </div>
+                <label>
+                  <span>Copy From</span>
+                  <select id="copyFormDesignSource">
+                    <option value="add">Add Form</option>
+                    <option value="edit">Edit Form</option>
+                    <option value="detail">Detail Form</option>
+                  </select>
+                </label>
+                <button type="button" class="secondary" id="copyFormDesignButton">Copy</button>
+              </div>
+              <div class="form-design-canvas" id="formDesignCanvas"></div>
+              <div class="form-actions end-actions">
+                <button type="button" id="saveFormDesignDraftButton">Save Draft</button>
+                <button type="button" class="secondary" id="publishFormDesignButton">Publish</button>
+                <button type="button" class="secondary" id="cancelFormDesignButton">Close</button>
+              </div>
+            </aside>
           </div>
 
           <div id="formulaBuilderModal" class="modal-backdrop" hidden>
@@ -573,6 +614,16 @@
     </main>
 
     <div id="toast" class="toast" hidden></div>
+    <div id="successPrompt" class="modal-backdrop success-prompt-backdrop" hidden>
+      <div class="panel modal-card narrow-modal success-prompt-card">
+        <div class="success-prompt-icon" aria-hidden="true">✓</div>
+        <h2 id="successPromptTitle">Success</h2>
+        <p id="successPromptMessage" class="muted"></p>
+        <div class="form-actions end-actions">
+          <button type="button" id="closeSuccessPrompt">OK</button>
+        </div>
+      </div>
+    </div>
     <script src="/app.js"></script>
   </body>
 </html>

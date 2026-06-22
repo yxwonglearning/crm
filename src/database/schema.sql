@@ -93,3 +93,17 @@ CREATE TABLE IF NOT EXISTS crm_module_fields (
   KEY crm_module_fields_module_id_fk (module_id),
   CONSTRAINT crm_module_fields_module_id_fk FOREIGN KEY (module_id) REFERENCES crm_modules(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS crm_module_form_layouts (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  module_id BIGINT UNSIGNED NOT NULL,
+  layout_state ENUM('draft', 'published') NOT NULL DEFAULT 'draft',
+  form_type ENUM('add', 'edit', 'detail') NOT NULL DEFAULT 'add',
+  layout_json JSON NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY crm_module_form_layouts_unique (module_id, layout_state, form_type),
+  KEY crm_module_form_layouts_module_id_fk (module_id),
+  CONSTRAINT crm_module_form_layouts_module_id_fk FOREIGN KEY (module_id) REFERENCES crm_modules(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
