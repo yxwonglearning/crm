@@ -4,6 +4,7 @@ const { asyncHandler } = require('../../shared/errors');
 const { validate } = require('../../shared/validation');
 const { requireAuth, requireRole } = require('../auth/auth.middleware');
 const service = require('./module-config.service');
+const permissions = require('../permissions/permissions.service');
 
 const sysadminRoutes = express.Router();
 
@@ -57,6 +58,11 @@ const fieldSchema = z.object({
   showInTable: z.boolean().optional(),
   showInForm: z.boolean().optional(),
   showInImport: z.boolean().optional(),
+  showInExport: z.boolean().optional(),
+  importHeader: z.string().trim().max(160).optional(),
+  exportHeader: z.string().trim().max(160).optional(),
+  editable: z.boolean().optional(),
+  disableManualInput: z.boolean().optional(),
   searchable: z.boolean().optional(),
   sortOrder: z.coerce.number().int().min(1).max(10000).optional()
 });
@@ -86,6 +92,34 @@ const browserButtonSchema = z.object({
   enabled: z.boolean().optional()
 });
 const updateBrowserButtonSchema = browserButtonSchema.partial();
+const permissionSubjectSchema = z.object({
+  roles: z.array(z.enum(['admin', 'manager', 'user'])).optional(),
+  users: z.array(z.coerce.number().int().positive()).optional()
+});
+const fieldPermissionSchema = z.object({
+  fieldKey: z.string().trim().min(1).max(80),
+  permissions: z.object({
+    view: permissionSubjectSchema.optional(),
+    create: permissionSubjectSchema.optional(),
+    edit: permissionSubjectSchema.optional(),
+    import: permissionSubjectSchema.optional(),
+    export: permissionSubjectSchema.optional()
+  }).optional()
+});
+const fieldPermissionMatrixSchema = z.object({
+  fields: z.array(fieldPermissionSchema)
+});
+const modulePermissionMatrixSchema = z.object({
+  permissions: z.object({
+    view: permissionSubjectSchema.optional(),
+    create: permissionSubjectSchema.optional(),
+    edit: permissionSubjectSchema.optional(),
+    delete: permissionSubjectSchema.optional(),
+    import: permissionSubjectSchema.optional(),
+    export: permissionSubjectSchema.optional(),
+    configure: permissionSubjectSchema.optional()
+  })
+});
 
 sysadminRoutes.use(requireAuth, requireRole('admin'));
 
@@ -95,6 +129,24 @@ sysadminRoutes.get('/modules', asyncHandler(async (_req, res) => {
 
 sysadminRoutes.get('/modules/:moduleKey', asyncHandler(async (req, res) => {
   res.json(await service.getModuleConfig(req.params.moduleKey));
+}));
+
+sysadminRoutes.get('/modules/:moduleKey/field-permissions', asyncHandler(async (req, res) => {
+  res.json(await permissions.listFieldPermissionMatrix(req.params.moduleKey));
+}));
+
+sysadminRoutes.get('/modules/:moduleKey/permissions', asyncHandler(async (req, res) => {
+  res.json(await permissions.listModulePermissionMatrix(req.params.moduleKey));
+}));
+
+sysadminRoutes.put('/modules/:moduleKey/permissions', asyncHandler(async (req, res) => {
+  const input = validate(modulePermissionMatrixSchema, req.body);
+  res.json(await permissions.saveModulePermissionMatrix(req.params.moduleKey, input.permissions));
+}));
+
+sysadminRoutes.put('/modules/:moduleKey/field-permissions', asyncHandler(async (req, res) => {
+  const input = validate(fieldPermissionMatrixSchema, req.body);
+  res.json(await permissions.saveFieldPermissionMatrix(req.params.moduleKey, input.fields));
 }));
 
 sysadminRoutes.get('/browser-buttons', asyncHandler(async (_req, res) => {

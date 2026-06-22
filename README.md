@@ -16,14 +16,16 @@ The CRM is usable locally for customer, user, import, and early low-code configu
 - Dedicated full-page login screen.
 - Modal forms for adding/editing customers and users.
 - Customer import modal with template download, file upload, and import result display.
+- Customer export download with admin-configured export columns.
 - Admin Portal with sections for Modules, Form Builder, Browser Buttons, Module Pages, Action Flow, and Permissions.
 - Form Builder for customer and user field configuration.
-- Source-first Browser Buttons workspace for reusable master-data lookup definitions shared across modules.
-- Browser Button definitions can be grouped by source module/table, created multiple times per source, filtered with a guarded SQL `WHERE` condition, and configured with explicit checkbox-based Search Fields and Display Columns.
+- Module-first Browser Buttons workspace for reusable master-data lookup definitions shared across modules.
+- Browser Button definitions are grouped by module, can still target main or detail tables inside that module, and support guarded SQL `WHERE` conditions plus checkbox-based Search Fields and Display Columns.
 - Configurable fields for main table and detail table placement.
 - Batch Edit fields workflow with editable existing fields, new field rows, and main/detail table tabs.
 - Bulk duplicate/delete/archive controls for configurable fields, with delete blocked when existing data is present.
-- Field Properties grid for display and required flags.
+- Field Properties grid for display, editability, required, and disable-manual-input flags.
+- Import/export mapping controls for per-field import headers, export headers, and export visibility.
 - Field validation rules for length, numeric range, regex, conditional required, and unique values.
 - Formula workspace with formula expressions, reusable custom helper functions, and SQL capture storage.
 - Backend-backed Form Design drawer for per-form-type visual field ordering with draft/publish controls.
@@ -119,16 +121,17 @@ Admins should have a dedicated portal for configuring the CRM:
    - Detail table names are generated and shown in the field list.
    - Supported configurable field types currently include textbox, textarea, checkbox, dropdownbox, int, decimals, browser button placeholder, date, attach document placeholder, and image placeholder.
    - System field types such as email, phone, country, owner, password, and status are supported by existing modules.
-   - `Field Properties` currently saves display and required settings.
+   - `Field Properties` saves display, editability, required, and disable-manual-input settings.
    - Field validation rules support min/max length, min/max numeric value, regex, conditional required, and unique values.
    - `Formula` opens the Formula Builder for formula expressions, reusable custom functions, and SQL capture notes.
    - `Form Design` opens a right-side visual drawer for Add, Edit, and Detail form layouts. Draft and published layouts are stored in module configuration.
    - `Batch Edit` can duplicate selected configurable fields, delete unused configurable fields, and archive configurable fields that should be hidden without dropping existing data.
    - `Browser Buttons` stores reusable master-data lookup definitions. Browser Button fields can reference these definitions through field lookup metadata.
-   - Browser Buttons are managed from a source-first workspace: select a module/table, then create or edit one or more browser definitions for that source.
+   - Browser Buttons are managed from a module-first workspace: select a module, then choose the main or detail table when creating or editing browser definitions.
    - Browser Button configuration supports value field, display field, checkbox-selected search fields, checkbox-selected display columns, enabled state, and a guarded SQL `WHERE` condition stored as filter metadata.
+   - Browser Button fields render Browse controls in customer/user forms and open a lookup popup that searches the configured source table.
    - Formula fields are evaluated on the customer form and server save path.
-   - Still missing: form sections, tabs, layout controls, richer sort/reorder controls, import/export mapping controls, real lookup/browser-button behavior, editability enforcement, field-level permissions, audit logs, and versioning.
+   - Still missing: form sections, tabs, layout controls, richer sort/reorder controls, audit logs, and versioning.
 4. Phase 4: Module Page Publisher - planned
    - Admin Portal has a placeholder `Module Pages` section.
    - Generated pages for custom published modules are not implemented yet.
@@ -141,9 +144,11 @@ Admins should have a dedicated portal for configuring the CRM:
    - Add conditions such as field equals value or number greater than value.
    - Add actions such as update field, create task, assign owner, send notification, and call webhook.
    - Later add scheduling, cross-module orchestration, external integrations, and execution logs.
-6. Phase 6: Permissions - planned
-   - Admin Portal has a placeholder `Permissions` section.
-   - Target behavior: control view, create, edit, delete, import, export, and configuration access per module and role.
+6. Phase 6: Permissions - mostly done
+   - Admin Portal has a `Permissions` section for module and field access.
+   - Module permissions control view, create, edit, delete, import, export, and configuration access by role or specific user.
+   - Field permissions control view, create, edit, import, and export by role or specific user.
+   - Customer list/config/import/save paths enforce the configured permissions.
 
 ### Extra Platform Features To Add
 
@@ -151,7 +156,7 @@ Admins should have a dedicated portal for configuring the CRM:
 - Module templates for common business objects.
 - Trash/archive instead of hard delete for configurable modules.
 - Lookup fields and related records.
-- Import/export settings per module.
+- Advanced import/export profiles per module.
 - Report builder and dashboard widgets.
 - Field-level and record-level permissions.
 - Backup, restore, and version history for low-code configuration.
@@ -165,14 +170,15 @@ Admins should have a dedicated portal for configuring the CRM:
 - Detail-table records include their own `id` and a `mainid` field that maps each detail row back to the main record.
 - `Dropdown Options` only applies to `Dropdownbox` fields.
 - `Browser Buttons` are reusable lookup definitions. Form Builder `Browser Button` fields reference a browser definition instead of storing source-table details directly on every field.
-- Browser Buttons are grouped by source module/table. A single source, such as `customers / customers`, can have multiple browser buttons for different purposes.
+- Browser Buttons are grouped by module. A single module, such as `customers`, can contain browser buttons for its main table and detail tables without crowding the source list.
 - Browser Button `Search Fields` and `Display Columns` use checkbox lists. Only checked fields are saved and shown by the lookup configuration.
 - Browser Button `SQL WHERE` stores a condition fragment such as `status = 'active'`; full SQL statements, comments, and statement separators are rejected.
+- Browser Button fields use authenticated lookup endpoints to search and select rows from reusable browser definitions. The selected value is stored in the configured field.
 - `Add Field` is for adding one field at a time.
 - `Batch Edit` opens a field-management workspace that shows fields by `Main Table` and detail-table tabs, supports editing existing fields, adding new rows, and adding new detail table tabs with generated names such as `customer_dt1`.
 - Existing field keys and database field names stay read-only in Batch Edit so saved data mappings remain stable.
 - Locked/system fields keep protected type/table settings, but formula settings and common display flags can still be saved.
-- `Field Properties` opens a read/write properties grid for the selected form. Phase 1 saves display and required flags; editability and disable-manual-input are UI scaffolding for future permissions and browser-button phases.
+- `Field Properties` opens a read/write properties grid for the selected form. It saves display, editability, required, and disable-manual-input flags; customer/user forms enforce locked and manual-input-disabled fields.
 - `Formula` opens the Formula Builder. It supports field variables, basic operators, built-in functions, reusable custom helper functions, and SQL capture text. The SQL capture tab stores notes/configuration only; execution is planned for a later guarded backend phase.
 - `Form Design` opens a right-side drawer above Form Builder. It has Add, Edit, and Detail form types, form-preview field controls, drag/drop ordering, a hidden-field palette, copy-layout controls, Save Draft, and Publish. Draft and published layouts are stored on the backend; the published Add/Edit layouts drive the actual customer and user forms. Hidden fields can be dragged from the side palette onto the form, which turns on `Show In Form`; visible fields can be dragged back to the palette to hide them.
 - Double-clicking a field opens Formula Builder for that field. Right-clicking a field opens its field configuration. Add/Edit Field opens above Form Design without closing the drawer.
@@ -187,10 +193,6 @@ Admins should have a dedicated portal for configuring the CRM:
 - Full form layout designer for sections, columns, tabs, grouping, and field placement.
 - Drag/drop field reordering and richer placement controls in tables and forms.
 - Richer cross-field validation expressions beyond conditional required.
-- Real Browser Button popup search/select execution connected to the reusable browser definitions.
-- Field-level editability and disable-manual-input enforcement in the customer/user forms.
-- Role-based field permissions for view, create, edit, import, and export.
-- Import/export mapping controls per module and per field.
 - Formula dependency checks, circular-reference detection, and safer custom-function sandboxing.
 - SQL capture execution behind guarded backend endpoints.
 - Form version history, rollback, and audit logs for configuration changes.
@@ -287,8 +289,9 @@ Admins should have a dedicated portal for configuring the CRM:
 - Added generated data key and database field name previews.
 - Added Batch Edit modal for editing existing fields and adding multiple new fields.
 - Added detail-table tabs inside Batch Edit.
-- Added Field Properties modal for display and required settings.
-- Added source-first Browser Buttons workspace with module/table search, per-source browser lists, editable presets, multiple browser definitions per source, checkbox-based Search Fields and Display Columns, and guarded SQL `WHERE` condition storage.
+- Added Field Properties modal for display, editability, required, and disable-manual-input settings.
+- Added module-first Browser Buttons workspace with module search, per-module browser lists, editable presets, table-aware browser definitions, checkbox-based Search Fields and Display Columns, and guarded SQL `WHERE` condition storage.
+- Added Browser Button runtime lookup endpoints and a shared customer/user form popup for searching and selecting configured lookup rows.
 - Renamed the current formula entry point to `Formula`.
 - Added Form Design drawer scaffolding with Add/Edit/Detail layouts, copy controls, draft/publish actions, visual field ordering, hidden/formula indicators, and double-click formula access.
 - Added backend storage for Form Design draft/published layouts and applied published layouts to actual customer/user forms.
@@ -296,6 +299,8 @@ Admins should have a dedicated portal for configuring the CRM:
 - Added Formula Builder for formula expressions, built-in functions, custom helper functions, and SQL capture storage.
 - Added formula database columns and server-side formula evaluation for customer saves.
 - Added fullscreen/enlarge controls to pop-out modals.
+- Added module and field permission matrices with role/user grants and runtime enforcement for customer access and imports.
+- Added Import/Export Mapping controls for mapped Excel import headers, export headers, export visibility, and customer export downloads.
 
 ### Country And Phone Handling
 
@@ -355,6 +360,8 @@ All protected endpoints require `Authorization: Bearer <token>` after login. Adm
 ### Reference Data
 
 - `GET /api/countries` - returns country records with ISO and dial-code metadata.
+- `GET /api/browser-buttons` - lists enabled browser button lookup definitions for authenticated form usage.
+- `GET /api/browser-buttons/:browserKey/search?q=` - searches a configured browser button source and returns selectable lookup rows.
 
 ### Customers
 
@@ -374,6 +381,7 @@ All protected endpoints require `Authorization: Bearer <token>` after login. Adm
 ### Imports
 
 - `GET /api/imports/customers/template` - downloads the protected customer Excel import template.
+- `GET /api/imports/customers/export` - downloads customers as a mapped Excel workbook.
 - `POST /api/imports/customers` - imports customers from an uploaded Excel file field named `file`.
 
 ### Admin Configuration
@@ -497,7 +505,7 @@ Immediate testing:
 21. Test Form Builder module switching between Customers and Users.
 22. Test Add Field.
 23. Test Batch Edit existing field rows, new field rows, and detail table tabs.
-24. Test Field Properties display/required settings.
+24. Test Field Properties display, editability, required, and disable-manual-input settings.
 25. Test Formula workspace formulas and custom helper functions.
 26. Test Form Design drawer form-type switching, copy layout, draft/publish, field move controls, and double-click formula access.
 

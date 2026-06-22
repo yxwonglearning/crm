@@ -335,6 +335,10 @@ function normalizeFormulaScript(input) {
   return String(input || '').trim();
 }
 
+function normalizeMappingHeader(input) {
+  return String(input || '').trim();
+}
+
 function optionalNumber(value) {
   if (value === '' || value === null || value === undefined) return undefined;
   const number = Number(value);
@@ -448,6 +452,11 @@ async function createField(moduleKey, input) {
     showInTable: input.showInTable !== false,
     showInForm: Boolean(input.required) || input.showInForm !== false,
     showInImport: Boolean(input.showInImport),
+    showInExport: input.showInExport !== false,
+    importHeader: normalizeMappingHeader(input.importHeader),
+    exportHeader: normalizeMappingHeader(input.exportHeader),
+    editable: input.editable !== false,
+    disableManualInput: Boolean(input.disableManualInput),
     searchable: Boolean(input.searchable),
     sortOrder: await repository.nextSortOrder(module.id)
   };
@@ -480,7 +489,9 @@ async function updateField(moduleKey, fieldKey, input) {
     formulaFunctionBody: input.formulaFunctionBody === undefined ? undefined : normalizeFormulaScript(input.formulaFunctionBody),
     formulaSql: input.formulaSql === undefined ? undefined : normalizeFormulaScript(input.formulaSql),
     validationRules: input.validationRules === undefined ? undefined : normalizeValidationRules(input.validationRules),
-    lookupConfig: input.lookupConfig === undefined ? undefined : normalizeLookupConfig(input.lookupConfig, input.type || field.type)
+    lookupConfig: input.lookupConfig === undefined ? undefined : normalizeLookupConfig(input.lookupConfig, input.type || field.type),
+    importHeader: input.importHeader === undefined ? undefined : normalizeMappingHeader(input.importHeader),
+    exportHeader: input.exportHeader === undefined ? undefined : normalizeMappingHeader(input.exportHeader)
   };
 
   if (updates.required) {

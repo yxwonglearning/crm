@@ -1,6 +1,7 @@
 const { AppError } = require('../../shared/errors');
 const countries = require('../countries/countries.repository');
 const moduleConfig = require('../sysadmin/module-config.service');
+const permissions = require('../permissions/permissions.service');
 const repository = require('./customers.repository');
 const { normalizePhone } = require('./phone');
 const { validateFieldValue } = require('../../shared/field-validation');
@@ -34,9 +35,23 @@ function normalizeCustomer(row) {
   };
 }
 
+async function baseCustomerFieldConfig() {
+  return moduleConfig.getModuleConfig('customers');
+}
+
+async function customerFieldConfig(user = null) {
+  const config = await baseCustomerFieldConfig();
+  if (!user) return config;
+  return {
+    ...config,
+    permissions: await permissions.userModulePermissions('customers', user),
+    fields: await permissions.decorateFieldsForUser('customers', user, config.fields)
+  };
+}
+
 async function hydrateDetailValues(customer) {
   if (!customer) return null;
-  const config = await customerFieldConfig();
+  const config = await baseCustomerFieldConfig();
   const detailTables = await repository.detailRowsByCustomerId(customer.id, config.fields);
   const detailValues = {};
   Object.values(detailTables).forEach((rows) => {
@@ -163,10 +178,6 @@ function applyFormulaFields(input, fields) {
   return values;
 }
 
-async function customerFieldConfig() {
-  return moduleConfig.getModuleConfig('customers');
-}
-
 async function validateConfiguredFields(input, fields, excludeId = null) {
   for (const field of fields.filter((item) => item.tableType !== 'detail')) {
     await validateFieldValue(field, input[field.fieldKey], input, {
@@ -212,7 +223,7 @@ function normalizeDetailRows(inputRows, fields) {
 }
 
 async function detailTablesFromInput(input) {
-  const config = await customerFieldConfig();
+  const config = await baseCustomerFieldConfig();
   const detailTables = {};
   const inputTables = input.__detailTables || {};
   const fieldsByTable = new Map();
@@ -239,8 +250,45 @@ async function detailTablesFromInput(input) {
   return detailTables;
 }
 
-async function hydrateCustomerInput(input, userId, options = {}) {
-  const config = await customerFieldConfig();
+async function assertSubmittedFieldsAllowed(input, fields, user, action) {
+  const submittedKeys = new Set(Object.keys(input || {}));
+  Object.values(input.__detailTables || {}).forEach((rows) => {
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      Object.keys(row || {}).forEach((key) => submittedKeys.add(key));
+    });
+  });
+
+  for (const field of fields) {
+    if (submittedKeys.has(field.fieldKey)) {
+      await permissions.assertFieldActionAllowed('customers', user, fields, field.fieldKey, action);
+    }
+  }
+}
+
+function sanitizeCustomerForUser(customer, fields, permissionMap) {
+  if (!customer || !permissionMap.size) return customer;
+  const allowedFields = fields.filter((field) => permissionMap.get(field.fieldKey)?.view);
+  const allowedFieldKeys = new Set(allowedFields.map((field) => field.fieldKey));
+  const allowedDataKeys = new Set(allowedFields.map((field) => field.dataKey).filter(Boolean));
+  const sanitized = {
+    ...customer,
+    custom_fields: Object.fromEntries(
+      Object.entries(customer.custom_fields || {}).filter(([key]) => allowedFieldKeys.has(key))
+    )
+  };
+
+  fields.forEach((field) => {
+    if (field.dataKey && !allowedDataKeys.has(field.dataKey)) {
+      delete sanitized[field.dataKey];
+    }
+  });
+
+  return sanitized;
+}
+
+async function hydrateCustomerInput(input, user, options = {}) {
+  const config = await baseCustomerFieldConfig();
+  await assertSubmittedFieldsAllowed(input, config.fields, user, options.action || 'create');
   const formulaInput = applyFormulaFields(input, config.fields);
   await validateConfiguredFields(formulaInput, config.fields, options.excludeId || null);
   const country = await countries.findCountryById(input.countryId);
@@ -265,35 +313,38 @@ async function hydrateCustomerInput(input, userId, options = {}) {
     customFields: customFieldsFromInput(formulaInput, config.fields),
     detailTables: await detailTablesFromInput(input),
     ownerUserId: input.ownerUserId || null,
-    userId
+    userId: user.id
   };
 }
 
-async function listCustomers(filters) {
+async function listCustomers(filters, user) {
+  const config = await baseCustomerFieldConfig();
+  const permissionMap = await permissions.userFieldPermissions('customers', user, config.fields);
   const customers = await repository.listCustomers(filters);
-  return Promise.all(customers.map(async (customer) => hydrateDetailValues(normalizeCustomer(customer))));
+  const hydrated = await Promise.all(customers.map(async (customer) => hydrateDetailValues(normalizeCustomer(customer))));
+  return hydrated.map((customer) => sanitizeCustomerForUser(customer, config.fields, permissionMap));
 }
 
-async function createCustomer(input, userId) {
-  const customer = await hydrateCustomerInput(input, userId);
+async function createCustomer(input, user) {
+  const customer = await hydrateCustomerInput(input, user, { action: 'create' });
   const id = await repository.createCustomer(customer);
-  await repository.upsertDetailRows(id, (await customerFieldConfig()).fields, customer.detailTables || {});
+  await repository.upsertDetailRows(id, (await baseCustomerFieldConfig()).fields, customer.detailTables || {});
   return hydrateDetailValues(normalizeCustomer(await repository.findCustomerById(id)));
 }
 
-async function updateCustomer(id, input, userId) {
+async function updateCustomer(id, input, user) {
   const existing = await repository.findCustomerById(id);
   if (!existing) {
     throw new AppError('Customer not found', 404);
   }
 
-  const customer = await hydrateCustomerInput(input, userId, { excludeId: id });
+  const customer = await hydrateCustomerInput(input, user, { excludeId: id, action: 'edit' });
   customer.customFields = {
     ...parseCustomFields(existing.custom_fields),
     ...customer.customFields
   };
   await repository.updateCustomer(id, customer);
-  await repository.upsertDetailRows(id, (await customerFieldConfig()).fields, customer.detailTables || {});
+  await repository.upsertDetailRows(id, (await baseCustomerFieldConfig()).fields, customer.detailTables || {});
   return hydrateDetailValues(normalizeCustomer(await repository.findCustomerById(id)));
 }
 

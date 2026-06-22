@@ -85,6 +85,11 @@ CREATE TABLE IF NOT EXISTS crm_module_fields (
   show_in_table TINYINT(1) NOT NULL DEFAULT 1,
   show_in_form TINYINT(1) NOT NULL DEFAULT 1,
   show_in_import TINYINT(1) NOT NULL DEFAULT 0,
+  show_in_export TINYINT(1) NOT NULL DEFAULT 1,
+  import_header VARCHAR(160) NULL,
+  export_header VARCHAR(160) NULL,
+  is_editable TINYINT(1) NOT NULL DEFAULT 1,
+  disable_manual_input TINYINT(1) NOT NULL DEFAULT 0,
   is_searchable TINYINT(1) NOT NULL DEFAULT 0,
   sort_order INT NOT NULL DEFAULT 100,
   is_locked TINYINT(1) NOT NULL DEFAULT 0,
@@ -128,4 +133,43 @@ CREATE TABLE IF NOT EXISTS crm_module_form_layouts (
   UNIQUE KEY crm_module_form_layouts_unique (module_id, layout_state, form_type),
   KEY crm_module_form_layouts_module_id_fk (module_id),
   CONSTRAINT crm_module_form_layouts_module_id_fk FOREIGN KEY (module_id) REFERENCES crm_modules(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS crm_field_permissions (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  module_id BIGINT UNSIGNED NOT NULL,
+  field_key VARCHAR(80) NOT NULL,
+  subject_type ENUM('role', 'user') NOT NULL,
+  subject_key VARCHAR(80) NOT NULL,
+  can_view TINYINT(1) NOT NULL DEFAULT 0,
+  can_create TINYINT(1) NOT NULL DEFAULT 0,
+  can_edit TINYINT(1) NOT NULL DEFAULT 0,
+  can_import TINYINT(1) NOT NULL DEFAULT 0,
+  can_export TINYINT(1) NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY crm_field_permissions_subject_unique (module_id, field_key, subject_type, subject_key),
+  KEY crm_field_permissions_module_id_fk (module_id),
+  CONSTRAINT crm_field_permissions_module_id_fk FOREIGN KEY (module_id) REFERENCES crm_modules(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS crm_module_permissions (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  module_id BIGINT UNSIGNED NOT NULL,
+  subject_type ENUM('role', 'user') NOT NULL,
+  subject_key VARCHAR(80) NOT NULL,
+  can_view TINYINT(1) NOT NULL DEFAULT 0,
+  can_create TINYINT(1) NOT NULL DEFAULT 0,
+  can_edit TINYINT(1) NOT NULL DEFAULT 0,
+  can_delete TINYINT(1) NOT NULL DEFAULT 0,
+  can_import TINYINT(1) NOT NULL DEFAULT 0,
+  can_export TINYINT(1) NOT NULL DEFAULT 0,
+  can_configure TINYINT(1) NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY crm_module_permissions_subject_unique (module_id, subject_type, subject_key),
+  KEY crm_module_permissions_module_id_fk (module_id),
+  CONSTRAINT crm_module_permissions_module_id_fk FOREIGN KEY (module_id) REFERENCES crm_modules(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

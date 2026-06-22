@@ -4,6 +4,7 @@ const countriesRepository = require('../countries/countries.repository');
 const customersRepository = require('../customers/customers.repository');
 const { hydrateCustomerInput } = require('../customers/customers.service');
 const moduleConfig = require('../sysadmin/module-config.service');
+const permissions = require('../permissions/permissions.service');
 
 const systemHeaderMap = {
   companyName: 'Company Name',
@@ -15,14 +16,32 @@ const systemHeaderMap = {
   notes: 'Notes'
 };
 
-async function importFields() {
+function mappedHeader(field, direction) {
+  const customHeader = direction === 'export' ? field.exportHeader : field.importHeader;
+  return String(customHeader || '').trim() || systemHeaderMap[field.fieldKey] || field.label;
+}
+
+async function fieldsForAction(action, user = null) {
   const config = await moduleConfig.getModuleConfig('customers');
+  const permissionMap = user
+    ? await permissions.userFieldPermissions('customers', user, config.fields)
+    : new Map(config.fields.map((field) => [field.fieldKey, { [action]: true }]));
+  const visibilityKey = action === 'export' ? 'showInExport' : 'showInImport';
   return config.fields
-    .filter((field) => field.showInImport)
+    .filter((field) => field[visibilityKey])
+    .filter((field) => permissionMap.get(field.fieldKey)?.[action])
     .map((field) => ({
       ...field,
-      header: systemHeaderMap[field.fieldKey] || field.label
+      header: mappedHeader(field, action)
     }));
+}
+
+async function importFields(user = null) {
+  return fieldsForAction('import', user);
+}
+
+async function exportFields(user = null) {
+  return fieldsForAction('export', user);
 }
 
 function protectHeaderRow(worksheet, expectedHeaders) {
@@ -70,8 +89,11 @@ function unlockEditableRows(worksheet, expectedHeaders) {
   }
 }
 
-async function createCustomerTemplate() {
-  const fields = await importFields();
+async function createCustomerTemplate(user = null) {
+  const fields = await importFields(user);
+  if (!fields.length) {
+    throw new AppError('You do not have permission to import customer fields', 403);
+  }
   const expectedHeaders = fields.map((field) => field.header);
   const example = {};
   fields.forEach((field) => {
@@ -129,8 +151,8 @@ function requireFile(file) {
   }
 }
 
-async function parseRows(file) {
-  const fields = await importFields();
+async function parseRows(file, user) {
+  const fields = await importFields(user);
   const expectedHeaders = fields.map((field) => field.header);
   const workbook = XLSX.read(file.buffer, { type: 'buffer' });
   const sheetName = workbook.SheetNames[0];
@@ -161,14 +183,70 @@ function validateHeaders(rows, expectedHeaders) {
   }
 }
 
+function rowValue(row, fields, fieldKey, fallbackHeader = '') {
+  const field = fields.find((item) => item.fieldKey === fieldKey);
+  const header = field?.header || fallbackHeader;
+  return header ? row[header] : '';
+}
+
 async function countryMap() {
   const countries = await countriesRepository.listCountries();
   return new Map(countries.map((country) => [country.name.toLowerCase(), country]));
 }
 
-async function importCustomers(file, userId) {
+function exportValue(customer, field) {
+  const values = {
+    companyName: customer.company_name,
+    contactPerson: customer.contact_person,
+    email: customer.email,
+    countryId: customer.country_name,
+    phoneNumber: customer.phone_number,
+    status: customer.status,
+    notes: customer.notes,
+    ownerUserId: customer.owner_name
+  };
+  if (Object.prototype.hasOwnProperty.call(values, field.fieldKey)) {
+    return values[field.fieldKey] ?? '';
+  }
+  if (!field.dataKey) {
+    return customer.custom_fields?.[field.fieldKey] ?? '';
+  }
+  return customer[field.dataKey] ?? '';
+}
+
+async function createCustomerExport(user = null) {
+  const fields = await exportFields(user);
+  if (!fields.length) {
+    throw new AppError('You do not have permission to export customer fields', 403);
+  }
+
+  const customersService = require('../customers/customers.service');
+  const customers = await customersService.listCustomers({}, user);
+  const rows = customers.map((customer) => Object.fromEntries(
+    fields.map((field) => [field.header, exportValue(customer, field)])
+  ));
+  const headers = fields.map((field) => field.header);
+  const worksheet = XLSX.utils.json_to_sheet(rows.length ? rows : [{}], { header: headers });
+  if (!rows.length) {
+    headers.forEach((header, index) => {
+      const address = XLSX.utils.encode_cell({ r: 1, c: index });
+      delete worksheet[address];
+    });
+    worksheet['!ref'] = `A1:${XLSX.utils.encode_col(headers.length - 1)}1`;
+  }
+  worksheet['!cols'] = fields.map((field) => ({ wch: field.type === 'textarea' ? 36 : Math.max(14, field.header.length + 6) }));
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Customers');
+  return workbook;
+}
+
+async function importCustomers(file, user) {
   requireFile(file);
-  const { fields, expectedHeaders, rows } = await parseRows(file);
+  const { fields, expectedHeaders, rows } = await parseRows(file, user);
+  if (!fields.length) {
+    throw new AppError('You do not have permission to import customer fields', 403);
+  }
   validateHeaders(rows, expectedHeaders);
 
   const countries = await countryMap();
@@ -178,27 +256,27 @@ async function importCustomers(file, userId) {
   for (const [index, row] of rows.entries()) {
     const rowNumber = index + 2;
     try {
-      const countryName = String(row['Country'] || '').trim().toLowerCase();
+      const countryName = String(rowValue(row, fields, 'countryId', 'Country') || '').trim().toLowerCase();
       const country = countries.get(countryName);
       if (!country) {
-        throw new AppError(`Unknown country "${row['Country']}"`, 422);
+        throw new AppError(`Unknown country "${rowValue(row, fields, 'countryId', 'Country')}"`, 422);
       }
 
       const input = {
-        companyName: row['Company Name'],
-        contactPerson: row['Contact Person'],
-        email: row['Email'] || '',
+        companyName: rowValue(row, fields, 'companyName', 'Company Name'),
+        contactPerson: rowValue(row, fields, 'contactPerson', 'Contact Person'),
+        email: rowValue(row, fields, 'email', 'Email') || '',
         countryId: country.id,
-        phoneNumber: row['Contact Number'],
-        status: String(row['Status'] || 'lead').toLowerCase(),
-        notes: row['Notes'] || ''
+        phoneNumber: rowValue(row, fields, 'phoneNumber', 'Contact Number'),
+        status: String(rowValue(row, fields, 'status', 'Status') || 'lead').toLowerCase(),
+        notes: rowValue(row, fields, 'notes', 'Notes') || ''
       };
       fields
         .filter((field) => !systemHeaderMap[field.fieldKey])
         .forEach((field) => {
           input[field.fieldKey] = row[field.header] || '';
         });
-      const customer = await hydrateCustomerInput(input, userId);
+      const customer = await hydrateCustomerInput(input, user, { action: 'import' });
       const id = await customersRepository.createCustomer(customer);
       created.push({ row: rowNumber, id });
     } catch (error) {
@@ -214,4 +292,4 @@ async function importCustomers(file, userId) {
   };
 }
 
-module.exports = { importCustomers, createCustomerTemplate, writeWorkbook };
+module.exports = { importCustomers, createCustomerTemplate, createCustomerExport, writeWorkbook };

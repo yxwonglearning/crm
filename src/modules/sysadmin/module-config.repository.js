@@ -22,6 +22,11 @@ function toDbField(moduleId, field) {
     field.showInTable ? 1 : 0,
     field.showInForm ? 1 : 0,
     field.showInImport ? 1 : 0,
+    field.showInExport !== false ? 1 : 0,
+    field.importHeader || null,
+    field.exportHeader || null,
+    field.editable !== false ? 1 : 0,
+    field.disableManualInput ? 1 : 0,
     field.searchable ? 1 : 0,
     field.sortOrder || 100,
     field.locked ? 1 : 0,
@@ -78,6 +83,11 @@ function normalizeField(row) {
     showInTable: Boolean(row.show_in_table),
     showInForm: Boolean(row.show_in_form),
     showInImport: Boolean(row.show_in_import),
+    showInExport: row.show_in_export === undefined ? true : Boolean(row.show_in_export),
+    importHeader: row.import_header || '',
+    exportHeader: row.export_header || '',
+    editable: row.is_editable === undefined ? true : Boolean(row.is_editable),
+    disableManualInput: Boolean(row.disable_manual_input),
     searchable: Boolean(row.is_searchable),
     sortOrder: row.sort_order,
     locked: Boolean(row.is_locked),
@@ -182,11 +192,16 @@ async function upsertField(moduleId, field) {
       show_in_table,
       show_in_form,
       show_in_import,
+      show_in_export,
+      import_header,
+      export_header,
+      is_editable,
+      disable_manual_input,
       is_searchable,
       sort_order,
       is_locked,
       is_archived
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE field_key = field_key`,
     toDbField(moduleId, field)
   );
@@ -294,11 +309,16 @@ async function createCustomField(moduleId, field) {
       show_in_table,
       show_in_form,
       show_in_import,
+      show_in_export,
+      import_header,
+      export_header,
+      is_editable,
+      disable_manual_input,
       is_searchable,
       sort_order,
       is_locked,
       is_archived
-    ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
+    ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
     [
       moduleId,
       field.fieldKey,
@@ -319,6 +339,11 @@ async function createCustomField(moduleId, field) {
       field.showInTable ? 1 : 0,
       field.showInForm ? 1 : 0,
       field.showInImport ? 1 : 0,
+      field.showInExport !== false ? 1 : 0,
+      field.importHeader || null,
+      field.exportHeader || null,
+      field.editable !== false ? 1 : 0,
+      field.disableManualInput ? 1 : 0,
       field.searchable ? 1 : 0,
       field.sortOrder || 100
     ]
@@ -407,6 +432,11 @@ async function updateField(moduleKey, fieldKey, updates) {
     showInTable: 'show_in_table',
     showInForm: 'show_in_form',
     showInImport: 'show_in_import',
+    showInExport: 'show_in_export',
+    importHeader: 'import_header',
+    exportHeader: 'export_header',
+    editable: 'is_editable',
+    disableManualInput: 'disable_manual_input',
     searchable: 'is_searchable',
     sortOrder: 'sort_order'
   };

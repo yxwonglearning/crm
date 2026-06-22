@@ -3,6 +3,7 @@ const { z } = require('zod');
 const { asyncHandler } = require('../../shared/errors');
 const { validate } = require('../../shared/validation');
 const { requireAuth } = require('../auth/auth.middleware');
+const permissions = require('../permissions/permissions.service');
 const service = require('./customers.service');
 
 const customerRoutes = express.Router();
@@ -24,32 +25,37 @@ const deleteCustomersSchema = z.object({
 
 customerRoutes.use(requireAuth);
 
-customerRoutes.get('/config', asyncHandler(async (_req, res) => {
-  res.json(await service.customerFieldConfig());
+customerRoutes.get('/config', asyncHandler(async (req, res) => {
+  await permissions.assertModuleActionAllowed('customers', req.user, 'view');
+  res.json(await service.customerFieldConfig(req.user));
 }));
 
 customerRoutes.get('/', asyncHandler(async (req, res) => {
+  await permissions.assertModuleActionAllowed('customers', req.user, 'view');
   const filters = {
     search: req.query.search || '',
     status: req.query.status || ''
   };
-  res.json({ customers: await service.listCustomers(filters) });
+  res.json({ customers: await service.listCustomers(filters, req.user) });
 }));
 
 customerRoutes.post('/', asyncHandler(async (req, res) => {
+  await permissions.assertModuleActionAllowed('customers', req.user, 'create');
   const input = validate(customerSchema, req.body);
-  const customer = await service.createCustomer(input, req.user.id);
+  const customer = await service.createCustomer(input, req.user);
   res.status(201).json({ customer });
 }));
 
 customerRoutes.put('/:id', asyncHandler(async (req, res) => {
+  await permissions.assertModuleActionAllowed('customers', req.user, 'edit');
   const id = Number(req.params.id);
   const input = validate(customerSchema, req.body);
-  const customer = await service.updateCustomer(id, input, req.user.id);
+  const customer = await service.updateCustomer(id, input, req.user);
   res.json({ customer });
 }));
 
 customerRoutes.delete('/', asyncHandler(async (req, res) => {
+  await permissions.assertModuleActionAllowed('customers', req.user, 'delete');
   const input = validate(deleteCustomersSchema, req.body);
   const deletedCount = await service.deleteCustomers(input.ids);
   res.json({ deletedCount });

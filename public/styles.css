@@ -926,6 +926,48 @@ td {
   width: min(100%, 980px);
 }
 
+.browser-lookup-modal-card {
+  width: min(100%, 860px);
+}
+
+.browser-field-control {
+  display: grid;
+  grid-template-columns: auto minmax(100px, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.browser-field-control .browser-field-button {
+  width: auto;
+}
+
+.browser-field-display {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #f8fafc;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-lookup-search {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.browser-lookup-table-wrap {
+  min-height: 260px;
+}
+
 .narrow-modal {
   width: min(100%, 460px);
 }
@@ -940,6 +982,10 @@ td {
 
 .field-properties-modal-card {
   width: min(100%, 820px);
+}
+
+.import-export-mapping-modal-card {
+  width: min(100%, 980px);
 }
 
 .drawer-backdrop {
@@ -1869,6 +1915,197 @@ td {
 .field-properties-table th:nth-child(n + 3),
 .field-properties-table td:nth-child(n + 3) {
   text-align: center;
+}
+
+.import-export-mapping-wrap {
+  min-height: 420px;
+}
+
+.import-export-mapping-table {
+  min-width: 920px;
+}
+
+.import-export-mapping-table th,
+.import-export-mapping-table td {
+  white-space: nowrap;
+}
+
+.import-export-mapping-table th:nth-child(2),
+.import-export-mapping-table td:nth-child(2),
+.import-export-mapping-table th:nth-child(4),
+.import-export-mapping-table td:nth-child(4) {
+  text-align: center;
+  width: 92px;
+}
+
+.import-export-mapping-table input[type="text"] {
+  min-width: 220px;
+}
+
+.import-export-mapping-table small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.permissions-table-wrap {
+  min-height: 420px;
+}
+
+.permissions-workspace {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.permissions-panel {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.permissions-panel-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.permissions-panel-heading small {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.permissions-table {
+  min-width: 980px;
+}
+
+.permissions-table th,
+.permissions-table td {
+  vertical-align: top;
+}
+
+.field-permissions-table-wrap {
+  min-height: 460px;
+}
+
+.field-permissions-table {
+  min-width: 1680px;
+}
+
+.field-permissions-table td:first-child {
+  min-width: 220px;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: white;
+  box-shadow: 1px 0 0 var(--line);
+}
+
+.field-permissions-table th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  box-shadow: 1px 0 0 var(--line);
+}
+
+.field-permissions-table td:first-child strong,
+.field-permissions-table td:first-child small {
+  display: block;
+}
+
+.field-permissions-table td:first-child small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.field-permission-cell {
+  display: grid;
+  gap: 8px;
+  min-width: 250px;
+}
+
+.field-permission-cell .permission-picker {
+  min-width: 0;
+}
+
+.field-permission-cell .permission-check-list {
+  max-height: 110px;
+}
+
+.permission-picker {
+  display: grid;
+  gap: 8px;
+  min-width: 260px;
+}
+
+.permission-picker-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.permission-picker-toolbar input {
+  padding: 7px 9px;
+}
+
+.permission-picker-toolbar span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.permission-check-list {
+  display: grid;
+  gap: 4px;
+  max-height: 150px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.permission-check {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 6px;
+}
+
+.permission-check:hover {
+  background: #f3f7fb;
+}
+
+.permission-check input {
+  margin-top: 2px;
+}
+
+.permission-check span {
+  display: grid;
+  gap: 2px;
+}
+
+.permission-check strong {
+  font-size: 13px;
+}
+
+.permission-check small {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.permission-empty {
+  margin: 0;
+  padding: 8px;
 }
 
 .formula-builder-topbar {

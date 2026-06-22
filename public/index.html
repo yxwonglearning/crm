@@ -70,6 +70,7 @@
             <div class="table-actions">
               <button type="button" id="addCustomerButton">Add</button>
               <button type="button" class="secondary" id="openImportButton">Import</button>
+              <button type="button" class="secondary" id="exportCustomersButton">Export</button>
               <button type="button" class="danger-button" id="deleteCustomersButton" disabled>Delete</button>
             </div>
             <div class="table-wrap">
@@ -126,7 +127,7 @@
                   <button type="button" class="icon-button" id="closeImportModal" aria-label="Close">x</button>
                 </div>
               </div>
-              <p class="muted">Download the fixed Excel template, fill in the customer information, then upload it here.</p>
+              <p class="muted">Download the mapped Excel template, fill in the customer information, then upload it here.</p>
               <a class="inline-link" href="/api/imports/customers/template" id="templateLink">Download Customer Import Template</a>
               <label>
                 Excel file
@@ -178,6 +179,28 @@
             </form>
           </div>
         </section>
+
+        <div id="browserLookupModal" class="modal-backdrop" hidden>
+          <div class="panel modal-card browser-lookup-modal-card">
+            <div class="modal-header">
+              <h2 id="browserLookupTitle">Lookup</h2>
+              <div class="modal-title-actions">
+                <button type="button" class="icon-button fullscreen-button" data-modal-fullscreen aria-label="Enlarge to full screen" aria-pressed="false" title="Enlarge to full screen"></button>
+                <button type="button" class="icon-button" id="closeBrowserLookupModal" aria-label="Close">x</button>
+              </div>
+            </div>
+            <div class="browser-lookup-search">
+              <input id="browserLookupSearch" type="search" placeholder="Search">
+              <button type="button" id="browserLookupSearchButton">Search</button>
+            </div>
+            <div class="table-wrap browser-lookup-table-wrap">
+              <table class="config-table">
+                <thead id="browserLookupHead"></thead>
+                <tbody id="browserLookupRows"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
 
         <section id="sysadminView" class="view" hidden>
           <header class="toolbar">
@@ -252,6 +275,7 @@
                   <button type="button" id="addFieldButton">Add Field</button>
                   <button type="button" class="secondary" id="batchAddFieldsButton">Batch Edit</button>
                   <button type="button" class="secondary" id="fieldPropertiesButton">Field Properties</button>
+                  <button type="button" class="secondary" id="importExportMappingButton">Import/Export Mapping</button>
                 </div>
               </div>
 
@@ -294,18 +318,18 @@
               <div class="browser-button-workspace">
                 <aside class="panel browser-source-panel">
                   <div class="browser-source-heading">
-                    <strong>Sources</strong>
-                    <small>Module / table</small>
+                    <strong>Modules</strong>
+                    <small>Module</small>
                   </div>
-                  <input id="browserSourceSearch" type="search" placeholder="Search module or table">
+                  <input id="browserSourceSearch" type="search" placeholder="Search module">
                   <div id="browserSourceRows" class="browser-source-list"></div>
                 </aside>
                 <div class="browser-button-main">
                   <div class="panel browser-button-list-panel">
                     <div class="browser-button-toolbar">
                       <div>
-                        <strong id="activeBrowserSourceTitle">Select a source</strong>
-                        <small id="activeBrowserSourceMeta">Choose a module/table to manage its browser buttons.</small>
+                        <strong id="activeBrowserSourceTitle">Select a module</strong>
+                        <small id="activeBrowserSourceMeta">Choose a module to manage its browser buttons.</small>
                       </div>
                       <button type="button" id="newBrowserButton" disabled>New Browser Button</button>
                     </div>
@@ -331,8 +355,8 @@
                     <input name="sourceTable" type="hidden">
                     <div class="field-config-grid">
                       <label>
-                        <span>Source</span>
-                        <input name="sourcePreview" readonly>
+                        <span>Source Table</span>
+                        <select name="sourcePreview"></select>
                       </label>
                       <label>
                         <span>Name</span>
@@ -409,11 +433,54 @@
                   <h2>Permissions</h2>
                   <p>Control who can view, create, edit, delete, import, export, and configure each module.</p>
                 </div>
-                <span class="status-pill">Platform</span>
+                <div class="toolbar-actions">
+                  <select id="permissionModuleSelect" aria-label="Permission module">
+                    <option value="customers">Customers</option>
+                    <option value="users">Users</option>
+                  </select>
+                  <button type="button" id="savePermissionsButton">Save Permissions</button>
+                </div>
               </div>
-              <div class="empty-state">
-                <h3>Permission Builder Planned</h3>
-                <p>Role and module-level permissions will be added before custom modules become broadly editable.</p>
+              <div class="permissions-workspace">
+                <div class="permissions-panel">
+                  <div class="permissions-panel-heading">
+                    <strong>Module Actions</strong>
+                    <small>Applies to the whole module.</small>
+                  </div>
+                  <div class="table-wrap permissions-table-wrap">
+                    <table class="config-table permissions-table">
+                      <thead>
+                        <tr>
+                          <th>Module Action</th>
+                          <th>Roles</th>
+                          <th>Specific Users</th>
+                        </tr>
+                      </thead>
+                      <tbody id="permissionRows"></tbody>
+                    </table>
+                  </div>
+                </div>
+                <div class="permissions-panel">
+                  <div class="permissions-panel-heading">
+                    <strong>Field Actions</strong>
+                    <small>Controls each field for view, create, edit, import, and export.</small>
+                  </div>
+                  <div class="table-wrap permissions-table-wrap field-permissions-table-wrap">
+                    <table class="config-table permissions-table field-permissions-table">
+                      <thead>
+                        <tr>
+                          <th>Field</th>
+                          <th>View</th>
+                          <th>Create</th>
+                          <th>Edit</th>
+                          <th>Import</th>
+                          <th>Export</th>
+                        </tr>
+                      </thead>
+                      <tbody id="fieldPermissionRows"></tbody>
+                    </table>
+                  </div>
+                </div>
               </div>
             </section>
           </div>
@@ -589,6 +656,36 @@
               <div class="form-actions end-actions">
                 <button type="submit" id="saveFieldPropertiesButton">Save</button>
                 <button type="button" class="secondary" id="cancelFieldPropertiesButton">Cancel</button>
+              </div>
+            </form>
+          </div>
+
+          <div id="importExportMappingModal" class="modal-backdrop" hidden>
+            <form id="importExportMappingForm" class="panel modal-card import-export-mapping-modal-card">
+              <div class="modal-header">
+                <h2>Import/Export Mapping</h2>
+                <div class="modal-title-actions">
+                  <button type="button" class="icon-button fullscreen-button" data-modal-fullscreen aria-label="Enlarge to full screen" aria-pressed="false" title="Enlarge to full screen"></button>
+                  <button type="button" class="icon-button" id="closeImportExportMappingModal" aria-label="Close">x</button>
+                </div>
+              </div>
+              <div class="table-wrap import-export-mapping-wrap">
+                <table class="import-export-mapping-table">
+                  <thead>
+                    <tr>
+                      <th>Field</th>
+                      <th>Import</th>
+                      <th>Import Header</th>
+                      <th>Export</th>
+                      <th>Export Header</th>
+                    </tr>
+                  </thead>
+                  <tbody id="importExportMappingRows"></tbody>
+                </table>
+              </div>
+              <div class="form-actions end-actions">
+                <button type="submit" id="saveImportExportMappingButton">Save</button>
+                <button type="button" class="secondary" id="cancelImportExportMappingButton">Cancel</button>
               </div>
             </form>
           </div>

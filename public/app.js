@@ -5,9 +5,13 @@ const state = {
   users: [],
   customers: [],
   customerFields: [],
+  customerPermissions: {},
   userFields: [],
   adminModules: [],
   browserButtons: [],
+  permissionMatrix: null,
+  fieldPermissionMatrix: null,
+  activePermissionModule: 'customers',
   activeBrowserSource: '',
   browserSourceSearch: '',
   formDesignLayouts: {},
@@ -35,6 +39,7 @@ const state = {
   dragOverFormDesignDetailTable: '',
   activeCustomerFormType: 'add',
   activeUserFormType: 'add',
+  activeBrowserLookup: null,
   selectedCustomerIds: new Set()
 };
 
@@ -128,6 +133,67 @@ function uniqueFieldKeyForLabel(label, tableKey = 'main', excludeRowId = '') {
 
 function renderReadonlyCheckbox(checked) {
   return `<input class="readonly-checkbox" type="checkbox" ${checked ? 'checked' : ''} disabled aria-label="${checked ? 'Checked' : 'Unchecked'}">`;
+}
+
+function browserButtonForField(field) {
+  const browserKey = field.lookupConfig?.browserButtonKey;
+  return browserKey ? state.browserButtons.find((browser) => browser.browserKey === browserKey && browser.enabled) : null;
+}
+
+function fieldInputState(field) {
+  const locked = field.editable === false;
+  const manualDisabled = field.disableManualInput && field.type !== 'browser_button';
+  return {
+    locked,
+    manualDisabled,
+    readonly: locked || manualDisabled || Boolean(field.formulaEnabled && field.formulaExpression),
+    disabled: locked || manualDisabled
+  };
+}
+
+function hiddenPreservedInput(binding, value) {
+  const detailMatch = binding.match(/data-detail-field="([^"]+)"/);
+  const nameMatch = binding.match(/name="([^"]+)"/);
+  if (detailMatch) {
+    return `<input type="hidden" data-detail-field="${detailMatch[1]}" data-preserved-field="true" value="${escapeHtml(value)}">`;
+  }
+  if (nameMatch) {
+    return `<input type="hidden" name="${nameMatch[1]}" data-preserved-field="true" value="${escapeHtml(value)}">`;
+  }
+  return '';
+}
+
+function fieldControlStateAttributes(field, value, binding, options = {}) {
+  const state = fieldInputState(field);
+  const attrs = [];
+  const preserve = state.disabled ? hiddenPreservedInput(binding, value) : '';
+  if (state.disabled && options.disableInsteadOfReadonly) {
+    attrs.push('disabled');
+  } else if (state.readonly && options.readonly !== false) {
+    attrs.push('readonly');
+  }
+  if (field.formulaEnabled && field.formulaExpression) {
+    attrs.push('data-formula-field="true"');
+  }
+  return { attrs: attrs.join(' '), preserve, state };
+}
+
+function renderBrowserFieldInput(field, value = '', { detailField = false } = {}) {
+  const browser = browserButtonForField(field);
+  const inputState = fieldInputState(field);
+  const binding = detailField
+    ? `data-detail-field="${escapeHtml(field.fieldKey)}"`
+    : `name="${escapeHtml(field.fieldKey)}"`;
+  const target = detailField ? 'detail' : 'main';
+  const disabled = browser && !inputState.locked ? '' : 'disabled';
+  const buttonText = browser ? 'Browse' : 'Select Browser Button';
+  return `
+    <div class="browser-field-control">
+      <input ${binding} type="hidden" value="${escapeHtml(value)}">
+      <button type="button" class="secondary browser-field-button" ${disabled} data-open-browser-lookup="${escapeHtml(browser?.browserKey || '')}" data-browser-target="${target}" data-browser-field="${escapeHtml(field.fieldKey)}">${buttonText}</button>
+      <span class="browser-field-display">${escapeHtml(value || '')}</span>
+    </div>
+  `;
 }
 
 function formulaFields() {
@@ -705,7 +771,7 @@ function renderFormDesignPreviewControl(field) {
     return `<input type="checkbox" disabled>`;
   }
   if (field.type === 'browser_button') {
-    return `<button type="button" class="secondary browser-field-button" disabled>Browse</button>`;
+    return renderBrowserFieldInput(field, value, { detailField: options.detailField });
   }
   if (field.type === 'attach_document') {
     return `<input type="file" disabled>`;
@@ -1225,9 +1291,9 @@ function renderFieldProperties(fieldKey = '') {
         </td>
         <td>${escapeHtml(fieldTypeLabel(field.type))}</td>
         <td>${propertyCheckbox('showInForm', field.showInForm)}</td>
-        <td>${propertyCheckbox('editable', true)}</td>
+        <td>${propertyCheckbox('editable', field.editable !== false)}</td>
         <td>${propertyCheckbox('required', field.required)}</td>
-        <td>${propertyCheckbox('disableManualInput', false)}</td>
+        <td>${propertyCheckbox('disableManualInput', Boolean(field.disableManualInput))}</td>
       </tr>
     `;
   }).join('');
@@ -1261,6 +1327,55 @@ function closeFieldPropertiesModal() {
   if ($('#formDesignDrawer')?.hidden !== false) {
     document.body.classList.remove('modal-open');
   }
+}
+
+function mappingHeaderPlaceholder(field, direction) {
+  const systemHeaders = {
+    companyName: 'Company Name',
+    contactPerson: 'Contact Person',
+    email: 'Email',
+    countryId: 'Country',
+    phoneNumber: 'Contact Number',
+    status: 'Status',
+    notes: 'Notes',
+    ownerUserId: 'Owner'
+  };
+  return systemHeaders[field.fieldKey] || field.label || direction;
+}
+
+function renderImportExportMapping() {
+  const body = $('#importExportMappingRows');
+  if (!body) return;
+  body.innerHTML = activeConfigFields().map((field) => `
+    <tr data-mapping-field="${escapeHtml(field.fieldKey)}">
+      <td>
+        <strong>${escapeHtml(field.label)}</strong>
+        <small>${escapeHtml(field.fieldKey)}</small>
+      </td>
+      <td>${propertyCheckbox('showInImport', field.showInImport)}</td>
+      <td>
+        <input name="importHeader" type="text" value="${escapeHtml(field.importHeader || '')}" placeholder="${escapeHtml(mappingHeaderPlaceholder(field, 'Import Header'))}">
+      </td>
+      <td>${propertyCheckbox('showInExport', field.showInExport !== false)}</td>
+      <td>
+        <input name="exportHeader" type="text" value="${escapeHtml(field.exportHeader || '')}" placeholder="${escapeHtml(mappingHeaderPlaceholder(field, 'Export Header'))}">
+      </td>
+    </tr>
+  `).join('');
+}
+
+function openImportExportMappingModal() {
+  renderImportExportMapping();
+  $('#importExportMappingModal').hidden = false;
+  document.body.classList.add('modal-open');
+}
+
+function closeImportExportMappingModal() {
+  const modal = $('#importExportMappingModal');
+  if (!modal) return;
+  resetModalFullscreen(modal);
+  modal.hidden = true;
+  document.body.classList.remove('modal-open');
 }
 
 function renderFormulaTargets(selectedFieldKey = '') {
@@ -1512,6 +1627,13 @@ function checkedValues(container) {
     .filter(Boolean);
 }
 
+function selectedOptionValues(select) {
+  return Array.from(select?.selectedOptions || []).map((option) => option.value).filter(Boolean);
+}
+
+const permissionActions = ['view', 'create', 'edit', 'delete', 'import', 'export', 'configure'];
+const fieldPermissionActions = ['view', 'create', 'edit', 'import', 'export'];
+
 function browserFieldValue(field) {
   return field.dataKey || field.fieldKey;
 }
@@ -1565,27 +1687,34 @@ function browserTablesForModule(moduleKey) {
 }
 
 function browserCatalogSources() {
-  return browserCatalogModules().flatMap((module) => browserTablesForModule(module.key).map((tableName) => ({
-    key: browserSourceKey(module.key, tableName),
-    moduleKey: module.key,
-    moduleName: module.name,
-    tableName,
-    count: state.browserButtons.filter((browser) => browser.sourceModule === module.key && browser.sourceTable === tableName).length
-  })));
+  return browserCatalogModules().map((module) => {
+    const tables = browserTablesForModule(module.key);
+    return {
+      key: module.key,
+      moduleKey: module.key,
+      moduleName: module.name,
+      tables,
+      count: state.browserButtons.filter((browser) => browser.sourceModule === module.key).length
+    };
+  });
 }
 
 function activeBrowserSource() {
   if (!state.activeBrowserSource) return null;
-  const { moduleKey, tableName } = parseBrowserSourceKey(state.activeBrowserSource);
-  return browserCatalogSources().find((source) => source.moduleKey === moduleKey && source.tableName === tableName) || null;
+  const { moduleKey } = parseBrowserSourceKey(state.activeBrowserSource);
+  const activeModuleKey = moduleKey || state.activeBrowserSource;
+  return browserCatalogSources().find((source) => source.moduleKey === activeModuleKey) || null;
 }
 
 function browserButtonsForActiveSource() {
   const source = activeBrowserSource();
   if (!source) return [];
-  return state.browserButtons.filter((browser) => (
-    browser.sourceModule === source.moduleKey && browser.sourceTable === source.tableName
-  ));
+  return state.browserButtons
+    .filter((browser) => browser.sourceModule === source.moduleKey)
+    .sort((left, right) => (
+      left.sourceTable.localeCompare(right.sourceTable) ||
+      left.name.localeCompare(right.name)
+    ));
 }
 
 function renderBrowserSources() {
@@ -1596,18 +1725,19 @@ function renderBrowserSources() {
     !search ||
     source.moduleName.toLowerCase().includes(search) ||
     source.moduleKey.toLowerCase().includes(search) ||
-    source.tableName.toLowerCase().includes(search)
+    source.tables.some((tableName) => tableName.toLowerCase().includes(search))
   ));
+  const activeSource = activeBrowserSource();
 
   container.innerHTML = sources.map((source) => `
-    <button type="button" class="browser-source-button ${source.key === state.activeBrowserSource ? 'is-active' : ''}" data-browser-source="${escapeHtml(source.key)}">
+    <button type="button" class="browser-source-button ${source.key === activeSource?.key ? 'is-active' : ''}" data-browser-source="${escapeHtml(source.key)}">
       <span>
         <strong>${escapeHtml(source.moduleName)}</strong>
-        <small>${escapeHtml(source.moduleKey)} / ${escapeHtml(source.tableName)}</small>
+        <small>${escapeHtml(source.moduleKey)} &middot; ${source.tables.length} table${source.tables.length === 1 ? '' : 's'}</small>
       </span>
       <em>${source.count}</em>
     </button>
-  `).join('') || '<p class="muted browser-source-empty">No sources found.</p>';
+  `).join('') || '<p class="muted browser-source-empty">No modules found.</p>';
 }
 
 function renderBrowserSourceHeader() {
@@ -1617,13 +1747,13 @@ function renderBrowserSourceHeader() {
   const newButton = $('#newBrowserButton');
   if (!title || !meta || !newButton) return;
   if (!source) {
-    title.textContent = 'Select a source';
-    meta.textContent = 'Choose a module/table to manage its browser buttons.';
+    title.textContent = 'Select a module';
+    meta.textContent = 'Choose a module to manage its browser buttons.';
     newButton.disabled = true;
     return;
   }
-  title.textContent = `${source.moduleName} / ${source.tableName}`;
-  meta.textContent = `${source.count} browser button${source.count === 1 ? '' : 's'} configured for this source.`;
+  title.textContent = source.moduleName;
+  meta.textContent = `${source.count} browser button${source.count === 1 ? '' : 's'} configured across ${source.tables.length} table${source.tables.length === 1 ? '' : 's'}.`;
   newButton.disabled = false;
 }
 
@@ -1679,10 +1809,13 @@ function syncBrowserSourceSelectors({
   if (!form) return;
   const source = activeBrowserSource();
   const moduleKey = sourceModule || source?.moduleKey || form.elements.sourceModule.value || '';
-  const tableName = sourceTable || source?.tableName || form.elements.sourceTable.value || '';
+  const moduleTables = moduleKey ? browserTablesForModule(moduleKey) : [];
+  const selectedTable = sourceTable || form.elements.sourceTable.value || moduleTables[0] || moduleKey;
+  const tableName = moduleTables.includes(selectedTable) ? selectedTable : moduleTables[0] || selectedTable;
   form.elements.sourceModule.value = moduleKey;
   form.elements.sourceTable.value = tableName;
-  form.elements.sourcePreview.value = moduleKey && tableName ? `${moduleKey} / ${tableName}` : '';
+  form.elements.sourcePreview.innerHTML = renderSelectOptions(moduleTables, tableName, 'Select table');
+  form.elements.sourcePreview.disabled = !moduleKey || moduleTables.length <= 1;
 
   const fields = browserFieldsForSource(moduleKey, tableName);
   const currentValue = form.elements.valueField.value;
@@ -1718,6 +1851,7 @@ function clearBrowserButtonForm() {
   form.elements.editingBrowserKey.value = '';
   form.elements.browserKey.readOnly = false;
   form.elements.browserKey.value = '';
+  form.elements.sourcePreview.disabled = true;
   form.elements.enabled.checked = true;
   syncBrowserSourceSelectors();
   $('#saveBrowserButton').textContent = 'Save Browser';
@@ -1735,7 +1869,7 @@ function openNewBrowserButtonForm() {
   form.elements.enabled.checked = true;
   syncBrowserSourceSelectors({
     sourceModule: source.moduleKey,
-    sourceTable: source.tableName,
+    sourceTable: source.tables[0] || source.moduleKey,
     valueField: 'id'
   });
   $('#saveBrowserButton').textContent = 'Save Browser';
@@ -1744,7 +1878,7 @@ function openNewBrowserButtonForm() {
 function fillBrowserButtonForm(browser) {
   const form = $('#browserButtonForm');
   if (!form || !browser) return;
-  state.activeBrowserSource = browserSourceKey(browser.sourceModule, browser.sourceTable);
+  state.activeBrowserSource = browser.sourceModule;
   renderBrowserSources();
   renderBrowserSourceHeader();
   form.hidden = false;
@@ -1764,14 +1898,15 @@ function renderBrowserButtons() {
   renderBrowserSourceHeader();
   const source = activeBrowserSource();
   if (!source) {
-    body.innerHTML = '<tr><td colspan="6">Select a source to view its browser buttons.</td></tr>';
+    body.innerHTML = '<tr><td colspan="6">Select a module to view its browser buttons.</td></tr>';
     return;
   }
   body.innerHTML = browserButtonsForActiveSource().map((browser) => `
     <tr data-browser-key="${escapeHtml(browser.browserKey)}">
       <td>
         <strong>${escapeHtml(browser.name)}</strong>
-        <div class="muted">${escapeHtml(browser.browserKey)}${browser.system ? ' Â· system' : ''}</div>
+        <div class="muted">${escapeHtml(browser.sourceTable)}</div>
+        <div class="muted">${escapeHtml(browser.browserKey)}${browser.system ? ' &middot; system' : ''}</div>
       </td>
       <td>${escapeHtml(browser.valueField)}</td>
       <td>${escapeHtml(browser.displayField)}</td>
@@ -1782,7 +1917,7 @@ function renderBrowserButtons() {
         ${browser.system ? '<span class="muted">Preset</span>' : `<button type="button" class="link-button danger-link" data-delete-browser="${escapeHtml(browser.browserKey)}">Delete</button>`}
       </td>
     </tr>
-  `).join('') || '<tr><td colspan="6">No browser buttons configured for this source.</td></tr>';
+  `).join('') || '<tr><td colspan="6">No browser buttons configured for this module.</td></tr>';
 }
 
 async function refreshBrowserButtons() {
@@ -1795,6 +1930,98 @@ async function refreshBrowserButtons() {
   state.adminModules = modulePayload.modules || [];
   renderBrowserSources();
   renderBrowserButtons();
+}
+
+function closeBrowserLookupModal() {
+  const modal = $('#browserLookupModal');
+  if (!modal) return;
+  resetModalFullscreen(modal);
+  modal.hidden = true;
+  if ($$('.modal-backdrop:not([hidden])').length === 0) {
+    document.body.classList.remove('modal-open');
+  }
+  state.activeBrowserLookup = null;
+  $('#browserLookupSearch').value = '';
+  $('#browserLookupHead').innerHTML = '';
+  $('#browserLookupRows').innerHTML = '';
+}
+
+function browserLookupTargetInput() {
+  const lookup = state.activeBrowserLookup;
+  if (!lookup) return null;
+  if (lookup.target === 'detail') {
+    return Array.from(lookup.row?.querySelectorAll('[data-detail-field]') || [])
+      .find((input) => input.dataset.detailField === lookup.fieldKey) || null;
+  }
+  return lookup.form?.elements[lookup.fieldKey] || null;
+}
+
+function setBrowserLookupValue(result) {
+  const input = browserLookupTargetInput();
+  if (!input) return;
+  input.value = result.value ?? '';
+  const display = input.closest('.browser-field-control')?.querySelector('.browser-field-display');
+  if (display) {
+    display.textContent = result.display || result.value || '';
+  }
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+  closeBrowserLookupModal();
+}
+
+function renderBrowserLookupResults(payload) {
+  const browser = payload.browser;
+  const returnFields = browser.returnFields || [];
+  $('#browserLookupTitle').textContent = browser.name || 'Lookup';
+  $('#browserLookupHead').innerHTML = `
+    <tr>
+      <th>${escapeHtml(browser.displayField || 'Display')}</th>
+      ${returnFields.map((field) => `<th>${escapeHtml(field)}</th>`).join('')}
+      <th></th>
+    </tr>
+  `;
+  $('#browserLookupRows').innerHTML = (payload.rows || []).map((row) => `
+    <tr>
+      <td><strong>${escapeHtml(row.display ?? '')}</strong></td>
+      ${returnFields.map((field) => `<td>${escapeHtml(row.columns?.[field] ?? '')}</td>`).join('')}
+      <td>
+        <button type="button" class="link-button" data-select-browser-row="${escapeHtml(JSON.stringify({
+          value: row.value,
+          display: row.display
+        }))}">Select</button>
+      </td>
+    </tr>
+  `).join('') || `<tr><td colspan="${returnFields.length + 2}">No results found.</td></tr>`;
+}
+
+async function searchActiveBrowserLookup() {
+  const lookup = state.activeBrowserLookup;
+  if (!lookup?.browserKey) return;
+  const params = new URLSearchParams({ q: $('#browserLookupSearch').value.trim() });
+  $('#browserLookupRows').innerHTML = '<tr><td>Searching...</td></tr>';
+  const payload = await api(`/api/browser-buttons/${encodeURIComponent(lookup.browserKey)}/search?${params.toString()}`);
+  renderBrowserLookupResults(payload);
+}
+
+async function openBrowserLookup(button) {
+  const browserKey = button.dataset.openBrowserLookup;
+  if (!browserKey) return;
+  state.activeBrowserLookup = {
+    browserKey,
+    fieldKey: button.dataset.browserField,
+    target: button.dataset.browserTarget,
+    form: button.closest('form'),
+    row: button.closest('[data-detail-row]')
+  };
+  $('#browserLookupModal').hidden = false;
+  document.body.classList.add('modal-open');
+  $('#browserLookupSearch').focus();
+  try {
+    await searchActiveBrowserLookup();
+  } catch (error) {
+    toast(titleCaseMessage(error.message), 'error');
+    closeBrowserLookupModal();
+  }
 }
 
 function fieldValidationRulesFromForm(form) {
@@ -1835,6 +2062,11 @@ function showAdminSection(id) {
   $$('.admin-section-button').forEach((button) => {
     button.classList.toggle('is-active', button.dataset.adminSection === id);
   });
+  if (id === 'adminPermissionsSection' && state.user?.role === 'admin') {
+    loadPermissionMatrix(state.activePermissionModule).catch((error) => {
+      toast(titleCaseMessage(error.message), 'error');
+    });
+  }
 }
 
 function toggleAdminMenu() {
@@ -1910,11 +2142,13 @@ function fieldValue(customer, field) {
 }
 
 function tableFields() {
-  return state.customerFields.filter((field) => field.showInTable);
+  return state.customerFields.filter((field) => field.showInTable && field.permissions?.view !== false);
 }
 
 function formFields() {
-  return customerPublishedFormFields(state.activeCustomerFormType);
+  const action = state.activeCustomerFormType === 'edit' ? 'edit' : 'create';
+  return customerPublishedFormFields(state.activeCustomerFormType)
+    .filter((field) => field.permissions?.[action] !== false);
 }
 
 function mainFormFields() {
@@ -2007,26 +2241,28 @@ function renderCustomerFieldInput(field, value = '', options = {}) {
   const binding = options.detailField
     ? `data-detail-field="${escapeHtml(field.fieldKey)}"`
     : `name="${escapeHtml(field.fieldKey)}"`;
-  const formulaReadonly = field.formulaEnabled && field.formulaExpression && !options.detailField
-    ? 'readonly data-formula-field="true"'
-    : '';
+  const controlState = fieldControlStateAttributes(field, value, binding, {
+    readonly: field.type !== 'checkbox'
+  });
 
   if (field.type === 'textarea') {
-    return `<textarea ${binding} rows="4" ${required} ${validation} ${formulaReadonly}>${escapeHtml(value)}</textarea>`;
+    return `${controlState.preserve}<textarea ${binding} rows="4" ${required} ${validation} ${controlState.attrs}>${escapeHtml(value)}</textarea>`;
   }
 
   if (field.type === 'select' || field.type === 'dropdownbox') {
     const options = (field.options || []).map((option) => (
       `<option value="${escapeHtml(option)}" ${String(value) === String(option) ? 'selected' : ''}>${escapeHtml(titleCaseMessage(option))}</option>`
     )).join('');
-    return `<select ${binding} ${required}>${options}</select>`;
+    const selectState = fieldControlStateAttributes(field, value, binding, { disableInsteadOfReadonly: true });
+    return `${selectState.preserve}<select ${binding} ${required} ${selectState.attrs}>${options}</select>`;
   }
 
   if (field.type === 'country') {
     const options = state.countries.map((country) => (
       `<option value="${country.id}" ${Number(value) === Number(country.id) ? 'selected' : ''}>${escapeHtml(country.name)}</option>`
     )).join('');
-    return `<select ${binding} ${required}>${options}</select>`;
+    const selectState = fieldControlStateAttributes(field, value, binding, { disableInsteadOfReadonly: true });
+    return `${selectState.preserve}<select ${binding} ${required} ${selectState.attrs}>${options}</select>`;
   }
 
   if (field.type === 'owner') {
@@ -2034,15 +2270,17 @@ function renderCustomerFieldInput(field, value = '', options = {}) {
       .filter((user) => user.status === 'active')
       .map((user) => `<option value="${user.id}" ${Number(value) === Number(user.id) ? 'selected' : ''}>${escapeHtml(user.name)}</option>`)
       .join('');
-    return `<select ${binding}>${options}</select>`;
+    const selectState = fieldControlStateAttributes(field, value, binding, { disableInsteadOfReadonly: true });
+    return `${selectState.preserve}<select ${binding} ${selectState.attrs}>${options}</select>`;
   }
 
   if (field.type === 'checkbox') {
-    return `<input ${binding} type="checkbox" value="true" ${value ? 'checked' : ''}>`;
+    const checkboxState = fieldControlStateAttributes(field, value ? 'true' : '', binding, { disableInsteadOfReadonly: true });
+    return `${checkboxState.preserve}<input ${binding} type="checkbox" value="true" ${value ? 'checked' : ''} ${checkboxState.attrs}>`;
   }
 
   if (field.type === 'browser_button') {
-    return `<button type="button" class="secondary browser-field-button" disabled>Browse</button>`;
+    return renderBrowserFieldInput(field, value);
   }
 
   if (field.type === 'attach_document') {
@@ -2060,7 +2298,7 @@ function renderCustomerFieldInput(field, value = '', options = {}) {
     decimals: 'number'
   }[field.type] || field.type;
   const step = field.type === 'int' ? 'step="1"' : field.type === 'decimals' ? 'step="any"' : '';
-  return `<input ${binding} type="${escapeHtml(inputType)}" value="${escapeHtml(value)}" ${step} ${required} ${validation} ${formulaReadonly}>`;
+  return `${controlState.preserve}<input ${binding} type="${escapeHtml(inputType)}" value="${escapeHtml(value)}" ${step} ${required} ${validation} ${controlState.attrs}>`;
 }
 
 function valueForForm(customer, field) {
@@ -2210,6 +2448,7 @@ function syncAllDetailTableControls() {
 function detailRowValues(row) {
   const values = {};
   row.querySelectorAll('[data-detail-field]').forEach((input) => {
+    if (input.disabled) return;
     values[input.dataset.detailField] = input.type === 'checkbox' ? input.checked : input.value;
   });
   return values;
@@ -2218,6 +2457,7 @@ function detailRowValues(row) {
 function clearDetailRow(row) {
   row.querySelector('[data-select-detail-row]').checked = false;
   row.querySelectorAll('[data-detail-field]').forEach((input) => {
+    if (input.disabled || input.readOnly || input.dataset.preservedField) return;
     if (input.type === 'checkbox') {
       input.checked = false;
     } else {
@@ -2322,7 +2562,7 @@ function renderCustomers() {
         <input type="checkbox" data-select-customer="${customer.id}" ${state.selectedCustomerIds.has(customer.id) ? 'checked' : ''} aria-label="Select ${escapeHtml(customer.company_name)}">
       </td>
       ${fields.map((field) => renderCustomerCell(customer, field)).join('')}
-      <td><button class="link-button" data-edit-customer="${customer.id}">Edit</button></td>
+      <td>${state.customerPermissions.edit ? `<button class="link-button" data-edit-customer="${customer.id}">Edit</button>` : ''}</td>
     </tr>
   `).join('');
 
@@ -2344,6 +2584,7 @@ function syncCustomerSelectionControls() {
   selectAll.checked = visibleIds.length > 0 && selectedVisibleCount === visibleIds.length;
   selectAll.indeterminate = selectedVisibleCount > 0 && selectedVisibleCount < visibleIds.length;
   deleteButton.disabled = state.selectedCustomerIds.size === 0;
+  deleteButton.hidden = state.customerPermissions.delete === false;
   deleteButton.textContent = state.selectedCustomerIds.size
     ? `Delete Selected (${state.selectedCustomerIds.size})`
     : 'Delete Selected';
@@ -2378,20 +2619,24 @@ function renderGenericFieldInput(field, value = '', editing = false) {
   const required = field.required && !(field.fieldKey === 'password' && editing) ? 'required' : '';
   const name = `name="${escapeHtml(field.fieldKey)}"`;
   const autocomplete = field.fieldKey === 'password' ? 'autocomplete="new-password"' : '';
-  const formulaReadonly = field.formulaEnabled && field.formulaExpression ? 'readonly data-formula-field="true"' : '';
+  const controlState = fieldControlStateAttributes(field, value, name, {
+    readonly: field.type !== 'checkbox'
+  });
   const validation = validationAttributes(field);
 
   if (field.type === 'textarea') {
-    return `<textarea ${name} rows="4" ${required} ${validation} ${formulaReadonly}>${escapeHtml(value)}</textarea>`;
+    return `${controlState.preserve}<textarea ${name} rows="4" ${required} ${validation} ${controlState.attrs}>${escapeHtml(value)}</textarea>`;
   }
   if (field.type === 'select' || field.type === 'dropdownbox') {
     const options = (field.options || []).map((option) => (
       `<option value="${escapeHtml(option)}" ${String(value) === String(option) ? 'selected' : ''}>${escapeHtml(titleCaseMessage(option))}</option>`
     )).join('');
-    return `<select ${name} ${required}>${options}</select>`;
+    const selectState = fieldControlStateAttributes(field, value, name, { disableInsteadOfReadonly: true });
+    return `${selectState.preserve}<select ${name} ${required} ${selectState.attrs}>${options}</select>`;
   }
   if (field.type === 'checkbox') {
-    return `<input ${name} type="checkbox" value="true" ${value ? 'checked' : ''}>`;
+    const checkboxState = fieldControlStateAttributes(field, value ? 'true' : '', name, { disableInsteadOfReadonly: true });
+    return `${checkboxState.preserve}<input ${name} type="checkbox" value="true" ${value ? 'checked' : ''} ${checkboxState.attrs}>`;
   }
 
   if (field.type === 'browser_button') {
@@ -2414,7 +2659,7 @@ function renderGenericFieldInput(field, value = '', editing = false) {
   }[field.type] || field.type;
   const minlength = field.fieldKey === 'password' ? 'minlength="8"' : '';
   const step = field.type === 'int' ? 'step="1"' : field.type === 'decimals' ? 'step="any"' : '';
-  return `<input ${name} type="${escapeHtml(inputType)}" value="${escapeHtml(value)}" ${step} ${minlength} ${required} ${autocomplete} ${validation} ${formulaReadonly}>`;
+  return `${controlState.preserve}<input ${name} type="${escapeHtml(inputType)}" value="${escapeHtml(value)}" ${step} ${minlength} ${required} ${autocomplete} ${validation} ${controlState.attrs}>`;
 }
 
 function renderUserFormFields(user = null) {
@@ -2463,6 +2708,191 @@ function renderFieldConfig() {
   `).join('') || `<tr><td colspan="8">No fields found for ${escapeHtml(module?.name || 'this form')}.</td></tr>`;
   renderFormModuleList();
 }
+
+function permissionModuleName() {
+  return configModules.find((module) => module.key === state.activePermissionModule)?.name || titleCaseMessage(state.activePermissionModule);
+}
+
+function permissionActionLabel(action) {
+  return titleCaseMessage(action);
+}
+
+function permissionRoleItems() {
+  return (state.permissionMatrix?.roles || state.fieldPermissionMatrix?.roles || ['admin', 'manager', 'user'])
+    .map((role) => ({
+      value: role,
+      label: titleCaseMessage(role),
+      search: role
+    }));
+}
+
+function permissionUserItems() {
+  return state.users.map((user) => ({
+    value: String(user.id),
+    label: user.name,
+    meta: user.email,
+    search: `${user.name} ${user.email} ${user.role}`
+  }));
+}
+
+function renderPermissionPicker(kind, action, items, selectedValues = []) {
+  const selected = new Set((selectedValues || []).map(String));
+  const selectedCount = items.filter((item) => selected.has(String(item.value))).length;
+  return `
+    <div class="permission-picker" data-permission-picker="${escapeHtml(kind)}" data-permission-action="${escapeHtml(action)}">
+      <div class="permission-picker-toolbar">
+        <input type="search" data-permission-search placeholder="Search ${kind}" aria-label="Search ${kind} for ${escapeHtml(permissionActionLabel(action))}">
+        <span>${selectedCount}/${items.length}</span>
+      </div>
+      <div class="permission-check-list">
+        ${items.map((item) => `
+          <label class="permission-check" data-permission-option data-search="${escapeHtml(item.search || item.label)}">
+            <input type="checkbox" value="${escapeHtml(item.value)}" ${selected.has(String(item.value)) ? 'checked' : ''}>
+            <span>
+              <strong>${escapeHtml(item.label)}</strong>
+              ${item.meta ? `<small>${escapeHtml(item.meta)}</small>` : ''}
+            </span>
+          </label>
+        `).join('') || '<p class="muted permission-empty">No options found.</p>'}
+      </div>
+    </div>
+  `;
+}
+
+function renderFieldPermissionCell(field, action) {
+  return `
+    <div class="field-permission-cell" data-field-permission-action="${escapeHtml(action)}">
+      ${renderPermissionPicker('roles', action, permissionRoleItems(), field.permissions?.[action]?.roles)}
+      ${renderPermissionPicker('users', action, permissionUserItems(), field.permissions?.[action]?.users)}
+    </div>
+  `;
+}
+
+function renderPermissions() {
+  const body = $('#permissionRows');
+  if (!body) return;
+  const fieldBody = $('#fieldPermissionRows');
+  const selector = $('#permissionModuleSelect');
+  if (selector) selector.value = state.activePermissionModule;
+  const permissions = state.permissionMatrix?.permissions || {};
+
+  body.innerHTML = permissionActions.map((action) => `
+    <tr data-permission-action-row="${escapeHtml(action)}">
+      <td>
+        <strong>${escapeHtml(permissionActionLabel(action))}</strong>
+      </td>
+      <td>
+        ${renderPermissionPicker('roles', action, permissionRoleItems(), permissions[action]?.roles)}
+      </td>
+      <td>
+        ${renderPermissionPicker('users', action, permissionUserItems(), permissions[action]?.users)}
+      </td>
+    </tr>
+  `).join('');
+
+  if (!fieldBody) return;
+  const fields = state.fieldPermissionMatrix?.fields || [];
+  fieldBody.innerHTML = fields.map((field) => `
+    <tr data-field-permission-row="${escapeHtml(field.fieldKey)}">
+      <td>
+        <strong>${escapeHtml(field.label)}</strong>
+        <small>${escapeHtml(field.fieldKey)}${field.tableType === 'detail' && field.detailTableName ? ` / ${escapeHtml(field.detailTableName)}` : ''}</small>
+      </td>
+      ${fieldPermissionActions.map((action) => `<td>${renderFieldPermissionCell(field, action)}</td>`).join('')}
+    </tr>
+  `).join('') || '<tr><td colspan="6">No fields found for this module.</td></tr>';
+}
+
+function updatePermissionPickerCount(picker) {
+  const count = picker.querySelectorAll('input[type="checkbox"]:checked').length;
+  const total = picker.querySelectorAll('input[type="checkbox"]').length;
+  const badge = picker.querySelector('.permission-picker-toolbar span');
+  if (badge) badge.textContent = `${count}/${total}`;
+}
+
+function filterPermissionPicker(picker) {
+  const query = picker.querySelector('[data-permission-search]')?.value.trim().toLowerCase() || '';
+  picker.querySelectorAll('[data-permission-option]').forEach((option) => {
+    option.hidden = Boolean(query) && !String(option.dataset.search || '').toLowerCase().includes(query);
+  });
+}
+
+function collectPermissionMatrix() {
+  const permissions = {};
+  $$('#permissionRows [data-permission-action-row]').forEach((row) => {
+    const action = row.dataset.permissionActionRow;
+    permissions[action] = {
+      roles: checkedValues(row.querySelector('[data-permission-picker="roles"]')),
+      users: checkedValues(row.querySelector('[data-permission-picker="users"]'))
+    };
+  });
+  return permissions;
+}
+
+function collectFieldPermissionMatrix() {
+  const fields = [];
+  $$('#fieldPermissionRows [data-field-permission-row]').forEach((row) => {
+    const permissions = {};
+    row.querySelectorAll('[data-field-permission-action]').forEach((cell) => {
+      const action = cell.dataset.fieldPermissionAction;
+      permissions[action] = {
+        roles: checkedValues(cell.querySelector('[data-permission-picker="roles"]')),
+        users: checkedValues(cell.querySelector('[data-permission-picker="users"]'))
+      };
+    });
+    fields.push({
+      fieldKey: row.dataset.fieldPermissionRow,
+      permissions
+    });
+  });
+  return fields;
+}
+
+async function loadPermissionMatrix(moduleKey = state.activePermissionModule) {
+  if (state.user?.role !== 'admin') return;
+  state.activePermissionModule = moduleKey;
+  const [modulePayload, fieldPayload] = await Promise.all([
+    api(`/api/sysadmin/modules/${moduleKey}/permissions`),
+    api(`/api/sysadmin/modules/${moduleKey}/field-permissions`)
+  ]);
+  state.permissionMatrix = modulePayload;
+  state.fieldPermissionMatrix = fieldPayload;
+  renderPermissions();
+}
+
+async function savePermissionMatrix() {
+  const button = $('#savePermissionsButton');
+  if (!button) return;
+  button.disabled = true;
+  button.textContent = 'Saving...';
+  try {
+    const [modulePayload, fieldPayload] = await Promise.all([
+      api(`/api/sysadmin/modules/${state.activePermissionModule}/permissions`, {
+        method: 'PUT',
+        body: JSON.stringify({ permissions: collectPermissionMatrix() })
+      }),
+      api(`/api/sysadmin/modules/${state.activePermissionModule}/field-permissions`, {
+        method: 'PUT',
+        body: JSON.stringify({ fields: collectFieldPermissionMatrix() })
+      })
+    ]);
+    state.permissionMatrix = modulePayload;
+    state.fieldPermissionMatrix = fieldPayload;
+    renderPermissions();
+    if (state.activePermissionModule === 'customers') {
+      await refreshCustomerConfig();
+      renderCustomers();
+      renderCustomerFormFields();
+    }
+    toast('Permissions Saved.');
+  } catch (error) {
+    toast(titleCaseMessage(error.message), 'error');
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Save Permissions';
+  }
+}
+
 function moduleFieldCount(moduleKey) {
   return moduleKey === 'users' ? state.userFields.length : state.customerFields.length;
 }
@@ -2753,7 +3183,7 @@ async function loadBootstrap() {
       if (state.user?.role === 'admin') throw error;
       return { fields: [] };
     }),
-    state.user?.role === 'admin' ? api('/api/sysadmin/browser-buttons') : Promise.resolve({ browserButtons: [] }),
+    api(state.user?.role === 'admin' ? '/api/sysadmin/browser-buttons' : '/api/browser-buttons'),
     state.user?.role === 'admin' ? api('/api/sysadmin/modules') : Promise.resolve({ modules: [] })
   ]);
 
@@ -2762,6 +3192,7 @@ async function loadBootstrap() {
   state.browserButtons = browserButtons.browserButtons || [];
   state.adminModules = adminModules.modules || [];
   state.customerFields = customerConfig.fields;
+  state.customerPermissions = customerConfig.permissions || {};
   state.userFields = userConfig.fields;
   rememberModuleConfig('customers', customerConfig);
   rememberModuleConfig('users', userConfig);
@@ -2772,6 +3203,7 @@ async function loadBootstrap() {
   renderBrowserSources();
   renderBrowserButtons();
   renderFieldConfig();
+  syncCustomerModuleActions();
   await loadCustomers();
 }
 
@@ -2797,6 +3229,16 @@ function clearCustomerForm() {
   $('#customerForm [name="id"]').value = '';
   $('#customerFormTitle').textContent = 'Add Customer';
   renderCustomerFormFields();
+}
+
+function syncCustomerModuleActions() {
+  const canCreate = state.customerPermissions.create !== false;
+  const canImport = state.customerPermissions.import !== false;
+  const canExport = state.customerPermissions.export !== false;
+  $('#addCustomerButton').hidden = !canCreate;
+  $('#openImportButton').hidden = !canImport;
+  $('#exportCustomersButton').hidden = !canExport;
+  $('#deleteCustomersButton').hidden = state.customerPermissions.delete === false;
 }
 
 function openCustomerModal() {
@@ -2827,6 +3269,23 @@ function closeImportModal() {
   resetModalFullscreen(modal);
   modal.hidden = true;
   document.body.classList.remove('modal-open');
+}
+
+async function downloadCustomerExport() {
+  try {
+    const response = await fetch('/api/imports/customers/export', {
+      headers: { Authorization: `Bearer ${state.token}` }
+    });
+    if (!response.ok) throw new Error('Unable To Download Export');
+    const blob = await response.blob();
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'crm-customers-export.xlsx';
+    link.click();
+    URL.revokeObjectURL(link.href);
+  } catch (error) {
+    toast(titleCaseMessage(error.message), 'error');
+  }
 }
 
 function openDeleteCustomerModal() {
@@ -2901,6 +3360,8 @@ function editUser(id) {
 async function refreshCustomerConfig() {
   const config = await api('/api/customers/config');
   setModuleConfig('customers', config.fields, config.formLayouts);
+  state.customerPermissions = config.permissions || {};
+  syncCustomerModuleActions();
 }
 
 async function refreshModuleConfig(moduleKey) {
@@ -2922,6 +3383,7 @@ function customerFormData(form) {
     section.querySelectorAll('[data-detail-row]').forEach((row) => {
       const values = {};
       row.querySelectorAll('[data-detail-field]').forEach((input) => {
+        if (input.disabled) return;
         values[input.dataset.detailField] = input.type === 'checkbox' ? input.checked : input.value;
       });
       rows.push(values);
@@ -3004,6 +3466,34 @@ function bindEvents() {
     });
   });
   $('#toggleAdminMenu').addEventListener('click', toggleAdminMenu);
+  $('#permissionModuleSelect').addEventListener('change', async (event) => {
+    try {
+      await loadPermissionMatrix(event.currentTarget.value);
+    } catch (error) {
+      toast(titleCaseMessage(error.message), 'error');
+    }
+  });
+  $('#savePermissionsButton').addEventListener('click', savePermissionMatrix);
+  $('#permissionRows').addEventListener('input', (event) => {
+    const search = event.target.closest('[data-permission-search]');
+    if (!search) return;
+    filterPermissionPicker(search.closest('[data-permission-picker]'));
+  });
+  $('#permissionRows').addEventListener('change', (event) => {
+    const checkbox = event.target.closest('.permission-check input[type="checkbox"]');
+    if (!checkbox) return;
+    updatePermissionPickerCount(checkbox.closest('[data-permission-picker]'));
+  });
+  $('#fieldPermissionRows').addEventListener('input', (event) => {
+    const search = event.target.closest('[data-permission-search]');
+    if (!search) return;
+    filterPermissionPicker(search.closest('[data-permission-picker]'));
+  });
+  $('#fieldPermissionRows').addEventListener('change', (event) => {
+    const checkbox = event.target.closest('.permission-check input[type="checkbox"]');
+    if (!checkbox) return;
+    updatePermissionPickerCount(checkbox.closest('[data-permission-picker]'));
+  });
 
   $('#browserButtonForm').addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -3059,6 +3549,11 @@ function bindEvents() {
     const form = event.currentTarget.form;
     if (form.elements.editingBrowserKey.value || form.elements.browserKey.value) return;
     form.elements.browserKey.value = browserKeyPreview(event.currentTarget.value);
+  });
+  $('#browserButtonForm [name="sourcePreview"]').addEventListener('change', (event) => {
+    const form = event.currentTarget.form;
+    form.elements.sourceTable.value = event.currentTarget.value;
+    syncBrowserSourceSelectors({ sourceTable: event.currentTarget.value });
   });
   $('#browserButtonRows').addEventListener('click', async (event) => {
     const editButton = event.target.closest('[data-edit-browser]');
@@ -3123,6 +3618,12 @@ function bindEvents() {
     applyCustomerFormulas();
   });
   $('#customerFormFields').addEventListener('click', (event) => {
+    const browserButton = event.target.closest('[data-open-browser-lookup]');
+    if (browserButton) {
+      openBrowserLookup(browserButton);
+      return;
+    }
+
     const addButton = event.target.closest('[data-add-detail-row]');
     if (addButton) {
       const tableName = addButton.dataset.addDetailRow;
@@ -3193,6 +3694,25 @@ function bindEvents() {
       closeCustomerModal();
     }
   });
+  $('#closeBrowserLookupModal').addEventListener('click', closeBrowserLookupModal);
+  $('#browserLookupModal').addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) {
+      closeBrowserLookupModal();
+    }
+  });
+  $('#browserLookupSearchButton').addEventListener('click', () => {
+    searchActiveBrowserLookup().catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  });
+  $('#browserLookupSearch').addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    searchActiveBrowserLookup().catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  });
+  $('#browserLookupRows').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-select-browser-row]');
+    if (!button) return;
+    setBrowserLookupValue(JSON.parse(button.dataset.selectBrowserRow));
+  });
   document.addEventListener('click', (event) => {
     const fullscreenButton = event.target.closest('[data-modal-fullscreen]');
     if (!fullscreenButton) return;
@@ -3212,6 +3732,9 @@ function bindEvents() {
     if (!$('#userModal').hidden) {
       closeUserModal();
     }
+    if (!$('#browserLookupModal').hidden) {
+      closeBrowserLookupModal();
+    }
     if (!$('#fieldConfigModal').hidden) {
       closeFieldConfigModal();
     }
@@ -3220,6 +3743,9 @@ function bindEvents() {
     }
     if (!$('#fieldPropertiesModal').hidden) {
       closeFieldPropertiesModal();
+    }
+    if (!$('#importExportMappingModal').hidden) {
+      closeImportExportMappingModal();
     }
     if (!$('#formDesignDrawer').hidden) {
       closeFormDesignDrawer();
@@ -3261,6 +3787,8 @@ function bindEvents() {
   $('#formDesignButton').addEventListener('click', openFormDesignDrawer);
   $('#batchAddFieldsButton').addEventListener('click', openBatchFieldModal);
   $('#fieldPropertiesButton').addEventListener('click', openFieldPropertiesModal);
+  $('#importExportMappingButton').addEventListener('click', openImportExportMappingModal);
+  $('#exportCustomersButton').addEventListener('click', downloadCustomerExport);
   $('#closeSuccessPrompt').addEventListener('click', closeSuccessPrompt);
   $('#successPrompt').addEventListener('click', (event) => {
     if (event.target === event.currentTarget) {
@@ -3440,6 +3968,13 @@ function bindEvents() {
   $('#fieldPropertiesModal').addEventListener('click', (event) => {
     if (event.target === event.currentTarget) {
       closeFieldPropertiesModal();
+    }
+  });
+  $('#closeImportExportMappingModal').addEventListener('click', closeImportExportMappingModal);
+  $('#cancelImportExportMappingButton').addEventListener('click', closeImportExportMappingModal);
+  $('#importExportMappingModal').addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) {
+      closeImportExportMappingModal();
     }
   });
   $('#closeFormDesignDrawer').addEventListener('click', closeFormDesignDrawer);
@@ -3940,13 +4475,17 @@ function bindEvents() {
         const field = findConfigField(row.dataset.propertiesField);
         if (!field) continue;
         const showInForm = row.querySelector('[name="showInForm"]').checked;
+        const editable = row.querySelector('[name="editable"]').checked;
         const required = showInForm && row.querySelector('[name="required"]').checked;
+        const disableManualInput = row.querySelector('[name="disableManualInput"]').checked;
         visibilityByFieldKey[field.fieldKey] = showInForm;
         latestConfig = await api(`/api/sysadmin/modules/${state.activeConfigModule}/fields/${field.fieldKey}`, {
           method: 'PATCH',
           body: JSON.stringify({
             showInForm,
-            required
+            editable,
+            required,
+            disableManualInput
           })
         });
       }
@@ -3956,6 +4495,41 @@ function bindEvents() {
       }
       closeFieldPropertiesModal();
       toast('Field Properties Saved.');
+    } catch (error) {
+      toast(titleCaseMessage(error.message), 'error');
+    } finally {
+      submitButton.disabled = false;
+      submitButton.textContent = 'Save';
+    }
+  });
+
+  $('#importExportMappingForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const rows = Array.from($('#importExportMappingRows').querySelectorAll('[data-mapping-field]'));
+    const submitButton = $('#saveImportExportMappingButton');
+    submitButton.disabled = true;
+    submitButton.textContent = 'Saving...';
+    try {
+      let latestConfig = null;
+      for (const row of rows) {
+        const field = findConfigField(row.dataset.mappingField);
+        if (!field) continue;
+        latestConfig = await api(`/api/sysadmin/modules/${state.activeConfigModule}/fields/${field.fieldKey}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            showInImport: row.querySelector('[name="showInImport"]').checked,
+            showInExport: row.querySelector('[name="showInExport"]').checked,
+            importHeader: row.querySelector('[name="importHeader"]').value.trim(),
+            exportHeader: row.querySelector('[name="exportHeader"]').value.trim()
+          })
+        });
+      }
+      if (latestConfig) {
+        setModuleConfig(state.activeConfigModule, latestConfig.fields, latestConfig.formLayouts);
+        renderFieldConfig();
+      }
+      closeImportExportMappingModal();
+      toast('Import/Export Mapping Saved.');
     } catch (error) {
       toast(titleCaseMessage(error.message), 'error');
     } finally {
@@ -3981,6 +4555,12 @@ function bindEvents() {
   $('#userModal').addEventListener('click', (event) => {
     if (event.target === event.currentTarget) {
       closeUserModal();
+    }
+  });
+  $('#userFormFields').addEventListener('click', (event) => {
+    const browserButton = event.target.closest('[data-open-browser-lookup]');
+    if (browserButton) {
+      openBrowserLookup(browserButton);
     }
   });
   $('#userRows').addEventListener('click', (event) => {

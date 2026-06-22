@@ -10,6 +10,7 @@ const { countryRoutes } = require('./modules/countries/countries.routes');
 const { customerRoutes } = require('./modules/customers/customers.routes');
 const { importRoutes } = require('./modules/imports/imports.routes');
 const { sysadminRoutes } = require('./modules/sysadmin/module-config.routes');
+const { browserButtonRoutes } = require('./modules/browser-buttons/browser-buttons.routes');
 
 function createApp() {
   const app = express();
@@ -30,6 +31,7 @@ function createApp() {
   app.use('/api/countries', countryRoutes);
   app.use('/api/customers', customerRoutes);
   app.use('/api/imports', importRoutes);
+  app.use('/api/browser-buttons', browserButtonRoutes);
   app.use('/api/sysadmin', sysadminRoutes);
   app.use('/api', notFoundHandler);
 
