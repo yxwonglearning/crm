@@ -149,6 +149,13 @@ Admins should have a dedicated portal for configuring the CRM:
    - Module permissions control view, create, edit, delete, import, export, and configuration access by role or specific user.
    - Field permissions control view, create, edit, import, and export by role or specific user.
    - Customer list/config/import/save paths enforce the configured permissions.
+7. Phase 7: Dashboard Builder - planned
+   - Add low-code dashboard pages made from saved widget configuration instead of generated source code.
+   - Use saved SQL views or guarded `SELECT` queries as dashboard data sources.
+   - Support first widget types such as number cards, ring/donut charts, line charts, bar charts, and table widgets.
+   - Each widget should map query result columns such as `label`, `value`, `date`, and `group` into the chart renderer.
+   - Guard dashboard SQL so it is read-only: no `INSERT`, `UPDATE`, `DELETE`, `DROP`, comments, or statement separators.
+   - Later add dashboard filters, date ranges, role/user permissions, config export/import, and version history.
 
 ### Extra Platform Features To Add
 
@@ -157,9 +164,69 @@ Admins should have a dedicated portal for configuring the CRM:
 - Trash/archive instead of hard delete for configurable modules.
 - Lookup fields and related records.
 - Advanced import/export profiles per module.
+- Low-code dashboard builder with SQL view/query data sources and reusable chart widgets.
 - Report builder and dashboard widgets.
 - Field-level and record-level permissions.
 - Backup, restore, and version history for low-code configuration.
+
+### Dashboard Builder Direction
+
+Dashboards should be stored as low-code configuration in the database, not generated into source files. The source code should provide the stable dashboard engine, chart renderer, guarded query runner, and API endpoints. Admin-created dashboards, widgets, chart types, SQL data sources, column mappings, filters, and permissions should live in database configuration and be exportable/importable later.
+
+Recommended dashboard data flow:
+
+```text
+SQL view or guarded SELECT query
+  |
+  v
+Backend dashboard API
+  |
+  v
+JSON rows
+  |
+  v
+Frontend chart widget
+```
+
+Example ring/donut chart source:
+
+```sql
+SELECT status AS label, COUNT(*) AS value
+FROM customers
+GROUP BY status;
+```
+
+Example line chart source:
+
+```sql
+SELECT
+  DATE_FORMAT(created_at, '%Y-%m') AS label,
+  COUNT(*) AS value
+FROM customers
+GROUP BY DATE_FORMAT(created_at, '%Y-%m')
+ORDER BY label;
+```
+
+Dashboard widget config should map result columns into chart fields:
+
+```json
+{
+  "type": "donut",
+  "title": "Customers By Status",
+  "dataSourceKey": "customers_by_status",
+  "labelField": "label",
+  "valueField": "value"
+}
+```
+
+Build order:
+
+1. Add dashboard data source configuration.
+2. Add dashboard and widget configuration tables.
+3. Add a guarded backend endpoint that runs saved read-only data sources.
+4. Add frontend dashboard page and reusable widget renderer.
+5. Start with number card, ring/donut, line, bar, and table widgets.
+6. Add filters, permissions, export/import, version history, and rollback.
 
 ### Form Builder Conventions
 
@@ -351,73 +418,598 @@ Admins should have a dedicated portal for configuring the CRM:
 ## Current API Surface
 
 All protected endpoints require `Authorization: Bearer <token>` after login. Admin-only endpoints require an admin user.
+JSON endpoints use `Content-Type: application/json` unless noted otherwise. Validation errors return an error response from the shared error handler.
 
 ### Authentication
 
-- `POST /api/auth/login` - login with `{ "email": "...", "password": "..." }`; returns the JWT token and user.
+- `POST /api/auth/login` - login.
+
+  Request:
+
+  ```json
+  {
+    "email": "admin@example.com",
+    "password": "ChangeMe123!"
+  }
+  ```
+
+  Response:
+
+  ```json
+  {
+    "token": "jwt-token",
+    "user": {
+      "id": 1,
+      "name": "Admin",
+      "email": "admin@example.com",
+      "role": "admin",
+      "status": "active"
+    }
+  }
+  ```
+
 - `GET /api/auth/me` - returns the current authenticated user.
+
+  Response:
+
+  ```json
+  {
+    "user": {
+      "id": 1,
+      "name": "Admin",
+      "email": "admin@example.com",
+      "role": "admin",
+      "status": "active"
+    }
+  }
+  ```
 
 ### Reference Data
 
 - `GET /api/countries` - returns country records with ISO and dial-code metadata.
+
+  Response:
+
+  ```json
+  {
+    "countries": [
+      {
+        "id": 1,
+        "name": "Malaysia",
+        "iso2": "MY",
+        "dial_code": "+60"
+      }
+    ]
+  }
+  ```
+
 - `GET /api/browser-buttons` - lists enabled browser button lookup definitions for authenticated form usage.
+
+  Response:
+
+  ```json
+  {
+    "browserButtons": [
+      {
+        "browserKey": "customers",
+        "name": "Customers",
+        "sourceModule": "customers",
+        "sourceTable": "customers",
+        "valueField": "id",
+        "displayField": "company_name",
+        "searchFields": ["company_name", "email"],
+        "returnFields": ["company_name", "email"],
+        "enabled": true
+      }
+    ]
+  }
+  ```
+
 - `GET /api/browser-buttons/:browserKey/search?q=` - searches a configured browser button source and returns selectable lookup rows.
+
+  Response:
+
+  ```json
+  {
+    "browser": {
+      "browserKey": "customers",
+      "name": "Customers",
+      "valueField": "id",
+      "displayField": "company_name",
+      "returnFields": ["company_name", "email"]
+    },
+    "rows": [
+      {
+        "value": 1,
+        "display": "Example Sdn Bhd",
+        "columns": {
+          "company_name": "Example Sdn Bhd",
+          "email": "hello@example.com"
+        }
+      }
+    ]
+  }
+  ```
 
 ### Customers
 
 - `GET /api/customers/config` - returns published customer field configuration and form layouts.
+
+  Response:
+
+  ```json
+  {
+    "module": {
+      "moduleKey": "customers",
+      "name": "Customers",
+      "enabled": true
+    },
+    "fields": [],
+    "formLayouts": {
+      "published": {
+        "add": {
+          "order": ["companyName"],
+          "hidden": []
+        }
+      }
+    },
+    "permissions": {
+      "view": true,
+      "create": true,
+      "edit": true,
+      "delete": true,
+      "import": true,
+      "export": true
+    }
+  }
+  ```
+
 - `GET /api/customers?search=&status=` - lists customers with optional search/status filters.
+
+  Query params:
+
+  ```text
+  search=example
+  status=lead|active|inactive
+  ```
+
+  Response:
+
+  ```json
+  {
+    "customers": [
+      {
+        "id": 1,
+        "company_name": "Example Sdn Bhd",
+        "contact_person": "Jane Tan",
+        "email": "jane@example.com",
+        "country_id": 1,
+        "country_name": "Malaysia",
+        "phone_number": "+60123456789",
+        "status": "lead",
+        "notes": "Optional notes"
+      }
+    ]
+  }
+  ```
+
 - `POST /api/customers` - creates a customer; accepts configured main fields and detail-table payloads.
-- `PUT /api/customers/:id` - updates a customer; accepts configured main fields and detail-table payloads.
-- `DELETE /api/customers` - deletes customers by body `{ "ids": [1, 2, 3] }`.
+
+  Request:
+
+  ```json
+  {
+    "companyName": "Example Sdn Bhd",
+    "contactPerson": "Jane Tan",
+    "email": "jane@example.com",
+    "countryId": 1,
+    "phoneNumber": "0123456789",
+    "status": "lead",
+    "notes": "Optional notes",
+    "ownerUserId": 1,
+    "customFieldKey": "custom value",
+    "customer_dt1": [
+      {
+        "lineFieldKey": "line value"
+      }
+    ]
+  }
+  ```
+
+  Response:
+
+  ```json
+  {
+    "customer": {
+      "id": 1,
+      "company_name": "Example Sdn Bhd",
+      "contact_person": "Jane Tan",
+      "email": "jane@example.com",
+      "status": "lead"
+    }
+  }
+  ```
+
+- `PUT /api/customers/:id` - updates a customer; accepts the same body shape as `POST /api/customers`.
+
+  Response:
+
+  ```json
+  {
+    "customer": {
+      "id": 1,
+      "company_name": "Example Sdn Bhd",
+      "contact_person": "Jane Tan",
+      "email": "jane@example.com",
+      "status": "active"
+    }
+  }
+  ```
+
+- `DELETE /api/customers` - deletes customers.
+
+  Request:
+
+  ```json
+  {
+    "ids": [1, 2, 3]
+  }
+  ```
+
+  Response:
+
+  ```json
+  {
+    "deletedCount": 3
+  }
+  ```
 
 ### Users
 
 - `GET /api/users/config` - returns published user field configuration and form layouts.
+
+  Response:
+
+  ```json
+  {
+    "module": {
+      "moduleKey": "users",
+      "name": "Users",
+      "enabled": true
+    },
+    "fields": [],
+    "formLayouts": {}
+  }
+  ```
+
 - `GET /api/users` - lists users.
+
+  Response:
+
+  ```json
+  {
+    "users": [
+      {
+        "id": 1,
+        "name": "Admin",
+        "email": "admin@example.com",
+        "role": "admin",
+        "status": "active"
+      }
+    ]
+  }
+  ```
+
 - `POST /api/users` - creates a user.
-- `PATCH /api/users/:id` - updates a user.
+
+  Request:
+
+  ```json
+  {
+    "name": "Jane Tan",
+    "email": "jane@example.com",
+    "password": "ChangeMe123!",
+    "role": "user",
+    "status": "active"
+  }
+  ```
+
+  Response:
+
+  ```json
+  {
+    "id": 2
+  }
+  ```
+
+- `PATCH /api/users/:id` - updates a user. All fields are optional; omit `password` to keep the existing password.
+
+  Request:
+
+  ```json
+  {
+    "name": "Jane Lim",
+    "email": "jane@example.com",
+    "password": "NewPassword123!",
+    "role": "manager",
+    "status": "active"
+  }
+  ```
+
+  Response:
+
+  ```text
+  204 No Content
+  ```
 
 ### Imports
 
 - `GET /api/imports/customers/template` - downloads the protected customer Excel import template.
 - `GET /api/imports/customers/export` - downloads customers as a mapped Excel workbook.
-- `POST /api/imports/customers` - imports customers from an uploaded Excel file field named `file`.
+- `POST /api/imports/customers` - imports customers from an uploaded Excel file.
+
+  Request:
+
+  ```text
+  Content-Type: multipart/form-data
+  file: .xlsx or .xls file field named "file"
+  ```
+
+  Response:
+
+  ```json
+  {
+    "createdCount": 2,
+    "errorCount": 1,
+    "created": [
+      {
+        "row": 2,
+        "id": 10
+      }
+    ],
+    "errors": [
+      {
+        "row": 3,
+        "message": "Unknown country \"Atlantis\""
+      }
+    ]
+  }
+  ```
 
 ### Admin Configuration
 
 - `GET /api/sysadmin/modules` - lists configurable modules with fields and layouts.
-- `GET /api/sysadmin/modules/:moduleKey` - returns one module configuration.
-- `POST /api/sysadmin/modules/:moduleKey/fields` - creates a field.
-- `PATCH /api/sysadmin/modules/:moduleKey/fields/:fieldKey` - updates a field.
-- `DELETE /api/sysadmin/modules/:moduleKey/fields/:fieldKey` - deletes an unused configurable field.
+
+  Response:
+
+  ```json
+  {
+    "modules": [
+      {
+        "module": {
+          "moduleKey": "customers",
+          "name": "Customers",
+          "enabled": true
+        },
+        "fields": [],
+        "formLayouts": {}
+      }
+    ]
+  }
+  ```
+
+- `GET /api/sysadmin/modules/:moduleKey` - returns one module configuration. Response shape matches one item from `GET /api/sysadmin/modules`.
 - `GET /api/sysadmin/modules/:moduleKey/fields/archived` - lists archived fields.
+
+  Response:
+
+  ```json
+  {
+    "fields": []
+  }
+  ```
+
+- `POST /api/sysadmin/modules/:moduleKey/fields` - creates a field.
+
+  Request:
+
+  ```json
+  {
+    "fieldKey": "customerRating",
+    "label": "Customer Rating",
+    "type": "dropdownbox",
+    "options": ["A", "B", "C"],
+    "tableType": "main",
+    "required": false,
+    "showInTable": true,
+    "showInForm": true,
+    "showInImport": true,
+    "showInExport": true,
+    "importHeader": "Customer Rating",
+    "exportHeader": "Customer Rating",
+    "editable": true,
+    "disableManualInput": false,
+    "searchable": true,
+    "validationRules": {
+      "unique": false
+    }
+  }
+  ```
+
+  Response: updated module configuration.
+
+- `PATCH /api/sysadmin/modules/:moduleKey/fields/:fieldKey` - updates a field. Body may contain any subset of the create-field properties.
+
+  Request:
+
+  ```json
+  {
+    "label": "Customer Grade",
+    "showInExport": true,
+    "exportHeader": "Customer Grade"
+  }
+  ```
+
+  Response: updated module configuration.
+
+- `DELETE /api/sysadmin/modules/:moduleKey/fields/:fieldKey` - deletes an unused configurable field.
 - `POST /api/sysadmin/modules/:moduleKey/fields/:fieldKey/archive` - archives a field without dropping stored data.
 - `POST /api/sysadmin/modules/:moduleKey/fields/:fieldKey/unarchive` - restores an archived field.
+
+  Response for delete/archive/unarchive: updated module configuration.
+
 - `PATCH /api/sysadmin/modules/:moduleKey/detail-tables/:tableName` - renames a detail table configuration.
+
+  Request:
+
+  ```json
+  {
+    "detailTableName": "customer_contacts"
+  }
+  ```
+
+  Response: updated module configuration.
+
 - `PUT /api/sysadmin/modules/:moduleKey/form-layouts/draft/:formType` - saves a draft layout for `add`, `edit`, or `detail`.
 - `POST /api/sysadmin/modules/:moduleKey/form-layouts/publish/:formType` - publishes a layout for `add`, `edit`, or `detail`.
+
+  Request:
+
+  ```json
+  {
+    "order": ["companyName", "contactPerson", "email"],
+    "hidden": ["notes"]
+  }
+  ```
+
+  Response: updated module configuration.
+
+- `GET /api/sysadmin/modules/:moduleKey/permissions` - returns module permission grants.
+- `PUT /api/sysadmin/modules/:moduleKey/permissions` - saves module permission grants.
+
+  Request:
+
+  ```json
+  {
+    "permissions": {
+      "view": {
+        "roles": ["admin", "manager", "user"],
+        "users": []
+      },
+      "create": {
+        "roles": ["admin", "manager"],
+        "users": [2]
+      },
+      "edit": {
+        "roles": ["admin", "manager"],
+        "users": []
+      },
+      "delete": {
+        "roles": ["admin"],
+        "users": []
+      },
+      "import": {
+        "roles": ["admin"],
+        "users": []
+      },
+      "export": {
+        "roles": ["admin"],
+        "users": []
+      },
+      "configure": {
+        "roles": ["admin"],
+        "users": []
+      }
+    }
+  }
+  ```
+
+  Response: saved module permission matrix.
+
+- `GET /api/sysadmin/modules/:moduleKey/field-permissions` - returns field permission grants.
+- `PUT /api/sysadmin/modules/:moduleKey/field-permissions` - saves field permission grants.
+
+  Request:
+
+  ```json
+  {
+    "fields": [
+      {
+        "fieldKey": "email",
+        "permissions": {
+          "view": {
+            "roles": ["admin", "manager"],
+            "users": []
+          },
+          "edit": {
+            "roles": ["admin"],
+            "users": []
+          },
+          "import": {
+            "roles": ["admin"],
+            "users": []
+          },
+          "export": {
+            "roles": ["admin"],
+            "users": []
+          }
+        }
+      }
+    ]
+  }
+  ```
+
+  Response: saved field permission matrix.
+
 - `GET /api/sysadmin/browser-buttons` - lists browser button lookup definitions.
+
+  Response:
+
+  ```json
+  {
+    "browserButtons": []
+  }
+  ```
+
 - `POST /api/sysadmin/browser-buttons` - creates a browser button definition.
-- `PATCH /api/sysadmin/browser-buttons/:browserKey` - updates a browser button definition, including preset definitions.
+- `PATCH /api/sysadmin/browser-buttons/:browserKey` - updates a browser button definition, including preset definitions. Body may contain any subset of the create payload.
+
+  Request:
+
+  ```json
+  {
+    "browserKey": "active_customers",
+    "name": "Active Customers",
+    "sourceModule": "customers",
+    "sourceTable": "customers",
+    "valueField": "id",
+    "displayField": "company_name",
+    "searchFields": ["company_name", "email"],
+    "returnFields": ["company_name", "email", "contact_person"],
+    "filter": {
+      "where": "status = 'active'"
+    },
+    "enabled": true
+  }
+  ```
+
+  Response:
+
+  ```json
+  {
+    "browserButtons": []
+  }
+  ```
+
 - `DELETE /api/sysadmin/browser-buttons/:browserKey` - deletes a custom browser button when it is not used by fields.
 
-Browser Button payload shape:
+  Response:
 
-```json
-{
-  "browserKey": "active_customers",
-  "name": "Active Customers",
-  "sourceModule": "customers",
-  "sourceTable": "customers",
-  "valueField": "id",
-  "displayField": "company_name",
-  "searchFields": ["company_name", "email"],
-  "returnFields": ["company_name", "email", "contact_person"],
-  "filter": { "where": "status = 'active'" },
-  "enabled": true
-}
-```
+  ```json
+  {
+    "browserButtons": []
+  }
+  ```
 
 ## Local Setup
 
@@ -528,7 +1120,7 @@ Recommended feature order:
 3. Deals/opportunities pipeline.
 4. Import preview and duplicate detection.
 5. Audit logs for customer/user changes.
-6. Dashboard and reports.
+6. Low-code dashboard builder with SQL view/query data sources and chart widgets.
 7. File attachments.
 8. Email integration.
 9. Production HTTPS setup if exposing beyond Tailscale.
