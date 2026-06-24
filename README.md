@@ -1,4 +1,4 @@
-# Amperes CRM
+# CRM
 
 A personal CRM and Low-Code Platform project designed to explore how modern business applications can be configured, automated, and scaled without extensive custom development.
 
@@ -8,7 +8,7 @@ The project combines Customer Relationship Management (CRM), workflow automation
 
 ## Project Overview
 
-Amperes CRM aims to provide a flexible foundation for organisations to manage customer information, sales activities, workflows, approvals, and operational processes through configurable modules rather than hardcoded solutions.
+CRM aims to provide a flexible foundation for organisations to manage customer information, sales activities, workflows, approvals, and operational processes through configurable modules rather than hardcoded solutions.
 
 The long-term vision is to evolve the platform into a low-code ecosystem where business users can create forms, workflows, dashboards, permissions, and business applications with minimal technical involvement.
 
@@ -66,7 +66,7 @@ The sections below serve as the detailed project log, implementation notes, feat
 - Country-based phone code handling.
 - Malaysia is the default country for new customers.
 - Excel customer import with downloadable protected template.
-- Amperes-inspired UI theme with blue primary actions.
+- -inspired UI theme with blue primary actions.
 - Dedicated full-page login screen.
 - Modal forms for adding/editing customers and users.
 - Customer import modal with template download, file upload, and import result display.
@@ -141,7 +141,7 @@ Frontend files live in `public/`:
 
 ## Low-Code CRM Direction
 
-The long-term direction is to turn Amperes CRM into a low-code, fully customizable CRM platform where admins can create modules, forms, pages, and automation without editing source code. Weaver e-cology and e-Builder are useful references for the platform concept, especially the separation between form building, page publishing, data rules, and action-flow automation.
+The long-term direction is to turn  CRM into a low-code, fully customizable CRM platform where admins can create modules, forms, pages, and automation without editing source code. Weaver e-cology and e-Builder are useful references for the platform concept, especially the separation between form building, page publishing, data rules, and action-flow automation.
 
 ### Target Admin Experience
 
@@ -454,10 +454,10 @@ Build order:
 
 ### UI And Theme
 
-- Reworked UI toward Amperes Electronics style.
+- Reworked UI toward  Electronics style.
 - Added dedicated login page.
 - Hid app sidebar while logged out.
-- Updated brand to `Amperes CRM`.
+- Updated brand to ` CRM`.
 - Changed primary action color to blue.
 - Started the admin-only configuration area with configurable module fields.
 - Standardized labels to Title Case, for example:
