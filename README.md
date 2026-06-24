@@ -1,10 +1,64 @@
 # Amperes CRM
 
-Self-hosted CRM foundation built with Node.js, Express, MySQL, and a browser UI. The app is currently focused on customer records, user management, country-aware contact numbers, Excel customer import, and early low-code CRM configuration.
+A personal CRM and Low-Code Platform project designed to explore how modern business applications can be configured, automated, and scaled without extensive custom development.
+
+The project combines Customer Relationship Management (CRM), workflow automation, user access management, configurable forms, approval processes, and business process digitisation into a single platform. It is being developed as an ongoing initiative to deepen my understanding of Business Analysis, Product Management, System Design, and Low-Code Application Development.
+
+---
+
+## Project Overview
+
+Amperes CRM aims to provide a flexible foundation for organisations to manage customer information, sales activities, workflows, approvals, and operational processes through configurable modules rather than hardcoded solutions.
+
+The long-term vision is to evolve the platform into a low-code ecosystem where business users can create forms, workflows, dashboards, permissions, and business applications with minimal technical involvement.
+
+---
+
+## My Responsibilities
+
+As the sole project owner, I am responsible for:
+
+- Requirements gathering and business process analysis
+- Product feature definition and prioritisation
+- Workflow and approval process design
+- UI/UX planning and user journey design
+- Low-code platform configuration and development
+- Database and system architecture planning
+- User Acceptance Testing (UAT)
+- Release planning and continuous improvement
+
+---
+
+## Skills Demonstrated
+
+### Business Analysis
+- Requirements elicitation
+- User story creation
+- Process flow modelling
+- Functional specification development
+- UAT planning and execution
+
+### Product Management
+- Product roadmap planning
+- Feature prioritisation
+- Problem discovery and solution design
+- User journey optimisation
+- Continuous product improvement
+
+### Technical Skills
+- Workflow automation
+- Role-based access control
+- Low-code application development
+- API integration concepts
+- Database design and configuration
+
+---
 
 ## Current Status
 
-The CRM is usable locally for customer, user, import, and early low-code configuration workflows:
+This project is actively under development and serves as a practical platform for experimenting with CRM capabilities, workflow automation, and low-code architecture patterns.
+
+The sections below serve as the detailed project log, implementation notes, feature backlog, and future development roadmap.
 
 - Login with JWT authentication.
 - Admin user management.
