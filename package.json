@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
+    "test:smoke:backend": "node tests/smoke/backend-smoke.js",
     "db:migrate": "node src/database/migrate.js",
     "db:seed": "node src/database/seed.js"
   },

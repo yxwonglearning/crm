@@ -161,13 +161,13 @@ Admins should have a dedicated portal for configuring the CRM:
    - Added an admin-only configuration workspace.
    - Added internal admin sections for Modules, Form Builder, Module Pages, Action Flow, and Permissions.
    - Normal CRM usage is separated from admin configuration through sidebar navigation.
-2. Phase 2: Module Builder - scaffolded, not fully implemented
+2. Phase 2: Module Builder - in progress
    - Admin Portal has a `Modules` section.
    - Customers and Users are visible as existing system modules.
-   - Full custom module create/edit/publish controls are still pending.
-   - Allow admins to create modules with a name, key, description, status, and menu visibility.
-   - Support draft and published states before exposing modules to normal users.
-3. Phase 3: Form Builder - in progress
+   - Admins can create, edit, publish/draft/archive, show/hide in menu, and delete custom modules.
+   - Custom module keys are stable once created and each custom module gets a backing data table for future records.
+   - Generated frontend pages and record CRUD are now available for published custom modules.
+3. Phase 3: Form Builder - mostly complete, pending generated-page smoke test
    - Existing customer and user fields are configurable through Form Builder.
    - Admins can add one field at a time with `Add Field`.
    - Admins can edit existing fields and add new fields through `Batch Edit`.
@@ -182,15 +182,21 @@ Admins should have a dedicated portal for configuring the CRM:
    - `Batch Edit` can duplicate selected configurable fields, delete unused configurable fields, and archive configurable fields that should be hidden without dropping existing data.
    - `Browser Buttons` stores reusable master-data lookup definitions. Browser Button fields can reference these definitions through field lookup metadata.
    - Browser Buttons are managed from a module-first workspace: select a module, then choose the main or detail table when creating or editing browser definitions.
-   - Browser Button configuration supports value field, display field, checkbox-selected search fields, checkbox-selected display columns, enabled state, and a guarded SQL `WHERE` condition stored as filter metadata.
-   - Browser Button fields render Browse controls in customer/user forms and open a lookup popup that searches the configured source table.
-   - Formula fields are evaluated on the customer form and server save path.
-   - Still missing: form sections, tabs, layout controls, richer sort/reorder controls, audit logs, and versioning.
-4. Phase 4: Module Page Publisher - planned
-   - Admin Portal has a placeholder `Module Pages` section.
-   - Generated pages for custom published modules are not implemented yet.
-   - Target behavior: generate usable CRM pages from published modules.
-   - Include list views, add/edit forms, search, filters, import/export, and record detail pages.
+- Browser Button configuration supports value field, display field, checkbox-selected search fields, checkbox-selected display columns, enabled state, and a guarded SQL `WHERE` condition stored as filter metadata.
+- Browser Button fields render Browse controls in customer/user forms and open a lookup popup that searches the configured source table.
+- Add/Edit Field and Batch Edit include a module-first Browser Button picker for `browser_button` fields and save `lookupConfig.browserButtonKey`.
+- Formula fields are evaluated on the customer form and server save path.
+   - Formula save paths validate field dependencies, reject unknown field references, and block circular references before saving configuration.
+   - Still pending: full generated-page smoke testing after Module Builder and Module Page Publisher are connected.
+4. Phase 4: Module Page Publisher - complete
+   - Admin Portal has a `Module Pages` section that lists each module page state, menu status, field count, layout publishing count, and actions.
+   - Published custom modules can open as generated CRM pages from the menu or Module Pages section.
+   - Generated pages support list views, quick search, advanced field filters, add/edit forms, bulk delete, Browser Button fields, detail-table entry rows, and page/field permissions.
+   - Generated pages support read-only record detail views using the published Detail layout.
+   - Custom module records are stored through generic module-record CRUD endpoints.
+   - Custom module pages now support Excel template download, Excel import, and Excel export for main-table and detail-table fields.
+   - Detail-table import/export uses separate Excel sheets linked to main records by `Record Ref`.
+   - Generated-page smoke test passed for custom module creation, permissions, layouts, record CRUD, quick search, advanced filter, detail view data, Excel template, detail-table import/export, and cleanup.
 5. Phase 5: Action Flow - planned
    - Admin Portal has a placeholder `Action Flow` section.
    - Automation runtime is not implemented yet.
@@ -210,6 +216,23 @@ Admins should have a dedicated portal for configuring the CRM:
    - Each widget should map query result columns such as `label`, `value`, `date`, and `group` into the chart renderer.
    - Guard dashboard SQL so it is read-only: no `INSERT`, `UPDATE`, `DELETE`, `DROP`, comments, or statement separators.
    - Later add dashboard filters, date ranges, role/user permissions, config export/import, and version history.
+8. Phase 8: Workflow Module and Approver Workflows - planned
+   - Create a separate `workflow` module for approval process configuration and runtime.
+   - Reuse the form builder for workflow form definitions, but keep workflow config in a dedicated module.
+   - Support workflow definitions with multiple approval steps, each with assigned approvers (role or user).
+   - Store workflow instances with status (pending, approved, rejected, cancelled).
+   - Track workflow approvals with decision, comments, and audit trail.
+   - Keep product roadmap and other entity data in their own modules (customers, roadmap items, etc.).
+   - Use shared form-builder metadata for workflow form UI and validation.
+   - Later add branching conditions, conditional approvers, escalation, and SLA tracking.
+9. Phase 9: AI Agent Assistant - planned
+   - Add an AI assistant panel to the admin portal for form and workflow generation.
+   - Support natural-language prompts to suggest form fields, workflow steps, and validation rules.
+   - Use backend prompt service to map user intent to platform concepts (modules, field types, approvers, conditions).
+   - Show AI-generated suggestions with a preview and review/edit step before saving.
+   - Parse and validate AI output strictly against existing schema before persistence.
+   - Start with prompt-driven suggestions; add fine-tuning or templates if needed later.
+   - Later add domain examples, knowledge base integration, and user feedback loops.
 
 ### Extra Platform Features To Add
 
@@ -300,23 +323,55 @@ Build order:
 - Existing field keys and database field names stay read-only in Batch Edit so saved data mappings remain stable.
 - Locked/system fields keep protected type/table settings, but formula settings and common display flags can still be saved.
 - `Field Properties` opens a read/write properties grid for the selected form. It saves display, editability, required, and disable-manual-input flags; customer/user forms enforce locked and manual-input-disabled fields.
-- `Formula` opens the Formula Builder. It supports field variables, basic operators, built-in functions, reusable custom helper functions, and SQL capture text. The SQL capture tab stores notes/configuration only; execution is planned for a later guarded backend phase.
+- `Formula` opens the Formula Builder. It supports field variables, basic operators, built-in functions, reusable custom helper functions, dependency checks, circular-reference detection, and SQL capture text. The SQL capture tab stores notes/configuration only; execution is planned for a later guarded backend phase.
 - `Form Design` opens a right-side drawer above Form Builder. It has Add, Edit, and Detail form types, form-preview field controls, drag/drop ordering, a hidden-field palette, copy-layout controls, Save Draft, and Publish. Draft and published layouts are stored on the backend; the published Add/Edit layouts drive the actual customer and user forms. Hidden fields can be dragged from the side palette onto the form, which turns on `Show In Form`; visible fields can be dragged back to the palette to hide them.
 - Double-clicking a field opens Formula Builder for that field. Right-clicking a field opens its field configuration. Add/Edit Field opens above Form Design without closing the drawer.
 - Form Design separates main fields from detail-table fields. Detail-table names are shown in their own lower area with a table-style preview; renaming the actual detail table key needs backend migration safeguards before it should be editable.
 - Formula-enabled fields are treated as read-only calculated fields in customer main forms.
+- Formula expressions reference fields with `{fieldKey}` syntax. Saving formula configuration rejects unknown field references, direct self-references, and circular chains such as `fieldA -> fieldB -> fieldA`.
 - Form Builder bulk duplicate/delete/archive controls are for configurable field definitions. Delete is blocked for fields with saved data, while archive hides a field but keeps its mappings and stored values.
 - Detail-table row duplicate/delete is for data entry rows inside Add/Edit Customer, not for Form Builder fields.
 - Detail-table row delete keeps one blank row when every row is selected, so the table remains ready for input.
 
-### Form Builder Still Missing
+### Form Builder and Workflow
+- The form builder is shared for both regular module forms and workflow forms.
+- The Add button can let admins choose whether they are creating a module form or a workflow form.
+- Workflow forms should use the same field/layout builder, but workflow configuration lives in a separate workflow module.
+- The workflow module can reuse the form-builder UI for field selection and layout, while adding workflow-specific tabs for steps, approvers, and triggers.
+- Workflow records should feel module-like: they can be listed, viewed, filtered, and displayed with current status/stage metadata.
+- Use a table view to show workflow data and current stage, but keep workflow state and approval history as separate process metadata, not just a plain entity table update.
+- This keeps the builder consistent and avoids duplicating form design functionality.
 
-- Full form layout designer for sections, columns, tabs, grouping, and field placement.
-- Drag/drop field reordering and richer placement controls in tables and forms.
+### AI Agent Roadmap
+- Add an AI assistant panel to the admin portal for form and workflow generation.
+- Let users describe requirements in natural language and return suggested form/workflow metadata.
+- Use the same form-builder model to render AI-generated fields and layouts, with a review/edit step before saving.
+- Build a backend prompt service that maps user intent to platform concepts such as modules, types, workflow steps, approvers, and validation rules.
+- Start with prompt-driven suggestions; only add fine-tuning or templates later if needed.
+- Keep AI output parseable and strictly validated against the existing schema before persistence.
+
+### OCR and Document Import Roadmap
+- Add OCR-based document import for Purchase Orders, Purchase Invoices, and other business documents.
+- Allow users to upload PDF or scanned document files and auto-extract key fields.
+- Map extracted text to existing workflow or module fields such as supplier, amount, invoice number, dates, items, and totals.
+- Use OCR as an assistive import path, with human review and correction before saving.
+- Support both PDF and image imports initially, then extend to multi-page documents and layout templates.
+
+### Form Builder Pending Notes
+
+- Browser Button field mapping is available in Add/Edit Field and Batch Edit through a module-first lookup picker.
+- Customers `Country` now uses the Countries Browser Button lookup while keeping the saved `country_id` value and dial-code display.
+- Form Design includes Field Linkage for low-code data mapping rules. Open Field Linkage, choose a trigger field, configure one or more source table rows with variable aliases such as `customers = a` and `customers_dt1 = b`, set the primary key match field, add optional guarded SQL join/where logic such as `a.id = b.mainid`, and map source columns such as `b.item_code` into target fields or supported display targets.
+- The Customers `Country` Browser Button maps `dial_code` into the dial-code display. The backend still derives and validates `phone_country_code` from the selected country as a data-integrity safeguard.
+- Field Linkage now supports structured join rules with common comparison operators and per-mapping typed coercion. Advanced detail-row repeat mapping was removed to keep the Field Linkage workflow simpler.
+- **TODO**: Extend field linkage with broader master-data examples such as Customer address/email/phone auto-fill.
+- Country fields should use the **Countries Browser Button** instead of new simple dropdown configs. Legacy `country` rendering remains as a compatibility fallback, while the Countries browser definition exposes Search Fields (`name`, `iso2`, `dial_code`) and Display Columns (`name`, `iso2`, `dial_code`).
+- Continue the form layout designer with tabs and more field placement controls. Sections and 1/2/3-column layouts are now available in Form Design.
+- Drag/drop field reordering is available in Form Design; richer table placement controls can be added later.
 - Richer cross-field validation expressions beyond conditional required.
-- Formula dependency checks, circular-reference detection, and safer custom-function sandboxing.
+- Formula custom functions now use named helper bodies with guarded server execution instead of raw source-code blocks.
 - SQL capture execution behind guarded backend endpoints.
-- Form version history, rollback, and audit logs for configuration changes.
+- Form version history, rollback, and audit logs are available for configuration changes; generated-page smoke testing is still pending.
 
 ## What Has Been Done
 
@@ -413,12 +468,15 @@ Build order:
 - Added Field Properties modal for display, editability, required, and disable-manual-input settings.
 - Added module-first Browser Buttons workspace with module search, per-module browser lists, editable presets, table-aware browser definitions, checkbox-based Search Fields and Display Columns, and guarded SQL `WHERE` condition storage.
 - Added Browser Button runtime lookup endpoints and a shared customer/user form popup for searching and selecting configured lookup rows.
+- Converted the Customers `Country` field to use the Countries Browser Button lookup while preserving the stored country id and existing dial-code display.
+- Added Form Design Field Linkage for low-code source-table mapping rules, including trigger condition, multi-table source rows with aliases, primary key match, guarded SQL join/where logic, and mapped output fields/display targets.
 - Renamed the current formula entry point to `Formula`.
 - Added Form Design drawer scaffolding with Add/Edit/Detail layouts, copy controls, draft/publish actions, visual field ordering, hidden/formula indicators, and double-click formula access.
 - Added backend storage for Form Design draft/published layouts and applied published layouts to actual customer/user forms.
 - Added field validation rules for min/max length, min/max numeric value, regex, conditional required, and uniqueness.
 - Added Formula Builder for formula expressions, built-in functions, custom helper functions, and SQL capture storage.
 - Added formula database columns and server-side formula evaluation for customer saves.
+- Added formula dependency validation, unknown field reference checks, circular-reference blocking, and dependency-order formula evaluation.
 - Added fullscreen/enlarge controls to pop-out modals.
 - Added module and field permission matrices with role/user grants and runtime enforcement for customer access and imports.
 - Added Import/Export Mapping controls for mapped Excel import headers, export headers, export visibility, and customer export downloads.
@@ -582,6 +640,38 @@ JSON endpoints use `Content-Type: application/json` unless noted otherwise. Vali
         }
       }
     ]
+  }
+  ```
+
+- `POST /api/browser-buttons/field-linkage/resolve` - resolves configured field-linkage mappings for a selected source value.
+
+  Request:
+
+  ```json
+  {
+    "sourceTable": "customers",
+    "sourceTables": [
+      {
+        "tableName": "customers",
+        "alias": "a"
+      }
+    ],
+    "primaryKeyField": "id",
+    "sourceFields": ["company_name", "email"],
+    "value": 1
+  }
+  ```
+
+  Response:
+
+  ```json
+  {
+    "columns": {
+      "id": 1,
+      "company_name": "Example Sdn Bhd",
+      "email": "hello@example.com"
+    },
+    "rows": []
   }
   ```
 
@@ -801,12 +891,49 @@ JSON endpoints use `Content-Type: application/json` unless noted otherwise. Vali
 - `GET /api/imports/customers/template` - downloads the protected customer Excel import template.
 - `GET /api/imports/customers/export` - downloads customers as a mapped Excel workbook.
 - `POST /api/imports/customers` - imports customers from an uploaded Excel file.
+- `GET /api/imports/modules/:moduleKey/template` - downloads an Excel import template for a published custom module.
+- `GET /api/imports/modules/:moduleKey/export` - exports published custom module records to Excel.
+- `POST /api/imports/modules/:moduleKey` - imports published custom module records from an uploaded Excel file. Detail-table rows use separate sheets linked by `Record Ref`.
 
   Request:
 
   ```text
   Content-Type: multipart/form-data
   file: .xlsx or .xls file field named "file"
+  ```
+
+### Generated Module Records
+
+- `GET /api/modules` - lists published custom modules visible to the current user.
+- `GET /api/modules/:moduleKey/config` - returns generated page configuration, fields, layouts, and current user's permissions.
+- `GET /api/modules/:moduleKey/records` - lists custom module records. Supports `search`, `filterField`, `filterOperator`, and `filterValue`.
+- `GET /api/modules/:moduleKey/records/:id` - returns one custom module record with detail-table rows.
+- `POST /api/modules/:moduleKey/records` - creates a custom module record.
+- `PUT /api/modules/:moduleKey/records/:id` - updates a custom module record.
+- `DELETE /api/modules/:moduleKey/records` - bulk deletes custom module records.
+
+  Create/update request:
+
+  ```json
+  {
+    "title": "Example Record",
+    "amount": 12.5,
+    "__detailTables": {
+      "example_dt1": [
+        {
+          "lineNote": "Detail row"
+        }
+      ]
+    }
+  }
+  ```
+
+  Delete request:
+
+  ```json
+  {
+    "ids": [1, 2]
+  }
   ```
 
   Response:
@@ -852,7 +979,40 @@ JSON endpoints use `Content-Type: application/json` unless noted otherwise. Vali
   }
   ```
 
+- `POST /api/sysadmin/modules` - creates a custom module.
+- `PATCH /api/sysadmin/modules/:moduleKey` - updates custom module name, description, status, or menu visibility.
+- `DELETE /api/sysadmin/modules/:moduleKey` - deletes an unused custom module.
+
+  Create request:
+
+  ```json
+  {
+    "name": "Projects",
+    "moduleKey": "projects",
+    "description": "Project tracking records",
+    "status": "draft",
+    "showInMenu": false
+  }
+  ```
+
+  Update request:
+
+  ```json
+  {
+    "name": "Projects",
+    "status": "published",
+    "showInMenu": true
+  }
+  ```
+
 - `GET /api/sysadmin/modules/:moduleKey` - returns one module configuration. Response shape matches one item from `GET /api/sysadmin/modules`.
+- `GET /api/sysadmin/modules/:moduleKey/config-history` - returns form/config versions and audit logs.
+- `POST /api/sysadmin/modules/:moduleKey/config-history/versions` - creates a config version snapshot.
+- `POST /api/sysadmin/modules/:moduleKey/config-history/:versionId/rollback` - rolls module configuration back to a saved version.
+- `GET /api/sysadmin/forms` - lists standalone low-code form definitions.
+- `POST /api/sysadmin/forms` - creates a standalone low-code form definition.
+- `DELETE /api/sysadmin/forms/:formKey` - deletes a standalone form definition.
+- `PATCH /api/sysadmin/forms/:formKey/fields/:fieldKey` - updates standalone form field formula settings.
 - `GET /api/sysadmin/modules/:moduleKey/fields/archived` - lists archived fields.
 
   Response:
@@ -1120,9 +1280,14 @@ npm.cmd run db:migrate
 # Seed countries and admin user
 npm.cmd run db:seed
 
+# Run backend smoke tests
+npm.cmd run test:smoke:backend
+
 # Check frontend JavaScript syntax
 node --check public\app.js
 ```
+
+The backend smoke test starts the Express app in-process and uses the configured admin login. If your database admin password differs from `.env`, either run `npm.cmd run db:seed` with the current `ADMIN_EMAIL` and `ADMIN_PASSWORD`, or set `SMOKE_ADMIN_EMAIL` and `SMOKE_ADMIN_PASSWORD` before running the smoke test.
 
 ## Copyable Next Steps
 
@@ -1165,7 +1330,7 @@ Security cleanup:
 Reliability:
 1. Add database backup plan.
 2. Test database restore.
-3. Add automated backend tests for auth, customers, users, and import.
+3. Keep backend smoke coverage current as phases move from planned to implemented.
 4. Add UI smoke tests for login, customer CRUD, import, and user CRUD.
 
 Recommended feature order:
