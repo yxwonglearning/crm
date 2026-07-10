@@ -16,6 +16,19 @@ async function ensureColumn(connection, tableName, columnName, definition) {
   }
 }
 
+async function ensureIndex(connection, tableName, indexName, definition) {
+  const [rows] = await connection.execute(
+    `SELECT COUNT(*) AS count
+     FROM information_schema.STATISTICS
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND INDEX_NAME = ?`,
+    [config.db.database, tableName, indexName]
+  );
+
+  if (rows[0].count === 0) {
+    await connection.query(`ALTER TABLE \`${tableName}\` ADD ${definition}`);
+  }
+}
+
 function assertSafeIdentifier(identifier) {
   if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(String(identifier || ''))) {
     throw new Error(`Unsafe database identifier: ${identifier}`);
@@ -98,6 +111,9 @@ async function main() {
   const schemaPath = path.join(__dirname, 'schema.sql');
   const schema = await fs.readFile(schemaPath, 'utf8');
   await connection.query(schema);
+  await ensureColumn(connection, 'users', 'clerk_user_id', 'clerk_user_id VARCHAR(191) NULL AFTER id');
+  await ensureIndex(connection, 'users', 'users_clerk_user_id_unique', 'UNIQUE KEY users_clerk_user_id_unique (clerk_user_id)');
+  await connection.query('ALTER TABLE `users` MODIFY `password_hash` VARCHAR(255) NULL');
   await ensureColumn(connection, 'users', 'custom_fields', 'custom_fields JSON NULL AFTER status');
   await ensureColumn(connection, 'customers', 'custom_fields', 'custom_fields JSON NULL AFTER notes');
   await ensureColumn(connection, 'crm_modules', 'module_status', "module_status ENUM('draft', 'published', 'archived') NOT NULL DEFAULT 'draft' AFTER description");

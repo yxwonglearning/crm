@@ -4,7 +4,7 @@ const moduleConfig = require('../sysadmin/module-config.service');
 const repository = require('./users.repository');
 const { validateFieldValue } = require('../../shared/field-validation');
 
-const systemFieldKeys = new Set(['name', 'email', 'password', 'role', 'status']);
+const systemFieldKeys = new Set(['name', 'email', 'password', 'clerkUserId', 'role', 'status']);
 
 function parseCustomFields(value) {
   if (!value) return {};
@@ -85,6 +85,7 @@ async function createUser(input) {
     const id = await repository.createUser({
       name: input.name,
       email: input.email,
+      clerkUserId: input.clerkUserId || null,
       passwordHash,
       role: input.role,
       status: input.status,
@@ -119,6 +120,7 @@ async function updateUser(id, input) {
   }, config.fields, id);
   if (input.name) updates.name = input.name;
   if (input.email) updates.email = input.email.toLowerCase();
+  if (input.clerkUserId !== undefined) updates.clerk_user_id = input.clerkUserId || null;
   if (input.role) updates.role = input.role;
   if (input.status) updates.status = input.status;
   if (input.password) {

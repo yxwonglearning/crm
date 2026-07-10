@@ -367,6 +367,53 @@ Suggested auth migration order:
 6. Add Clerk webhook handling for user lifecycle sync.
 7. Disable the custom `/api/auth/login` password flow after successful migration and testing.
 
+Current Clerk migration implementation:
+
+- `AUTH_PROVIDER=local` keeps the existing local email/password + app JWT flow.
+- `AUTH_PROVIDER=clerk` disables local password login and mounts Clerk sign-in on the login page.
+- Clerk session tokens are sent to Express as bearer tokens and verified server-side.
+- Express then loads the active CRM user from MySQL by `users.clerk_user_id`.
+- If no active MySQL user is mapped to the Clerk user, the API returns a forbidden response. This is intentional so Clerk identity does not bypass CRM role/status/permission controls.
+- `CLERK_AUTO_LINK_BY_EMAIL=false` is the recommended default. Setting it to `true` can auto-link a Clerk account to an unmapped MySQL user with the same email, but should only be used during a controlled migration window.
+
+Required Clerk environment values:
+
+```text
+AUTH_PROVIDER=clerk
+CLERK_PUBLISHABLE_KEY=pk_...
+CLERK_SECRET_KEY=sk_...
+CLERK_JWT_KEY=-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----
+CLERK_AUTHORIZED_PARTIES=http://localhost:3000,https://your-crm-domain.example
+CLERK_AUTO_LINK_BY_EMAIL=false
+```
+
+MySQL maintenance for Clerk:
+
+```sql
+-- Find the local CRM user to map.
+SELECT id, email, name, role, status, clerk_user_id
+FROM users
+WHERE email = 'admin@example.com';
+
+-- Map the local CRM user to the Clerk user ID from the Clerk dashboard.
+UPDATE users
+SET clerk_user_id = 'user_xxxxxxxxxxxxxxxxx'
+WHERE email = 'admin@example.com';
+
+-- Keep role/status in MySQL because those still drive CRM permissions.
+UPDATE users
+SET role = 'admin', status = 'active'
+WHERE clerk_user_id = 'user_xxxxxxxxxxxxxxxxx';
+```
+
+After enabling Clerk, keep maintaining these fields in MySQL:
+
+- `clerk_user_id`: identity mapping to Clerk.
+- `email` and `name`: CRM display/search fields. Keep them aligned with Clerk via manual update or future webhook sync.
+- `role`: CRM authorization level.
+- `status`: local CRM access switch. Set `inactive` to block a Clerk user from the CRM without deleting the Clerk account.
+- `custom_fields`: user profile fields created by Form Builder.
+
 ### Form Builder Conventions
 
 - `Data Key` is the stable internal field identifier used by API payloads, imports, JSON storage, formulas, reports, and future action-flow conditions. A field label can be renamed later, but the data key should stay stable so existing records and automations do not break.

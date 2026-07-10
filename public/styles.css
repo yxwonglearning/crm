@@ -296,6 +296,15 @@ button:disabled,
   margin-top: 2px;
 }
 
+.local-login-fields {
+  display: grid;
+  gap: clamp(10px, 0.97vh, 14px);
+}
+
+.clerk-auth-mount {
+  min-height: 340px;
+}
+
 .toolbar {
   display: flex;
   justify-content: space-between;

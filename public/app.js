@@ -28,6 +28,9 @@ const state = {
   token: storedSession.token,
   user: storedSession.user,
   rememberSession: storedSession.remembered,
+  authProvider: 'local',
+  authConfig: null,
+  clerkLoaded: false,
   countries: [],
   users: [],
   customers: [],
@@ -1720,8 +1723,9 @@ async function api(path, options = {}) {
   if (!(options.body instanceof FormData)) {
     headers['Content-Type'] = 'application/json';
   }
-  if (state.token) {
-    headers.Authorization = `Bearer ${state.token}`;
+  const authToken = await currentAuthToken();
+  if (authToken) {
+    headers.Authorization = `Bearer ${authToken}`;
   }
 
   const response = await fetch(path, { ...options, headers });
@@ -1737,6 +1741,55 @@ async function api(path, options = {}) {
     return null;
   }
   return response.json();
+}
+
+async function currentAuthToken() {
+  if (state.authProvider === 'clerk') {
+    return window.Clerk?.session ? await window.Clerk.session.getToken() : '';
+  }
+  return state.token;
+}
+
+async function loadAuthConfig() {
+  const response = await fetch('/api/auth/config');
+  if (!response.ok) {
+    throw new Error('Unable to load auth configuration');
+  }
+  state.authConfig = await response.json();
+  state.authProvider = state.authConfig.provider || 'local';
+}
+
+function clerkDomainFromPublishableKey(publishableKey) {
+  try {
+    return atob(String(publishableKey || '').split('_')[2] || '').slice(0, -1);
+  } catch (_error) {
+    return '';
+  }
+}
+
+function loadScriptOnce(src, attributes = {}) {
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[src="${src}"]`);
+    if (existing) {
+      existing.addEventListener('load', resolve, { once: true });
+      existing.addEventListener('error', reject, { once: true });
+      if (existing.dataset.loaded === 'true') resolve();
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = src;
+    script.defer = true;
+    script.crossOrigin = 'anonymous';
+    Object.entries(attributes).forEach(([key, value]) => {
+      script.setAttribute(key, value);
+    });
+    script.addEventListener('load', () => {
+      script.dataset.loaded = 'true';
+      resolve();
+    }, { once: true });
+    script.addEventListener('error', reject, { once: true });
+    document.head.appendChild(script);
+  });
 }
 
 function serializeForm(form) {
@@ -2330,7 +2383,9 @@ function setSession(token, user, rememberSession = state.rememberSession) {
   state.rememberSession = Boolean(rememberSession);
   document.body.classList.remove('is-auth');
   document.body.classList.add('is-app');
-  writeStoredSession(token, user, state.rememberSession);
+  if (state.authProvider === 'local') {
+    writeStoredSession(token, user, state.rememberSession);
+  }
   $('#sessionLabel').textContent = `${user.name} · ${user.role}`;
   $('#logoutButton').hidden = false;
   $('[data-view="usersView"]').hidden = user.role !== 'admin';
@@ -2343,7 +2398,9 @@ function clearSession() {
   state.rememberSession = false;
   document.body.classList.remove('is-app');
   document.body.classList.add('is-auth');
-  clearStoredSession();
+  if (state.authProvider === 'local') {
+    clearStoredSession();
+  }
   $('#sessionLabel').textContent = 'Not signed in';
   $('#logoutButton').hidden = true;
   $('[data-view="usersView"]').hidden = false;
@@ -4601,7 +4658,7 @@ function closeImportModal() {
 async function downloadCustomerExport() {
   try {
     const response = await fetch('/api/imports/customers/export', {
-      headers: { Authorization: `Bearer ${state.token}` }
+      headers: { Authorization: `Bearer ${await currentAuthToken()}` }
     });
     if (!response.ok) throw new Error('Unable To Download Export');
     const blob = await response.blob();
@@ -4736,9 +4793,89 @@ function userFormData(form) {
   return data;
 }
 
+function setAuthHelp(message = '') {
+  const help = $('#authHelpText');
+  if (help) help.textContent = message;
+}
+
+function configureAuthUi() {
+  const usingClerk = state.authProvider === 'clerk';
+  $('#localLoginFields').hidden = usingClerk;
+  $('#clerkSignInMount').hidden = !usingClerk;
+  setAuthHelp(usingClerk
+    ? 'Sign in with Clerk. CRM roles and permissions still come from the local MySQL user mapping.'
+    : '');
+}
+
+async function completeClerkSession() {
+  const token = await currentAuthToken();
+  if (!token) {
+    clearSession();
+    return false;
+  }
+  const me = await api('/api/auth/me');
+  setSession(token, me.user, false);
+  showView('customersView');
+  await loadBootstrap();
+  return true;
+}
+
+async function initClerkAuth() {
+  configureAuthUi();
+  if (!state.authConfig?.clerk?.configured) {
+    clearSession();
+    setAuthHelp('Clerk is selected, but publishable/verification keys are not configured in .env.');
+    return;
+  }
+
+  const publishableKey = state.authConfig.clerk.publishableKey;
+  const clerkDomain = clerkDomainFromPublishableKey(publishableKey);
+  if (!clerkDomain) {
+    clearSession();
+    setAuthHelp('Clerk publishable key is invalid.');
+    return;
+  }
+
+  await loadScriptOnce(`https://${clerkDomain}/npm/@clerk/ui@1/dist/ui.browser.js`);
+  await loadScriptOnce(`https://${clerkDomain}/npm/@clerk/clerk-js@6/dist/clerk.browser.js`, {
+    'data-clerk-publishable-key': publishableKey
+  });
+  await window.Clerk.load({
+    ui: { ClerkUI: window.__internal_ClerkUICtor }
+  });
+  state.clerkLoaded = true;
+
+  if (window.Clerk.addListener) {
+    window.Clerk.addListener(async ({ session }) => {
+      if (!session) return;
+      try {
+        await completeClerkSession();
+      } catch (error) {
+        clearSession();
+        setAuthHelp(error.message);
+      }
+    });
+  }
+
+  if (window.Clerk.isSignedIn) {
+    try {
+      await completeClerkSession();
+    } catch (error) {
+      clearSession();
+      setAuthHelp(error.message);
+    }
+    return;
+  }
+
+  clearSession();
+  configureAuthUi();
+  window.Clerk.mountSignIn($('#clerkSignInMount'));
+}
+
 function bindEvents() {
   $('#loginForm').addEventListener('submit', async (event) => {
     event.preventDefault();
+    if (state.authProvider === 'clerk') return;
     const rememberMe = Boolean(event.currentTarget.elements.rememberMe?.checked);
     try {
       const result = await api('/api/auth/login', {
@@ -4757,13 +4894,19 @@ function bindEvents() {
     }
   });
 
-  $('#logoutButton').addEventListener('click', clearSession);
+  $('#logoutButton').addEventListener('click', async () => {
+    if (state.authProvider === 'clerk' && window.Clerk) {
+      await window.Clerk.signOut();
+    }
+    clearSession();
+    configureAuthUi();
+  });
 
   $('#templateLink').addEventListener('click', async (event) => {
     event.preventDefault();
     try {
       const response = await fetch('/api/imports/customers/template', {
-        headers: { Authorization: `Bearer ${state.token}` }
+        headers: { Authorization: `Bearer ${await currentAuthToken()}` }
       });
       if (!response.ok) throw new Error('Unable To Download Template');
       const blob = await response.blob();
@@ -6338,7 +6481,19 @@ function debounce(fn, wait) {
 }
 
 async function init() {
+  try {
+    await loadAuthConfig();
+  } catch (error) {
+    toast(titleCaseMessage(error.message), 'error');
+  }
   bindEvents();
+  configureAuthUi();
+
+  if (state.authProvider === 'clerk') {
+    await initClerkAuth();
+    return;
+  }
+
   if (!state.token || !state.user) {
     clearSession();
     return;

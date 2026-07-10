@@ -36,23 +36,27 @@
             <form id="loginForm" class="panel login-card">
               <span class="brand-mark large">A</span>
               <h2>Sign In</h2>
-              <label>
-                Email
-                <input name="email" type="email" autocomplete="email" required>
-              </label>
-              <label>
-                Password
-                <input name="password" type="password" autocomplete="current-password" minlength="8" required>
-              </label>
-              <label class="login-option">
-                <input name="rememberMe" type="checkbox" value="true">
-                <span>
-                  <strong>Remember me</strong>
-                  <small>Keep me signed in on this device.</small>
-                </span>
-              </label>
-              <button type="submit">Sign In</button>
-              <p class="muted">Seeded admin credentials come from your `.env` file.</p>
+              <div id="localLoginFields" class="local-login-fields">
+                <label>
+                  Email
+                  <input name="email" type="email" autocomplete="email" required>
+                </label>
+                <label>
+                  Password
+                  <input name="password" type="password" autocomplete="current-password" minlength="8" required>
+                </label>
+                <label class="login-option">
+                  <input name="rememberMe" type="checkbox" value="true">
+                  <span>
+                    <strong>Remember me</strong>
+                    <small>Keep me signed in on this device.</small>
+                  </span>
+                </label>
+                <button type="submit">Sign In</button>
+                <p class="muted">Seeded admin credentials come from your `.env` file.</p>
+              </div>
+              <div id="clerkSignInMount" class="clerk-auth-mount" hidden></div>
+              <p id="authHelpText" class="muted"></p>
             </form>
           </div>
         </section>

@@ -20,11 +20,23 @@ const config = {
   appName: process.env.APP_NAME || 'Self Hosted CRM',
   env: process.env.NODE_ENV || 'development',
   port: Number(process.env.PORT || 3000),
+  appBaseUrl: process.env.APP_BASE_URL || `http://localhost:${Number(process.env.PORT || 3000)}`,
+  authProvider: process.env.AUTH_PROVIDER || 'local',
   jwtSecret: jwtSecret(),
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '8h',
   jwtRememberExpiresIn: process.env.JWT_REMEMBER_EXPIRES_IN || '30d',
   jwtIssuer: process.env.JWT_ISSUER || 'self-hosted-crm',
   jwtAudience: process.env.JWT_AUDIENCE || 'self-hosted-crm-users',
+  clerk: {
+    publishableKey: process.env.CLERK_PUBLISHABLE_KEY || '',
+    secretKey: process.env.CLERK_SECRET_KEY || '',
+    jwtKey: (process.env.CLERK_JWT_KEY || '').replace(/\\n/g, '\n'),
+    authorizedParties: (process.env.CLERK_AUTHORIZED_PARTIES || process.env.APP_BASE_URL || `http://localhost:${Number(process.env.PORT || 3000)}`)
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean),
+    autoLinkByEmail: process.env.CLERK_AUTO_LINK_BY_EMAIL === 'true'
+  },
   db: {
     host: process.env.DB_HOST || '127.0.0.1',
     port: Number(process.env.DB_PORT || 3306),

@@ -1,14 +1,16 @@
 CREATE TABLE IF NOT EXISTS users (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  clerk_user_id VARCHAR(191) NULL,
   name VARCHAR(120) NOT NULL,
   email VARCHAR(190) NOT NULL,
-  password_hash VARCHAR(255) NOT NULL,
+  password_hash VARCHAR(255) NULL,
   role ENUM('admin', 'manager', 'user') NOT NULL DEFAULT 'user',
   status ENUM('active', 'inactive') NOT NULL DEFAULT 'active',
   custom_fields JSON NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
+  UNIQUE KEY users_clerk_user_id_unique (clerk_user_id),
   UNIQUE KEY users_email_unique (email)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

@@ -14,6 +14,7 @@ const createUserSchema = z.object({
   name: z.string().trim().min(2).max(120),
   email: z.string().trim().email().max(190),
   password: z.string().trim().min(8).max(72),
+  clerkUserId: z.string().trim().max(191).optional(),
   role: roleSchema.default('user'),
   status: statusSchema.default('active')
 }).passthrough();
@@ -22,6 +23,7 @@ const updateUserSchema = z.object({
   name: z.string().trim().min(2).max(120).optional(),
   email: z.string().trim().email().max(190).optional(),
   password: z.string().trim().min(8).max(72).optional(),
+  clerkUserId: z.string().trim().max(191).optional(),
   role: roleSchema.optional(),
   status: statusSchema.optional()
 }).passthrough();

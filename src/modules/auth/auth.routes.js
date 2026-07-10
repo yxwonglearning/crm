@@ -1,5 +1,6 @@
 const express = require('express');
 const { z } = require('zod');
+const { config } = require('../../shared/config');
 const { AppError, asyncHandler } = require('../../shared/errors');
 const { validate } = require('../../shared/validation');
 const { login } = require('./auth.service');
@@ -53,7 +54,21 @@ const loginSchema = z.object({
   rememberMe: z.boolean().optional().default(false)
 });
 
+authRoutes.get('/config', (_req, res) => {
+  res.json({
+    provider: config.authProvider,
+    clerk: {
+      publishableKey: config.authProvider === 'clerk' ? config.clerk.publishableKey : '',
+      authorizedParties: config.clerk.authorizedParties,
+      configured: Boolean(config.clerk.publishableKey && (config.clerk.jwtKey || config.clerk.secretKey))
+    }
+  });
+});
+
 authRoutes.post('/login', asyncHandler(async (req, res) => {
+  if (config.authProvider === 'clerk') {
+    throw new AppError('Password login is disabled. Sign in with Clerk.', 410);
+  }
   const input = validate(loginSchema, req.body);
   const attemptKey = checkLoginThrottle(req, input.email);
   let result;
