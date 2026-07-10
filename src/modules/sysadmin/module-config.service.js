@@ -1,4 +1,5 @@
 const { AppError } = require('../../shared/errors');
+const { formulaDependencyGraph } = require('../../shared/formula-dependencies');
 const repository = require('./module-config.repository');
 const { customerModule, customerFields, userModule, userFields } = require('./module-config.defaults');
 
@@ -17,7 +18,7 @@ const defaultBrowserButtons = [
     valueField: 'id',
     displayField: 'name',
     searchFields: ['name', 'iso2', 'dial_code'],
-    returnFields: ['name', 'dial_code'],
+    returnFields: ['name', 'iso2', 'dial_code'],
     system: true
   },
   {
@@ -63,6 +64,12 @@ const fieldTypes = new Set([
   'country',
   'owner'
 ]);
+const moduleStatuses = new Set(['draft', 'published', 'archived']);
+
+function slugModuleKey(label) {
+  return slugBrowserKey(label);
+}
+
 function slugFieldKey(label) {
   return String(label || '')
     .trim()
@@ -81,9 +88,21 @@ function slugBrowserKey(label) {
 }
 
 function defaultFormLayout(fields) {
+  const mainFieldKeys = fields
+    .filter((field) => field.tableType !== 'detail')
+    .map((field) => field.fieldKey);
   return {
     order: fields.map((field) => field.fieldKey),
-    hidden: fields.filter((field) => !field.showInForm).map((field) => field.fieldKey)
+    hidden: fields.filter((field) => !field.showInForm).map((field) => field.fieldKey),
+    fieldSpans: {},
+    sections: [
+      {
+        id: 'section_general',
+        title: 'General',
+        columns: 1,
+        fieldKeys: mainFieldKeys
+      }
+    ]
   };
 }
 
@@ -102,12 +121,31 @@ function normalizeLayout(layout, fallback) {
   if (Array.isArray(layout)) {
     return {
       order: layout.map(String),
-      hidden: [...fallback.hidden]
+      hidden: [...fallback.hidden],
+      fieldSpans: { ...(fallback.fieldSpans || {}) },
+      sections: [...fallback.sections]
     };
   }
+  const fallbackSection = fallback.sections[0] || {
+    id: 'section_general',
+    title: 'General',
+    columns: 1,
+    fieldKeys: []
+  };
+  const sections = Array.isArray(layout?.sections) && layout.sections.length
+    ? layout.sections.map((section, index) => ({
+      id: String(section?.id || `section_${index + 1}`).trim().slice(0, 80) || `section_${index + 1}`,
+      title: String(section?.title || `Section ${index + 1}`).trim().slice(0, 120) || `Section ${index + 1}`,
+      columns: Math.min(3, Math.max(1, Number(section?.columns) || 1)),
+      fieldKeys: Array.isArray(section?.fieldKeys) ? section.fieldKeys.map(String) : []
+    }))
+    : [{ ...fallbackSection, fieldKeys: [...fallbackSection.fieldKeys] }];
   return {
     order: Array.isArray(layout?.order) ? layout.order.map(String) : [...fallback.order],
-    hidden: Array.isArray(layout?.hidden) ? layout.hidden.map(String) : [...fallback.hidden]
+    hidden: Array.isArray(layout?.hidden) ? layout.hidden.map(String) : [...fallback.hidden],
+    fieldSpans: Object.fromEntries(Object.entries(layout?.fieldSpans || fallback.fieldSpans || {})
+      .map(([fieldKey, span]) => [fieldKey, Math.min(3, Math.max(1, Number(span) || 1))])),
+    sections
   };
 }
 
@@ -136,6 +174,9 @@ function modulePayload(module, fields, formLayouts) {
       moduleKey: module.module_key,
       name: module.name,
       description: module.description,
+      status: module.module_status || (module.is_enabled ? 'published' : 'archived'),
+      showInMenu: Boolean(module.show_in_menu),
+      system: Boolean(module.is_system),
       enabled: Boolean(module.is_enabled)
     },
     fields,
@@ -143,10 +184,95 @@ function modulePayload(module, fields, formLayouts) {
   };
 }
 
+async function configSnapshot(moduleKey) {
+  const module = await repository.findModuleByKey(moduleKey);
+  if (!module) throw new AppError('Module not found', 404);
+  return {
+    module: {
+      moduleKey: module.module_key,
+      name: module.name,
+      description: module.description,
+      status: module.module_status || (module.is_enabled ? 'published' : 'archived'),
+      showInMenu: Boolean(module.show_in_menu),
+      system: Boolean(module.is_system),
+      enabled: Boolean(module.is_enabled)
+    },
+    fields: await repository.listAllFields(moduleKey),
+    formLayouts: (await repository.listFormLayouts(moduleKey)).reduce((layouts, saved) => {
+      if (!layouts[saved.state]) layouts[saved.state] = {};
+      layouts[saved.state][saved.formType] = saved.layout;
+      return layouts;
+    }, {})
+  };
+}
+
+async function recordConfigChange(moduleKey, details) {
+  const versionId = details.versionId || (await ensureInitialConfigVersion(moduleKey))?.id || null;
+  return repository.createConfigAuditLog(moduleKey, {
+    versionId,
+    action: details.action,
+    targetType: details.targetType,
+    targetKey: details.targetKey,
+    summary: details.summary,
+    before: details.before,
+    after: details.after,
+    userId: details.user?.id
+  });
+}
+
+async function ensureInitialConfigVersion(moduleKey) {
+  const existing = await repository.latestConfigVersion(moduleKey);
+  if (existing) return existing;
+  const snapshot = await configSnapshot(moduleKey);
+  const version = await repository.createConfigVersion(moduleKey, {
+    action: 'version.baseline',
+    summary: 'Initial form version',
+    snapshot
+  });
+  await repository.createConfigAuditLog(moduleKey, {
+    versionId: version?.id,
+    action: 'version.baseline',
+    targetType: 'config_version',
+    targetKey: String(version?.versionNumber || 1),
+    summary: `Created baseline version ${version?.versionNumber || 1}`,
+    before: null,
+    after: snapshot
+  });
+  return version;
+}
+
+async function createConfigVersion(moduleKey, user = null, input = {}) {
+  if (defaultModules.has(moduleKey)) {
+    await ensureDefaultConfig(moduleKey);
+  }
+  const module = await repository.findModuleByKey(moduleKey);
+  if (!module) throw new AppError('Module not found', 404);
+  await ensureInitialConfigVersion(moduleKey);
+  const snapshot = await configSnapshot(moduleKey);
+  const remark = String(input.remark || '').trim();
+  const version = await repository.createConfigVersion(moduleKey, {
+    action: 'version.create',
+    summary: remark || 'Created version snapshot',
+    snapshot,
+    userId: user?.id
+  });
+  await repository.createConfigAuditLog(moduleKey, {
+    versionId: version.id,
+    action: 'version.create',
+    targetType: 'config_version',
+    targetKey: String(version.versionNumber),
+    summary: remark || `Created version ${version.versionNumber}`,
+    before: null,
+    after: snapshot,
+    userId: user?.id
+  });
+  return listConfigHistory(moduleKey);
+}
+
 async function withFieldDataCounts(moduleKey, fields) {
   return Promise.all(fields.map(async (field) => ({
     ...field,
-    dataCount: field.locked ? 0 : await repository.fieldDataCount(moduleKey, field)
+    dataCount: await repository.fieldDataCount(moduleKey, field)
   })));
 }
 
@@ -159,6 +285,50 @@ async function ensureDefaultConfig(moduleKey) {
   const module = await repository.upsertModule(config.module);
   for (const field of config.fields) {
     await repository.upsertField(module.id, field);
+  }
+  if (moduleKey === 'customers') {
+    const countryField = await repository.findField(moduleKey, 'countryId');
+    const countryMappings = Array.isArray(countryField?.lookupConfig?.fieldMappings)
+      ? countryField.lookupConfig.fieldMappings
+      : [];
+    const countryMappingTargets = new Set(countryMappings.map((mapping) => mapping.targetField));
+    if (
+      countryField &&
+      (
+        countryField.type === 'country' ||
+        countryField.lookupConfig?.browserButtonKey !== 'countries' ||
+        !countryField.lookupConfig?.sourceTable ||
+        !countryField.lookupConfig?.primaryKeyField ||
+        !Array.isArray(countryField.lookupConfig?.fieldMappings) ||
+        !countryMappingTargets.has('__lookupDisplay') ||
+        !countryMappingTargets.has('__dialCodeDisplay')
+      )
+    ) {
+      const mergedMappings = [
+        ...countryMappings.filter((mapping) => mapping?.sourceField && mapping?.targetField),
+        !countryMappingTargets.has('__lookupDisplay')
+          ? { sourceField: 'name', targetField: '__lookupDisplay' }
+          : null,
+        !countryMappingTargets.has('__dialCodeDisplay')
+          ? { sourceField: 'dial_code', targetField: '__dialCodeDisplay' }
+          : null
+      ].filter(Boolean);
+      await repository.updateField(moduleKey, 'countryId', {
+        type: 'browser_button',
+        lookupConfig: {
+          browserButtonKey: 'countries',
+          triggerCondition: 'on_select',
+          sourceModule: 'countries',
+          sourceTable: 'countries',
+          sourceTables: [
+            { moduleKey: 'countries', tableName: 'countries', alias: 'a' }
+          ],
+          primaryKeyField: 'id',
+          sourceWhere: '',
+          fieldMappings: mergedMappings
+        }
+      });
+    }
   }
   return module;
 }
@@ -181,6 +351,11 @@ async function ensureDefaultBrowserButtons() {
     const existing = await repository.findBrowserButton(browser.browserKey);
     if (!existing) {
       await repository.upsertBrowserButton(browser);
+    } else if (existing.system) {
+      await repository.upsertBrowserButton({
+        ...browser,
+        enabled: existing.enabled
+      });
     }
   }
 }
@@ -208,6 +383,122 @@ async function listModules() {
   }));
 }
 
+function normalizeModuleStatus(input) {
+  const status = String(input || 'draft').trim().toLowerCase();
+  if (!moduleStatuses.has(status)) throw new AppError('Unsupported module status', 422);
+  return status;
+}
+
+function normalizeModuleInput(input, { creating = false } = {}) {
+  const name = String(input.name || '').trim();
+  if (!name) throw new AppError('Module name is required', 422);
+  const moduleKey = creating
+    ? String(input.moduleKey || slugModuleKey(name)).trim()
+    : undefined;
+  if (creating) {
+    assertConfigKey(moduleKey, 'Module key');
+    if (defaultModules.has(moduleKey) || ['countries', 'crm_modules', 'crm_forms'].includes(moduleKey)) {
+      throw new AppError('Module key is reserved', 422);
+    }
+  }
+  const status = normalizeModuleStatus(input.status || 'draft');
+  return {
+    moduleKey,
+    name,
+    description: String(input.description || '').trim().slice(0, 255),
+    status,
+    showInMenu: Boolean(input.showInMenu && status === 'published'),
+    enabled: status !== 'archived'
+  };
+}
+
+async function createModule(input, user = null) {
+  await ensureAllDefaultConfigs();
+  const module = normalizeModuleInput(input, { creating: true });
+  const existing = await repository.findModuleByKey(module.moduleKey);
+  if (existing) throw new AppError('Module key already exists', 409);
+  await repository.createModule(module);
+  await recordConfigChange(module.moduleKey, {
+    action: 'module.create',
+    targetType: 'module',
+    targetKey: module.moduleKey,
+    summary: `Created module ${module.name}`,
+    before: null,
+    after: module,
+    user
+  });
+  return getModuleConfig(module.moduleKey);
+}
+
+async function updateModule(moduleKey, input, user = null) {
+  await ensureAllDefaultConfigs();
+  assertConfigKey(moduleKey, 'Module key');
+  const existing = await repository.findModuleByKey(moduleKey);
+  if (!existing) throw new AppError('Module not found', 404);
+  if (existing.is_system) throw new AppError('System modules cannot be edited here', 422);
+  const next = normalizeModuleInput({
+    name: input.name ?? existing.name,
+    description: input.description ?? existing.description,
+    status: input.status ?? existing.module_status ?? (existing.is_enabled ? 'published' : 'archived'),
+    showInMenu: input.showInMenu ?? existing.show_in_menu
+  });
+  await repository.updateModule(moduleKey, next);
+  const updated = await repository.findModuleByKey(moduleKey);
+  await recordConfigChange(moduleKey, {
+    action: 'module.update',
+    targetType: 'module',
+    targetKey: moduleKey,
+    summary: `Updated module ${updated?.name || existing.name}`,
+    before: {
+      moduleKey: existing.module_key,
+      name: existing.name,
+      description: existing.description,
+      status: existing.module_status,
+      showInMenu: Boolean(existing.show_in_menu),
+      enabled: Boolean(existing.is_enabled)
+    },
+    after: {
+      moduleKey: updated.module_key,
+      name: updated.name,
+      description: updated.description,
+      status: updated.module_status,
+      showInMenu: Boolean(updated.show_in_menu),
+      enabled: Boolean(updated.is_enabled)
+    },
+    user
+  });
+  return getModuleConfig(moduleKey);
+}
+
+async function deleteModule(moduleKey, user = null) {
+  await ensureAllDefaultConfigs();
+  assertConfigKey(moduleKey, 'Module key');
+  const existing = await repository.findModuleByKey(moduleKey);
+  if (!existing) throw new AppError('Module not found', 404);
+  if (existing.is_system) throw new AppError('System modules cannot be deleted', 422);
+  const recordCount = await repository.moduleRecordCount(moduleKey);
+  if (recordCount > 0) {
+    throw new AppError('Modules with saved records cannot be deleted. Archive the module instead.', 422);
+  }
+  const snapshot = await configSnapshot(moduleKey);
+  await recordConfigChange(moduleKey, {
+    action: 'module.delete',
+    targetType: 'module',
+    targetKey: moduleKey,
+    summary: `Deleted module ${existing.name}`,
+    before: snapshot,
+    after: null,
+    user
+  });
+  const ownedBrowserButtons = await repository.listBrowserButtonsBySourceModule(moduleKey);
+  const ownedBrowserKeys = ownedBrowserButtons.map((browser) => browser.browserKey);
+  await repository.clearBrowserButtonReferences(ownedBrowserKeys, moduleKey);
+  await repository.deleteBrowserButtonsBySourceModule(moduleKey);
+  await repository.deleteStandaloneFormIfExists(moduleKey);
+  await repository.deleteModule(moduleKey);
+  return { moduleKey, deleted: true };
+}
+
 function normalizeStringList(input) {
   if (Array.isArray(input)) {
     return input.map((item) => String(item).trim()).filter(Boolean);
@@ -221,6 +512,108 @@ function normalizeStringList(input) {
 function assertConfigKey(value, label) {
   if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(String(value || ''))) {
     throw new AppError(`${label} must start with a letter and use only letters, numbers, or underscores`, 422);
+  }
+}
+
+function normalizeStandaloneFormField(input = {}, index = 0) {
+  const label = String(input.label || '').trim();
+  const fieldKey = String(input.fieldKey || '').trim();
+  const databaseFieldName = String(input.databaseFieldName || '').trim();
+  const type = String(input.type || 'textbox').trim();
+  if (!label) throw new AppError(`Field name is required at row ${index + 1}`, 422);
+  assertConfigKey(fieldKey, `Data key at row ${index + 1}`);
+  assertConfigKey(databaseFieldName, `Database field name at row ${index + 1}`);
+  if (!fieldTypes.has(type)) throw new AppError(`Unsupported field type at row ${index + 1}`, 422);
+  return {
+    fieldKey,
+    databaseFieldName,
+    label,
+    type,
+    tableType: input.tableType === 'detail' ? 'detail' : 'main',
+    options: isDropdownOptionFieldType(type) ? normalizeOptions(input.options) : [],
+    showInTable: input.showInTable !== false,
+    showInForm: input.showInForm !== false,
+    showInImport: Boolean(input.showInImport),
+    required: Boolean(input.required)
+  };
+}
+
+function normalizeStandaloneForm(input = {}) {
+  const formKey = String(input.formKey || '').trim();
+  const name = String(input.name || '').trim();
+  if (!name) throw new AppError('Form name is required', 422);
+  assertConfigKey(formKey, 'Database name');
+  const fields = (input.fields || []).map(normalizeStandaloneFormField);
+  if (!fields.length) throw new AppError('Add at least one field', 422);
+  const fieldKeys = new Set();
+  const databaseNames = new Set();
+  fields.forEach((field) => {
+    if (fieldKeys.has(field.fieldKey)) throw new AppError(`Duplicate data key: ${field.fieldKey}`, 422);
+    if (databaseNames.has(field.databaseFieldName)) throw new AppError(`Duplicate database field name: ${field.databaseFieldName}`, 422);
+    fieldKeys.add(field.fieldKey);
+    databaseNames.add(field.databaseFieldName);
+  });
+  return {
+    formKey,
+    name,
+    description: String(input.description || '').trim(),
+    fields
+  };
+}
+
+async function listStandaloneForms() {
+  return repository.listStandaloneForms();
+}
+
+async function createStandaloneForm(input, user = null) {
+  const form = normalizeStandaloneForm(input);
+  if (await repository.findStandaloneForm(form.formKey)) {
+    throw new AppError('Form key already exists', 409);
+  }
+  await repository.createStandaloneForm(form, user?.id);
+  return { forms: await listStandaloneForms() };
+}
+
+async function deleteStandaloneForm(formKey) {
+  const existing = await repository.findStandaloneForm(formKey);
+  if (!existing) throw new AppError('Form not found', 404);
+  await repository.deleteStandaloneForm(formKey);
+  return { forms: await listStandaloneForms() };
+}
+
+async function updateStandaloneFormField(formKey, fieldKey, input = {}, user = null) {
+  const form = await repository.findStandaloneForm(formKey);
+  if (!form) throw new AppError('Form not found', 404);
+  const fieldIndex = form.fields.findIndex((field) => field.fieldKey === fieldKey);
+  if (fieldIndex === -1) throw new AppError('Field not found', 404);
+  const formulaFunctionName = input.formulaFunctionName === undefined ? undefined : normalizeFormulaFunctionName(input.formulaFunctionName);
+  assertFormulaFunctionName(formulaFunctionName);
+  const formulaJs = input.formulaJs === undefined ? undefined : normalizeFormulaScript(input.formulaJs);
+  assertFormulaSourceDisabled(formulaJs);
+  const formulaFunctionBody = input.formulaFunctionBody === undefined ? undefined : normalizeFormulaScript(input.formulaFunctionBody);
+  assertCustomFormulaBodySafe(formulaFunctionBody);
+  const updates = {
+    formulaExpression: input.formulaExpression === undefined ? undefined : normalizeFormulaExpression(input.formulaExpression),
+    formulaEnabled: input.formulaEnabled === undefined ? undefined : Boolean(input.formulaEnabled && normalizeFormulaExpression(input.formulaExpression ?? form.fields[fieldIndex].formulaExpression)),
+    formulaJs,
+    formulaFunctionName,
+    formulaFunctionBody,
+    formulaSql: input.formulaSql === undefined ? undefined : normalizeFormulaScript(input.formulaSql)
+  };
+  Object.keys(updates).forEach((key) => {
+    if (updates[key] === undefined) delete updates[key];
+  });
+  const fields = form.fields.map((field, index) => (
+    index === fieldIndex ? { ...field, ...updates } : field
+  ));
+  formulaDependencyGraph(fields);
+  await repository.updateStandaloneFormFields(formKey, fields, user?.id);
+  return { forms: await listStandaloneForms() };
+}
+
+function assertQualifiedField(value, label) {
+  if (!/^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)?$/.test(String(value || ''))) {
+    throw new AppError(`${label} must use field or alias.field format`, 422);
   }
 }
 
@@ -263,10 +656,65 @@ function normalizeBrowserButton(input = {}, existing = null) {
   };
 }
 
-function normalizeLookupConfig(input = {}, type = '') {
-  if (type !== 'browser_button') return {};
+function normalizeLookupConfig(input = {}, _type = '') {
   const browserButtonKey = String(input.browserButtonKey || '').trim();
-  return browserButtonKey ? { browserButtonKey } : {};
+  const triggerField = String(input.triggerField || '').trim();
+  const sourceModule = String(input.sourceModule || '').trim();
+  const sourceTable = String(input.sourceTable || '').trim();
+  const sourceTables = Array.isArray(input.sourceTables)
+    ? input.sourceTables
+      .map((source, index) => ({
+        moduleKey: String(source?.moduleKey || sourceModule || '').trim(),
+        tableName: String(source?.tableName || '').trim(),
+        alias: String(source?.alias || String.fromCharCode(97 + index)).trim()
+      }))
+      .filter((source) => source.tableName && source.alias)
+    : [];
+  const triggerCondition = input.triggerCondition === 'on_select' ? 'on_select' : 'on_change';
+  const primaryKeyField = String(input.primaryKeyField || '').trim();
+  const sourceWhere = String(input.sourceWhere || '').trim();
+  const sourceJoins = Array.isArray(input.sourceJoins)
+    ? input.sourceJoins
+      .map((join) => ({
+        leftField: String(join?.leftField || '').trim(),
+        operator: ['=', '<>', '>', '>=', '<', '<='].includes(join?.operator) ? join.operator : '=',
+        rightField: String(join?.rightField || '').trim()
+      }))
+      .filter((join) => join.leftField && join.rightField)
+    : [];
+  const fieldMappings = Array.isArray(input.fieldMappings)
+    ? input.fieldMappings
+      .map((mapping) => ({
+        sourceField: String(mapping?.sourceField || '').trim(),
+        targetField: String(mapping?.targetField || '').trim(),
+        coerceType: ['auto', 'text', 'number', 'integer', 'boolean', 'date'].includes(mapping?.coerceType) ? mapping.coerceType : 'auto'
+      }))
+      .filter((mapping) => mapping.sourceField && mapping.targetField)
+    : [];
+  [...sourceTables.map((source) => source.tableName), ...sourceTables.map((source) => source.alias).filter(Boolean)].forEach((value) => {
+    assertConfigKey(value, 'Field linkage source settings');
+  });
+  if (sourceTable) assertConfigKey(sourceTable, 'Field linkage source table');
+  [triggerField, primaryKeyField, ...sourceJoins.flatMap((join) => [join.leftField, join.rightField]), ...fieldMappings.map((mapping) => mapping.sourceField)]
+    .filter(Boolean)
+    .forEach((value) => assertQualifiedField(value, 'Field linkage field'));
+  if (sourceWhere && (/[;]/.test(sourceWhere) || /--|\/\*/.test(sourceWhere))) {
+    throw new AppError('Field linkage SQL WHERE cannot include statement separators or comments', 422);
+  }
+  if (!browserButtonKey && !sourceTable && !sourceTables.length && !fieldMappings.length) return {};
+  return {
+    browserButtonKey,
+    triggerField,
+    triggerCondition,
+    sourceModule,
+    sourceTable,
+    sourceTables,
+    sourceJoins,
+    primaryKeyField,
+    sourceWhere,
+    clearOnEmpty: input.clearOnEmpty !== false,
+    fieldMappings
+  };
 }
 
 async function listBrowserButtons() {
@@ -333,6 +781,20 @@ function normalizeFormulaExpression(input) {
 
 function normalizeFormulaScript(input) {
   return String(input || '').trim();
+}
+
+const customFormulaForbiddenPattern = /\b(?:constructor|eval|Function|global|globalThis|process|require|module|exports|import|this|prototype|__proto__|while|for|setTimeout|setInterval|Promise|fetch|XMLHttpRequest|document|window|localStorage|sessionStorage)\b/;
+
+function assertCustomFormulaBodySafe(body) {
+  if (customFormulaForbiddenPattern.test(String(body || ''))) {
+    throw new AppError('Custom formula function contains unsupported code', 422);
+  }
+}
+
+function assertFormulaSourceDisabled(source) {
+  if (String(source || '').trim()) {
+    throw new AppError('Custom formula source code is no longer supported. Use Function Name and Function Body.', 422);
+  }
 }
 
 function normalizeMappingHeader(input) {
@@ -416,7 +878,16 @@ async function resolveDetailTableName(moduleKey, moduleId, input = {}) {
   return `${moduleTableBase(moduleKey)}_dt${detailTableCount + 1}`;
 }
 
-async function createField(moduleKey, input) {
+async function assertValidFormulaDependencies(moduleKey, nextField) {
+  const fields = await repository.listFields(moduleKey);
+  const fieldIndex = fields.findIndex((field) => field.fieldKey === nextField.fieldKey);
+  const nextFields = fieldIndex === -1
+    ? [...fields, nextField]
+    : fields.map((field, index) => (index === fieldIndex ? { ...field, ...nextField } : field));
+  formulaDependencyGraph(nextFields);
+}
+
+async function createField(moduleKey, input, user = null) {
   const module = await repository.findModuleByKey(moduleKey);
   if (!module) throw new AppError('Module not found', 404);
 
@@ -430,6 +901,10 @@ async function createField(moduleKey, input) {
   }
   const formulaFunctionName = normalizeFormulaFunctionName(input.formulaFunctionName);
   assertFormulaFunctionName(formulaFunctionName);
+  const formulaJs = normalizeFormulaScript(input.formulaJs);
+  assertFormulaSourceDisabled(formulaJs);
+  const formulaFunctionBody = normalizeFormulaScript(input.formulaFunctionBody);
+  assertCustomFormulaBodySafe(formulaFunctionBody);
 
   const tableType = input.tableType === 'detail' ? 'detail' : 'main';
   const detailTableName = await resolveDetailTableName(moduleKey, module.id, input);
@@ -442,9 +917,9 @@ async function createField(moduleKey, input) {
     options: isDropdownOptionFieldType(input.type) ? normalizeOptions(input.options) : [],
     formulaExpression: normalizeFormulaExpression(input.formulaExpression),
     formulaEnabled: Boolean(input.formulaEnabled && normalizeFormulaExpression(input.formulaExpression)),
-    formulaJs: normalizeFormulaScript(input.formulaJs),
+    formulaJs,
     formulaFunctionName,
-    formulaFunctionBody: normalizeFormulaScript(input.formulaFunctionBody),
+    formulaFunctionBody,
     formulaSql: normalizeFormulaScript(input.formulaSql),
     validationRules: normalizeValidationRules(input.validationRules),
     lookupConfig: normalizeLookupConfig(input.lookupConfig, input.type),
@@ -460,17 +935,27 @@ async function createField(moduleKey, input) {
     searchable: Boolean(input.searchable),
     sortOrder: await repository.nextSortOrder(module.id)
   };
+  await assertValidFormulaDependencies(moduleKey, field);
 
   if (field.tableType === 'detail') {
     await repository.ensureDetailTableField(field.detailTableName, field.fieldKey, field.type);
   }
 
   await repository.createCustomField(module.id, field);
+  await recordConfigChange(moduleKey, {
+    action: 'field.create',
+    targetType: 'field',
+    targetKey: field.fieldKey,
+    summary: `Created field ${field.label}`,
+    before: null,
+    after: field,
+    user
+  });
 
   return getModuleConfig(moduleKey);
 }
 
-async function updateField(moduleKey, fieldKey, input) {
+async function updateField(moduleKey, fieldKey, input, user = null) {
   const field = await repository.findField(moduleKey, fieldKey);
   if (!field) throw new AppError('Field not found', 404);
   if (!fieldTypes.has(input.type || field.type)) {
@@ -478,15 +963,19 @@ async function updateField(moduleKey, fieldKey, input) {
   }
   const formulaFunctionName = input.formulaFunctionName === undefined ? undefined : normalizeFormulaFunctionName(input.formulaFunctionName);
   assertFormulaFunctionName(formulaFunctionName);
+  const formulaJs = input.formulaJs === undefined ? undefined : normalizeFormulaScript(input.formulaJs);
+  assertFormulaSourceDisabled(formulaJs);
+  const formulaFunctionBody = input.formulaFunctionBody === undefined ? undefined : normalizeFormulaScript(input.formulaFunctionBody);
+  assertCustomFormulaBodySafe(formulaFunctionBody);
 
   const updates = {
     ...input,
     options: input.options === undefined ? undefined : isDropdownOptionFieldType(input.type || field.type) ? normalizeOptions(input.options) : [],
     formulaExpression: input.formulaExpression === undefined ? undefined : normalizeFormulaExpression(input.formulaExpression),
     formulaEnabled: input.formulaEnabled === undefined ? undefined : Boolean(input.formulaEnabled && normalizeFormulaExpression(input.formulaExpression ?? field.formulaExpression)),
-    formulaJs: input.formulaJs === undefined ? undefined : normalizeFormulaScript(input.formulaJs),
+    formulaJs,
     formulaFunctionName,
-    formulaFunctionBody: input.formulaFunctionBody === undefined ? undefined : normalizeFormulaScript(input.formulaFunctionBody),
+    formulaFunctionBody,
     formulaSql: input.formulaSql === undefined ? undefined : normalizeFormulaScript(input.formulaSql),
     validationRules: input.validationRules === undefined ? undefined : normalizeValidationRules(input.validationRules),
     lookupConfig: input.lookupConfig === undefined ? undefined : normalizeLookupConfig(input.lookupConfig, input.type || field.type),
@@ -502,6 +991,25 @@ async function updateField(moduleKey, fieldKey, input) {
     delete updates.type;
     delete updates.tableType;
     delete updates.detailTableName;
+  }
+
+  const fieldHasData = field.type === 'browser_button'
+    ? await repository.fieldDataCount(moduleKey, field) > 0
+    : false;
+  const existingBrowserButtonKey = field.lookupConfig?.browserButtonKey || '';
+  const nextBrowserButtonKey = updates.lookupConfig === undefined
+    ? existingBrowserButtonKey
+    : updates.lookupConfig?.browserButtonKey || '';
+  if (fieldHasData && updates.type && updates.type !== field.type) {
+    throw new AppError('Browser Button fields with saved data cannot change type', 422);
+  }
+  if (
+    field.type === 'browser_button'
+    && existingBrowserButtonKey
+    && nextBrowserButtonKey !== existingBrowserButtonKey
+    && fieldHasData
+  ) {
+    throw new AppError('Browser Button cannot be changed because this field already has saved data', 422);
   }
 
   if (updates.tableType === 'detail' && !updates.detailTableName) {
@@ -520,15 +1028,26 @@ async function updateField(moduleKey, fieldKey, input) {
   const nextTableType = updates.tableType || field.tableType;
   const nextDetailTableName = updates.detailTableName === undefined ? field.detailTableName : updates.detailTableName;
   const nextType = updates.type || field.type;
+  await assertValidFormulaDependencies(moduleKey, { ...field, ...updates });
   if (nextTableType === 'detail') {
     await repository.ensureDetailTableField(nextDetailTableName, field.fieldKey, nextType);
   }
 
   await repository.updateField(moduleKey, fieldKey, updates);
+  const updatedField = await repository.findField(moduleKey, fieldKey);
+  await recordConfigChange(moduleKey, {
+    action: 'field.update',
+    targetType: 'field',
+    targetKey: fieldKey,
+    summary: `Updated field ${updatedField?.label || field.label}`,
+    before: field,
+    after: updatedField,
+    user
+  });
   return getModuleConfig(moduleKey);
 }
 
-async function renameDetailTable(moduleKey, oldTableName, input) {
+async function renameDetailTable(moduleKey, oldTableName, input, user = null) {
   const newTableName = String(input.detailTableName || '').trim();
   assertDetailTableName(oldTableName);
   assertDetailTableName(newTableName);
@@ -548,10 +1067,19 @@ async function renameDetailTable(moduleKey, oldTableName, input) {
   }
 
   await repository.renameDetailTable(moduleKey, oldTableName, newTableName);
+  await recordConfigChange(moduleKey, {
+    action: 'detail_table.rename',
+    targetType: 'detail_table',
+    targetKey: newTableName,
+    summary: `Renamed detail table ${oldTableName} to ${newTableName}`,
+    before: { detailTableName: oldTableName },
+    after: { detailTableName: newTableName },
+    user
+  });
   return getModuleConfig(moduleKey);
 }
 
-async function saveFormLayout(moduleKey, state, formType, input) {
+async function saveFormLayout(moduleKey, state, formType, input, user = null, options = {}) {
   if (!layoutStates.includes(state)) throw new AppError('Unsupported layout state', 422);
   if (!formTypes.includes(formType)) throw new AppError('Unsupported form type', 422);
 
@@ -562,19 +1090,55 @@ async function saveFormLayout(moduleKey, state, formType, input) {
   const fallback = defaultFormLayout(fields);
   const layout = normalizeLayout(input, fallback);
   const knownFieldKeys = new Set(fields.map((field) => field.fieldKey));
+  const knownMainFieldKeys = new Set(fields.filter((field) => field.tableType !== 'detail').map((field) => field.fieldKey));
   layout.order = layout.order.filter((fieldKey, index, list) => knownFieldKeys.has(fieldKey) && list.indexOf(fieldKey) === index);
   layout.hidden = layout.hidden.filter((fieldKey, index, list) => knownFieldKeys.has(fieldKey) && list.indexOf(fieldKey) === index);
+  layout.fieldSpans = Object.fromEntries(Object.entries(layout.fieldSpans || {})
+    .filter(([fieldKey]) => knownMainFieldKeys.has(fieldKey))
+    .map(([fieldKey, span]) => [fieldKey, Math.min(3, Math.max(1, Number(span) || 1))]));
+  const sectionFieldKeys = new Set();
+  layout.sections = layout.sections.map((section) => {
+    const fieldKeys = section.fieldKeys.filter((fieldKey) => {
+      if (!knownMainFieldKeys.has(fieldKey) || sectionFieldKeys.has(fieldKey)) return false;
+      sectionFieldKeys.add(fieldKey);
+      return true;
+    });
+    return { ...section, fieldKeys };
+  });
+  const missingMainFieldKeys = layout.order.filter((fieldKey) => knownMainFieldKeys.has(fieldKey) && !sectionFieldKeys.has(fieldKey));
+  if (!layout.sections.length) {
+    layout.sections = [{ id: 'section_general', title: 'General', columns: 1, fieldKeys: [] }];
+  }
+  layout.sections[0].fieldKeys.push(...missingMainFieldKeys);
 
+  const beforeLayout = (await repository.listFormLayouts(moduleKey))
+    .find((saved) => saved.state === state && saved.formType === formType)?.layout || null;
   await repository.upsertFormLayout(moduleKey, state, formType, layout);
+  if (!options.skipAudit) {
+    const action = options.action || `layout.${state}.save`;
+    await recordConfigChange(moduleKey, {
+      action,
+      targetType: 'form_layout',
+      targetKey: `${state}:${formType}`,
+      summary: action === 'layout.publish'
+        ? `Published ${formType} form layout`
+        : `Saved ${formType} form ${state} layout`,
+      before: beforeLayout,
+      after: layout,
+      user
+    });
+  }
   return getModuleConfig(moduleKey);
 }
 
-async function publishFormLayout(moduleKey, formType, input) {
-  await saveFormLayout(moduleKey, 'draft', formType, input);
-  return saveFormLayout(moduleKey, 'published', formType, input);
+async function publishFormLayout(moduleKey, formType, input, user = null) {
+  await saveFormLayout(moduleKey, 'draft', formType, input, user, { skipAudit: true });
+  return saveFormLayout(moduleKey, 'published', formType, input, user, {
+    action: 'layout.publish'
+  });
 }
 
-async function deleteField(moduleKey, fieldKey) {
+async function deleteField(moduleKey, fieldKey, user = null) {
   const field = await repository.findField(moduleKey, fieldKey);
   if (!field) throw new AppError('Field not found', 404);
   if (field.locked) throw new AppError('System fields cannot be deleted', 422);
@@ -583,22 +1147,85 @@ async function deleteField(moduleKey, fieldKey) {
     throw new AppError('Fields with data cannot be deleted', 422);
   }
   await repository.deleteField(moduleKey, fieldKey);
+  await recordConfigChange(moduleKey, {
+    action: 'field.delete',
+    targetType: 'field',
+    targetKey: fieldKey,
+    summary: `Deleted field ${field.label}`,
+    before: field,
+    after: null,
+    user
+  });
   return getModuleConfig(moduleKey);
 }
 
-async function archiveField(moduleKey, fieldKey) {
+async function archiveField(moduleKey, fieldKey, user = null) {
   const field = await repository.findField(moduleKey, fieldKey);
   if (!field) throw new AppError('Field not found', 404);
   if (field.locked) throw new AppError('System fields cannot be archived', 422);
   await repository.archiveField(moduleKey, fieldKey);
+  await recordConfigChange(moduleKey, {
+    action: 'field.archive',
+    targetType: 'field',
+    targetKey: fieldKey,
+    summary: `Archived field ${field.label}`,
+    before: field,
+    after: { ...field, archived: true, showInTable: false, showInForm: false, showInImport: false },
+    user
+  });
   return getModuleConfig(moduleKey);
 }
 
-async function unarchiveField(moduleKey, fieldKey) {
+async function unarchiveField(moduleKey, fieldKey, user = null) {
   const field = await repository.findField(moduleKey, fieldKey);
   if (!field) throw new AppError('Field not found', 404);
   if (field.locked) throw new AppError('System fields cannot be restored', 422);
   await repository.unarchiveField(moduleKey, fieldKey);
+  await recordConfigChange(moduleKey, {
+    action: 'field.unarchive',
+    targetType: 'field',
+    targetKey: fieldKey,
+    summary: `Restored field ${field.label}`,
+    before: field,
+    after: { ...field, archived: false },
+    user
+  });
+  return getModuleConfig(moduleKey);
+}
+
+async function listConfigHistory(moduleKey) {
+  if (defaultModules.has(moduleKey)) {
+    await ensureDefaultConfig(moduleKey);
+  }
+  const module = await repository.findModuleByKey(moduleKey);
+  if (!module) throw new AppError('Module not found', 404);
+  const currentVersion = await ensureInitialConfigVersion(moduleKey);
+  await repository.attachPendingAuditLogsToVersion(moduleKey, currentVersion.id);
+  const [versions, auditLogs] = await Promise.all([
+    repository.listConfigVersions(moduleKey),
+    repository.listConfigAuditLogs(moduleKey)
+  ]);
+  return { versions, auditLogs, currentVersionId: currentVersion?.id || versions[0]?.id || null };
+}
+
+async function rollbackConfigVersion(moduleKey, versionId, user = null) {
+  if (defaultModules.has(moduleKey)) {
+    await ensureDefaultConfig(moduleKey);
+  }
+  const version = await repository.getConfigVersion(moduleKey, versionId);
+  if (!version) throw new AppError('Config version not found', 404);
+  const before = await configSnapshot(moduleKey);
+  await repository.restoreConfigSnapshot(moduleKey, version.snapshot);
+  await recordConfigChange(moduleKey, {
+    versionId: version.id,
+    action: 'config.rollback',
+    targetType: 'config_version',
+    targetKey: String(version.versionNumber),
+    summary: `Rolled back to version ${version.versionNumber}`,
+    before,
+    after: version.snapshot,
+    user
+  });
   return getModuleConfig(moduleKey);
 }
 
@@ -608,6 +1235,13 @@ module.exports = {
   ensureAllDefaultConfigs,
   getModuleConfig,
   listModules,
+  createModule,
+  updateModule,
+  deleteModule,
+  listStandaloneForms,
+  createStandaloneForm,
+  deleteStandaloneForm,
+  updateStandaloneFormField,
   listArchivedFields,
   listBrowserButtons,
   saveBrowserButton,
@@ -620,5 +1254,8 @@ module.exports = {
   publishFormLayout,
   deleteField,
   archiveField,
-  unarchiveField
+  unarchiveField,
+  createConfigVersion,
+  listConfigHistory,
+  rollbackConfigVersion
 };

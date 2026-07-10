@@ -11,6 +11,8 @@ const { customerRoutes } = require('./modules/customers/customers.routes');
 const { importRoutes } = require('./modules/imports/imports.routes');
 const { sysadminRoutes } = require('./modules/sysadmin/module-config.routes');
 const { browserButtonRoutes } = require('./modules/browser-buttons/browser-buttons.routes');
+const { moduleRecordRoutes } = require('./modules/module-records/module-records.routes');
+const { actionFlowRoutes } = require('./modules/action-flows/action-flows.routes');
 
 function createApp() {
   const app = express();
@@ -32,6 +34,8 @@ function createApp() {
   app.use('/api/customers', customerRoutes);
   app.use('/api/imports', importRoutes);
   app.use('/api/browser-buttons', browserButtonRoutes);
+  app.use('/api/modules', moduleRecordRoutes);
+  app.use('/api/action-flows', actionFlowRoutes);
   app.use('/api/sysadmin', sysadminRoutes);
   app.use('/api', notFoundHandler);
 

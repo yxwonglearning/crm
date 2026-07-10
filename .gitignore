@@ -5,3 +5,12 @@ logs/
 uploads/
 coverage/
 .DS_Store
+
+# Local Codex/agent tooling and generated graph artifacts.
+.agents/
+.codex/
+graphify/
+graphify-out/
+skills-lock.json
+.graphifyignore
+AGENTS.md

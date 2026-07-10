@@ -22,6 +22,17 @@ const systemFieldColumns = {
   ownerUserId: 'owner_user_id'
 };
 
+const filterFieldExpressions = {
+  companyName: 'c.company_name',
+  contactPerson: 'c.contact_person',
+  email: 'c.email',
+  countryId: 'countries.name',
+  phoneNumber: 'CONCAT(c.phone_country_code, c.phone_number)',
+  status: 'c.status',
+  notes: 'c.notes',
+  ownerUserId: 'owner.name'
+};
+
 function baseSelect() {
   return `SELECT
       c.id,
@@ -46,7 +57,63 @@ function baseSelect() {
     LEFT JOIN users owner ON owner.id = c.owner_user_id`;
 }
 
-async function listCustomers(filters) {
+function jsonPath(fieldKey) {
+  return `$.${JSON.stringify(String(fieldKey || ''))}`;
+}
+
+function fieldFilterExpression(field) {
+  const column = filterFieldExpressions[field.fieldKey];
+  if (column) return `COALESCE(CAST(${column} AS CHAR), '')`;
+  return "COALESCE(JSON_UNQUOTE(JSON_EXTRACT(c.custom_fields, ?)), '')";
+}
+
+function addFieldFilter(where, values, fields = [], filters = {}) {
+  const fieldKey = String(filters.filterField || '');
+  const operator = String(filters.filterOperator || 'contains');
+  if (!fieldKey || !operator) return;
+
+  const field = fields.find((item) => (
+    item.fieldKey === fieldKey
+    && item.tableType !== 'detail'
+    && item.permissions?.view !== false
+  ));
+  if (!field) return;
+
+  const expression = fieldFilterExpression(field);
+  if (!filterFieldExpressions[field.fieldKey]) {
+    values.push(jsonPath(field.fieldKey));
+  }
+  if (operator === 'empty') {
+    where.push(`${expression} = ''`);
+    return;
+  }
+  if (operator === 'not_empty') {
+    where.push(`${expression} <> ''`);
+    return;
+  }
+
+  const textValue = String(filters.filterValue ?? '');
+  if (textValue.trim() === '') return;
+  if (operator === 'equals') {
+    values.push(textValue);
+    where.push(`LOWER(${expression}) = LOWER(?)`);
+    return;
+  }
+  if (operator === 'not_equals') {
+    values.push(textValue);
+    where.push(`LOWER(${expression}) <> LOWER(?)`);
+    return;
+  }
+  if (operator === 'starts_with') {
+    values.push(`${textValue}%`);
+    where.push(`${expression} LIKE ?`);
+    return;
+  }
+  values.push(`%${textValue}%`);
+  where.push(`${expression} LIKE ?`);
+}
+
+async function listCustomers(filters, fields = []) {
   const where = [];
   const values = [];
 
@@ -60,6 +127,8 @@ async function listCustomers(filters) {
     where.push('c.status = ?');
     values.push(filters.status);
   }
+
+  addFieldFilter(where, values, fields, filters);
 
   const sql = `${baseSelect()}
     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
@@ -181,7 +250,7 @@ async function countFieldValue(field, value, excludeId = null) {
   let condition;
   const column = systemFieldColumns[field.fieldKey];
   if (column) {
-    condition = `LOWER(COALESCE(CAST(${sqlIdentifier(column)} AS CHAR), '')) = LOWER(?)`;
+    condition = `LOWER(COALESCE(CAST(${column} AS CHAR), '')) = LOWER(?)`;
     values.push(String(value));
   } else {
     condition = `LOWER(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(custom_fields, ?)), '')) = LOWER(?)`;

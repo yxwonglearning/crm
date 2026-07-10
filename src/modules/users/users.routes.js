@@ -32,8 +32,13 @@ usersRoutes.get('/config', asyncHandler(async (_req, res) => {
   res.json(await service.userFieldConfig());
 }));
 
-usersRoutes.get('/', asyncHandler(async (_req, res) => {
-  res.json({ users: await service.listUsers() });
+usersRoutes.get('/', asyncHandler(async (req, res) => {
+  res.json({ users: await service.listUsers({
+    search: req.query.search || '',
+    filterField: req.query.filterField || '',
+    filterOperator: req.query.filterOperator || '',
+    filterValue: req.query.filterValue || ''
+  }) });
 }));
 
 usersRoutes.post('/', asyncHandler(async (req, res) => {

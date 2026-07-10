@@ -13,6 +13,11 @@ const upload = multer({
   }
 });
 
+function attachmentName(value, suffix) {
+  const name = String(value || 'module').replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '') || 'module';
+  return `${name}${suffix}`;
+}
+
 importRoutes.use(requireAuth);
 
 importRoutes.get('/customers/template', asyncHandler(async (req, res) => {
@@ -36,6 +41,27 @@ importRoutes.get('/customers/export', asyncHandler(async (req, res) => {
 importRoutes.post('/customers', upload.single('file'), asyncHandler(async (req, res) => {
   await permissions.assertModuleActionAllowed('customers', req.user, 'import');
   const result = await service.importCustomers(req.file, req.user);
+  res.status(201).json(result);
+}));
+
+importRoutes.get('/modules/:moduleKey/template', asyncHandler(async (req, res) => {
+  const workbook = await service.createModuleTemplate(req.params.moduleKey, req.user);
+  const buffer = service.writeWorkbook(workbook);
+  res.setHeader('Content-Disposition', `attachment; filename="${attachmentName(req.params.moduleKey, '-import-template.xlsx')}"`);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.send(buffer);
+}));
+
+importRoutes.get('/modules/:moduleKey/export', asyncHandler(async (req, res) => {
+  const workbook = await service.createModuleExport(req.params.moduleKey, req.user);
+  const buffer = service.writeWorkbook(workbook);
+  res.setHeader('Content-Disposition', `attachment; filename="${attachmentName(req.params.moduleKey, '-export.xlsx')}"`);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.send(buffer);
+}));
+
+importRoutes.post('/modules/:moduleKey', upload.single('file'), asyncHandler(async (req, res) => {
+  const result = await service.importModuleRecords(req.params.moduleKey, req.file, req.user);
   res.status(201).json(result);
 }));
 

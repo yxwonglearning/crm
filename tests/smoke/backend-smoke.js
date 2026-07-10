@@ -454,9 +454,195 @@ async function main() {
     assert.ok(exported.buffer.length > 1000, 'Module export should be a non-empty workbook');
   });
 
-  await smoke('planned Phase 5/7/8/9 route absence smoke', async () => {
+  await smoke('Phase 5 action flow management and REST connector smoke', async () => {
+    const restCalls = [];
+    const restServer = http.createServer(async (req, res) => {
+      let body = '';
+      req.setEncoding('utf8');
+      req.on('data', (chunk) => {
+        body += chunk;
+      });
+      req.on('end', () => {
+        const parsed = body ? JSON.parse(body) : {};
+        restCalls.push({ method: req.method, url: req.url, body: parsed });
+        if (req.url === '/fail') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: `Rejected ${parsed.title || 'record'}` } }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, echoedTitle: parsed.title || '', mappedAmount: 321 }));
+      });
+    });
+    await new Promise((resolve) => restServer.listen(0, '127.0.0.1', resolve));
+    const restBaseUrl = `http://127.0.0.1:${restServer.address().port}`;
+
+    const connectorKey = `${runId}_connector`;
+    const connector = await request('POST', '/api/action-flows/connectors', {
+      json: {
+        connectorKey,
+        name: 'Smoke REST Connector',
+        baseUrl: restBaseUrl,
+        authType: 'none',
+        authConfig: { runtime: { allowPrivateNetwork: true } },
+        endpoints: [
+          { key: 'extract', method: 'POST', path: '/extract' },
+          { key: 'fail', method: 'POST', path: '/fail' }
+        ],
+        enabled: true
+      }
+    });
+    try {
+      expectStatus(connector, 201, 'save API connector');
+      assert.equal(connector.body.connector.connectorKey, connectorKey);
+
+      const flowKey = `${runId}_flow`;
+      const createFlow = await request('POST', '/api/action-flows', {
+        json: {
+          flowKey,
+          name: 'Smoke Action Flow',
+          status: 'draft',
+          triggerType: 'record_created',
+          triggerModule: createdModuleKey,
+          definition: {
+            nodes: [
+              { id: 'trigger_1', category: 'trigger', type: 'record_created', label: 'When Created', config: { moduleKey: createdModuleKey } },
+              { id: 'api_1', category: 'restful_api', type: 'call_rest_api', label: 'Call REST API', config: { connectorKey, method: 'POST', endpointKey: 'extract', endpointPath: '/extract' } },
+              { id: 'delete_1', category: 'record', type: 'delete_record', label: 'Delete Record', config: { target: 'current_record', confirmDelete: true } }
+            ],
+            edges: [{ from: 'trigger_1', to: 'api_1' }, { from: 'api_1', to: 'delete_1' }]
+          }
+        }
+      });
+      expectStatus(createFlow, 201, 'create action flow');
+      assert.equal(createFlow.body.flow.flowKey, flowKey);
+
+      const check = await request('POST', `/api/action-flows/${flowKey}/check`);
+      expectStatus(check, 200, 'check action flow');
+      assert.equal(check.body.check.valid, true);
+
+      const list = await request('GET', `/api/action-flows?search=${encodeURIComponent(flowKey)}`);
+      expectStatus(list, 200, 'list action flows');
+      assert.ok(list.body.flows.some((flow) => flow.flowKey === flowKey));
+
+      const runtimeFlowKey = `${runId}_runtime_flow`;
+      const runtimeFlow = await request('POST', '/api/action-flows', {
+        json: {
+          flowKey: runtimeFlowKey,
+          name: 'Smoke Runtime Flow',
+          status: 'enabled',
+          triggerType: 'record_created',
+          triggerModule: createdModuleKey,
+          definition: {
+            nodes: [
+              { id: 'trigger_1', category: 'trigger', type: 'record_created', label: 'When Created', config: { moduleKey: createdModuleKey } },
+              { id: 'update_1', category: 'record', type: 'update_record', label: 'Update Record', config: { target: 'current_record', targetModule: createdModuleKey, fieldMappingText: 'amountDouble = 99' } },
+              { id: 'end_1', category: 'end', type: 'end', label: 'End', config: {} }
+            ],
+            edges: [{ from: 'trigger_1', to: 'update_1' }, { from: 'update_1', to: 'end_1' }]
+          }
+        }
+      });
+      expectStatus(runtimeFlow, 201, 'create enabled runtime action flow');
+
+      const restRuntimeFlowKey = `${runId}_rest_runtime_flow`;
+      const restRuntimeFlow = await request('POST', '/api/action-flows', {
+        json: {
+          flowKey: restRuntimeFlowKey,
+          name: 'Smoke REST Runtime Flow',
+          status: 'enabled',
+          triggerType: 'record_created',
+          triggerModule: createdModuleKey,
+          definition: {
+            nodes: [
+              { id: 'trigger_1', category: 'trigger', type: 'record_created', label: 'When Created', config: { moduleKey: createdModuleKey } },
+              { id: 'api_1', category: 'restful_api', type: 'call_rest_api', label: 'Call REST API', config: { connectorKey, method: 'POST', endpointKey: 'extract', requestMapping: 'title = Current Record.title', responseMapping: 'amountDouble = response.mappedAmount', allowPrivateNetwork: true } },
+              { id: 'end_1', category: 'end', type: 'end', label: 'End', config: {} }
+            ],
+            edges: [{ from: 'trigger_1', to: 'api_1' }, { from: 'api_1', to: 'end_1' }]
+          }
+        }
+      });
+      expectStatus(restRuntimeFlow, 201, 'create enabled REST runtime action flow');
+
+      const restErrorFlowKey = `${runId}_rest_error_flow`;
+      const restErrorFlow = await request('POST', '/api/action-flows', {
+        json: {
+          flowKey: restErrorFlowKey,
+          name: 'Smoke REST Error Mapping Flow',
+          status: 'enabled',
+          triggerType: 'record_created',
+          triggerModule: createdModuleKey,
+          definition: {
+            nodes: [
+              { id: 'trigger_1', category: 'trigger', type: 'record_created', label: 'When Created', config: { moduleKey: createdModuleKey } },
+              { id: 'api_1', category: 'restful_api', type: 'call_rest_api', label: 'Call Failing REST API', config: { connectorKey, method: 'POST', endpointKey: 'fail', requestMapping: 'title = Current Record.title', errorMapping: 'apiError = response.error.message', allowPrivateNetwork: true } },
+              { id: 'end_1', category: 'end', type: 'end', label: 'End', config: {} }
+            ],
+            edges: [{ from: 'trigger_1', to: 'api_1' }, { from: 'api_1', to: 'end_1' }]
+          }
+        }
+      });
+      expectStatus(restErrorFlow, 201, 'create enabled REST error mapping flow');
+
+      const runtimeRecord = await request('POST', `/api/modules/${createdModuleKey}/records`, {
+        json: {
+          title: `${runId} Runtime Record`,
+          amount: 1
+        }
+      });
+      expectStatus(runtimeRecord, 201, 'create generated module record with runtime flow');
+      const runtimeRecordId = runtimeRecord.body.record.id;
+      createdRecordIds.push(runtimeRecordId);
+
+      const runtimeDetail = await request('GET', `/api/modules/${createdModuleKey}/records/${runtimeRecordId}`);
+      expectStatus(runtimeDetail, 200, 'get runtime-mutated generated module record');
+      assert.equal(runtimeDetail.body.record.customFields.amountDouble, 321);
+      assert.equal(restCalls.length, 2);
+      assert.equal(restCalls[0].method, 'POST');
+      assert.equal(restCalls[0].url, '/extract');
+      assert.equal(restCalls[0].body.title, `${runId} Runtime Record`);
+      assert.equal(restCalls[1].url, '/fail');
+
+      const executions = await request('GET', `/api/action-flows/executions?flowKey=${encodeURIComponent(runtimeFlowKey)}`);
+      expectStatus(executions, 200, 'list action flow executions');
+      assert.ok(executions.body.executions.some((execution) => execution.status === 'success'));
+
+      const restExecutions = await request('GET', `/api/action-flows/executions?flowKey=${encodeURIComponent(restRuntimeFlowKey)}`);
+      expectStatus(restExecutions, 200, 'list REST action flow executions');
+      const restExecution = restExecutions.body.executions.find((execution) => execution.status === 'success');
+      assert.ok(restExecution, 'REST runtime flow should record a successful execution');
+      const restStep = restExecution.result.steps.find((step) => step.type === 'call_rest_api');
+      assert.equal(restStep.httpStatus, 200);
+      assert.equal(restStep.responseBody.echoedTitle, `${runId} Runtime Record`);
+      assert.equal(restStep.mappedValues.amountDouble, 321);
+      assert.deepEqual(restStep.mappedRecordFields, ['amountDouble']);
+
+      const restErrorExecutions = await request('GET', `/api/action-flows/executions?flowKey=${encodeURIComponent(restErrorFlowKey)}`);
+      expectStatus(restErrorExecutions, 200, 'list REST error mapping flow executions');
+      const restErrorExecution = restErrorExecutions.body.executions.find((execution) => execution.status === 'failed');
+      assert.ok(restErrorExecution, 'REST error mapping flow should record a failed execution');
+      const restErrorStep = restErrorExecution.result.steps.find((step) => step.type === 'call_rest_api');
+      assert.equal(restErrorStep.httpStatus, 400);
+      assert.equal(restErrorStep.mappedValues.apiError, `Rejected ${runId} Runtime Record`);
+
+      const deleteFlow = await request('DELETE', `/api/action-flows/${flowKey}`);
+      expectStatus(deleteFlow, 200, 'delete action flow');
+      const deleteRuntimeFlow = await request('DELETE', `/api/action-flows/${runtimeFlowKey}`);
+      expectStatus(deleteRuntimeFlow, 200, 'delete runtime action flow');
+      const deleteRestRuntimeFlow = await request('DELETE', `/api/action-flows/${restRuntimeFlowKey}`);
+      expectStatus(deleteRestRuntimeFlow, 200, 'delete REST runtime action flow');
+      const deleteRestErrorFlow = await request('DELETE', `/api/action-flows/${restErrorFlowKey}`);
+      expectStatus(deleteRestErrorFlow, 200, 'delete REST error mapping flow');
+      const deleteConnector = await request('DELETE', `/api/action-flows/connectors/${connectorKey}`);
+      expectStatus(deleteConnector, 200, 'delete API connector');
+    } finally {
+      await new Promise((resolve) => restServer.close(resolve));
+    }
+  });
+
+  await smoke('planned Phase 7/8/9 route absence smoke', async () => {
     const plannedRoutes = [
-      ['/api/action-flow', 'Phase 5 Action Flow'],
       ['/api/dashboards', 'Phase 7 Dashboard Builder'],
       ['/api/workflows', 'Phase 8 Workflow Module'],
       ['/api/ai/assistant', 'Phase 9 AI Agent Assistant']

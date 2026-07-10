@@ -18,11 +18,76 @@ const systemFieldColumns = {
   status: 'status'
 };
 
-async function listUsers() {
+function jsonPath(fieldKey) {
+  return `$.${JSON.stringify(String(fieldKey || ''))}`;
+}
+
+function fieldFilterExpression(field) {
+  const column = systemFieldColumns[field.fieldKey];
+  if (column) return `COALESCE(CAST(${sqlIdentifier(column)} AS CHAR), '')`;
+  return "COALESCE(JSON_UNQUOTE(JSON_EXTRACT(custom_fields, ?)), '')";
+}
+
+function addFieldFilter(where, values, fields = [], filters = {}) {
+  const fieldKey = String(filters.filterField || '');
+  const operator = String(filters.filterOperator || 'contains');
+  if (!fieldKey || !operator) return;
+
+  const field = fields.find((item) => item.fieldKey === fieldKey && item.tableType !== 'detail' && item.fieldKey !== 'password');
+  if (!field) return;
+
+  const expression = fieldFilterExpression(field);
+  if (!systemFieldColumns[field.fieldKey]) {
+    values.push(jsonPath(field.fieldKey));
+  }
+  if (operator === 'empty') {
+    where.push(`${expression} = ''`);
+    return;
+  }
+  if (operator === 'not_empty') {
+    where.push(`${expression} <> ''`);
+    return;
+  }
+
+  const textValue = String(filters.filterValue ?? '');
+  if (textValue.trim() === '') return;
+  if (operator === 'equals') {
+    values.push(textValue);
+    where.push(`LOWER(${expression}) = LOWER(?)`);
+    return;
+  }
+  if (operator === 'not_equals') {
+    values.push(textValue);
+    where.push(`LOWER(${expression}) <> LOWER(?)`);
+    return;
+  }
+  if (operator === 'starts_with') {
+    values.push(`${textValue}%`);
+    where.push(`${expression} LIKE ?`);
+    return;
+  }
+  values.push(`%${textValue}%`);
+  where.push(`${expression} LIKE ?`);
+}
+
+async function listUsers(filters = {}, fields = []) {
+  const where = [];
+  const values = [];
+
+  if (filters.search) {
+    const search = `%${filters.search}%`;
+    where.push('(name LIKE ? OR email LIKE ? OR role LIKE ? OR status LIKE ?)');
+    values.push(search, search, search, search);
+  }
+
+  addFieldFilter(where, values, fields, filters);
+
   const [rows] = await pool.execute(
     `SELECT id, name, email, role, status, custom_fields, created_at, updated_at
      FROM users
-     ORDER BY name ASC`
+     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+     ORDER BY name ASC`,
+    values
   );
   return rows;
 }

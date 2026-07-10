@@ -70,8 +70,9 @@ async function customFieldsFromInput(input, fields) {
   return customFields;
 }
 
-async function listUsers() {
-  const users = await repository.listUsers();
+async function listUsers(filters = {}) {
+  const config = await userFieldConfig();
+  const users = await repository.listUsers(filters, config.fields);
   return users.map(normalizeUser);
 }
 
@@ -93,7 +94,7 @@ async function createUser(input) {
     if (!created || !await bcrypt.compare(password, created.password_hash)) {
       throw new AppError('User password could not be saved correctly', 500);
     }
-    return { id };
+    return { id, user: { id } };
   } catch (error) {
     if (error.code === 'ER_DUP_ENTRY') {
       throw new AppError('A user with this email already exists', 409);
@@ -110,7 +111,12 @@ async function updateUser(id, input) {
 
   const updates = {};
   const config = await userFieldConfig();
-  await validateConfiguredFields(input, config.fields, id);
+  const existingCustomFields = parseCustomFields(existing.custom_fields);
+  await validateConfiguredFields({
+    ...existing,
+    ...existingCustomFields,
+    ...input
+  }, config.fields, id);
   if (input.name) updates.name = input.name;
   if (input.email) updates.email = input.email.toLowerCase();
   if (input.role) updates.role = input.role;
@@ -120,7 +126,7 @@ async function updateUser(id, input) {
     updates.password_hash = await bcrypt.hash(password, 12);
   }
   updates.custom_fields = JSON.stringify({
-    ...parseCustomFields(existing.custom_fields),
+    ...existingCustomFields,
     ...await customFieldsFromInput(input, config.fields)
   });
 

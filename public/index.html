@@ -19,6 +19,7 @@
         <nav class="nav">
           <button class="nav-button is-active" data-view="customersView">Customers</button>
           <button class="nav-button" data-view="usersView">Users</button>
+          <div id="publishedModuleNav"></div>
           <button class="nav-button" data-view="sysadminView">Admin Portal</button>
         </nav>
         <button id="logoutButton" class="secondary full-width" hidden>Sign out</button>
@@ -35,15 +36,22 @@
             <form id="loginForm" class="panel login-card">
               <span class="brand-mark large">A</span>
               <h2>Sign In</h2>
-            <label>
-              Email
-              <input name="email" type="email" value="admin@example.com" autocomplete="email" required>
-            </label>
-            <label>
-              Password
-              <input name="password" type="password" value="ChangeMe123!" autocomplete="current-password" required>
-            </label>
-            <button type="submit">Sign In</button>
+              <label>
+                Email
+                <input name="email" type="email" autocomplete="email" required>
+              </label>
+              <label>
+                Password
+                <input name="password" type="password" autocomplete="current-password" minlength="8" required>
+              </label>
+              <label class="login-option">
+                <input name="rememberMe" type="checkbox" value="true">
+                <span>
+                  <strong>Remember me</strong>
+                  <small>Keep me signed in on this device.</small>
+                </span>
+              </label>
+              <button type="submit">Sign In</button>
               <p class="muted">Seeded admin credentials come from your `.env` file.</p>
             </form>
           </div>
@@ -180,6 +188,53 @@
           </div>
         </section>
 
+        <section id="moduleRuntimeView" class="view" hidden>
+          <header class="toolbar">
+            <div>
+              <h1 id="moduleRuntimeTitle">Module</h1>
+              <p id="moduleRuntimeDescription">Generated module page.</p>
+            </div>
+            <div class="toolbar-actions">
+              <input id="moduleRuntimeSearch" type="search" placeholder="Search Records">
+              <button type="button" id="moduleRuntimeSearchButton" class="secondary">Search</button>
+            </div>
+          </header>
+
+          <div class="query-panel">
+            <div class="table-actions">
+              <button type="button" id="addModuleRecordButton">Add</button>
+              <a class="secondary button-link" id="moduleImportTemplateLink" href="#" hidden>Template</a>
+              <a class="secondary button-link" id="moduleExportLink" href="#" hidden>Export</a>
+            </div>
+            <div class="table-wrap">
+              <table class="customers-table">
+                <thead>
+                  <tr id="moduleRecordTableHead"></tr>
+                </thead>
+                <tbody id="moduleRecordRows"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div id="moduleRecordModal" class="modal-backdrop" hidden>
+            <form id="moduleRecordForm" class="panel modal-card customer-modal-card">
+              <div class="modal-header">
+                <h2 id="moduleRecordFormTitle">Add Record</h2>
+                <div class="modal-title-actions">
+                  <button type="button" class="icon-button fullscreen-button" data-modal-fullscreen aria-label="Enlarge to full screen" aria-pressed="false" title="Enlarge to full screen"></button>
+                  <button type="button" class="icon-button" id="closeModuleRecordModal" aria-label="Close">x</button>
+                </div>
+              </div>
+              <input name="id" type="hidden">
+              <div id="moduleRecordFormFields"></div>
+              <div class="form-actions">
+                <button type="submit" id="saveModuleRecordButton">Save Record</button>
+                <button type="button" class="secondary" id="cancelModuleRecordButton">Cancel</button>
+              </div>
+            </form>
+          </div>
+        </section>
+
         <div id="browserLookupModal" class="modal-backdrop" hidden>
           <div class="panel modal-card browser-lookup-modal-card">
             <div class="modal-header">
@@ -226,7 +281,7 @@
                 <small>Master-data lookups</small>
               </button>
               <button type="button" class="admin-section-button" data-admin-section="adminPagesSection" data-short="P">
-                <span>Module Pages</span>
+                <span>Pages</span>
                 <small>Published user-facing pages</small>
               </button>
               <button type="button" class="admin-section-button" data-admin-section="adminActionFlowSection" data-short="A">
@@ -237,86 +292,147 @@
                 <span>Permissions</span>
                 <small>Access control per module</small>
               </button>
+              <button type="button" class="admin-section-button" data-admin-section="adminApiSection" data-short="API">
+                <span>API</span>
+                <small>Connectors and endpoints</small>
+              </button>
             </aside>
 
             <section id="adminModulesSection" class="admin-section">
-              <div class="section-heading">
-                <div>
-                  <h2>Modules</h2>
-                  <p>Manage CRM modules and prepare them for publishing.</p>
+              <div class="builder-layout">
+                <aside class="builder-list">
+                  <button type="button" id="newModuleButton">New Module</button>
+                  <div id="moduleSummaryTiles" class="admin-summary-grid"></div>
+                </aside>
+
+                <div class="builder-main">
+                  <div class="section-heading">
+                    <div>
+                      <h2>Modules</h2>
+                      <p>Manage CRM modules and prepare them for publishing.</p>
+                    </div>
+                  </div>
+                  <div class="table-wrap config-table-wrap">
+                    <table class="config-table">
+                      <thead>
+                        <tr>
+                          <th>Module</th>
+                          <th>Status</th>
+                          <th>Menu</th>
+                          <th>Fields</th>
+                          <th>Type</th>
+                          <th>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody id="moduleBuilderRows"></tbody>
+                    </table>
+                  </div>
                 </div>
-                <span class="status-pill">Phase 2</span>
-              </div>
-              <div class="admin-summary-grid">
-                <div class="summary-tile">
-                  <strong>Customers</strong>
-                  <span>Published system module</span>
-                </div>
-                <div class="summary-tile">
-                  <strong>Users</strong>
-                  <span>Published admin module</span>
-                </div>
-              </div>
-              <div class="empty-state">
-                <h3>Module Builder Coming Next</h3>
-                <p>Phase 2 will add create, edit, draft, publish, and menu visibility controls for custom modules.</p>
               </div>
             </section>
 
-            <section id="adminFormsSection" class="admin-section" hidden>
-              <div class="section-heading">
-                <div>
-                  <h2>Form Builder</h2>
-                  <p>Configure module fields, table columns, forms, and import columns.</p>
+            <div id="moduleModal" class="modal-backdrop" hidden>
+              <form id="moduleForm" class="panel modal-card narrow-modal">
+                <div class="modal-header">
+                  <h2 id="moduleFormTitle">New Module</h2>
+                  <div class="modal-title-actions">
+                    <button type="button" class="icon-button fullscreen-button" data-modal-fullscreen aria-label="Enlarge to full screen" aria-pressed="false" title="Enlarge to full screen"></button>
+                    <button type="button" class="icon-button" id="closeModuleModal" aria-label="Close">x</button>
+                  </div>
                 </div>
-                <div class="toolbar-actions">
-                  <button type="button" class="secondary" id="formulaButton">Formula</button>
-                  <button type="button" class="secondary" id="formDesignButton">Form Design</button>
-                  <button type="button" id="addFieldButton">Add Field</button>
-                  <button type="button" class="secondary" id="batchAddFieldsButton">Batch Edit</button>
-                  <button type="button" class="secondary" id="fieldPropertiesButton">Field Properties</button>
-                  <button type="button" class="secondary" id="importExportMappingButton">Import/Export Mapping</button>
+                <input name="editingModuleKey" type="hidden">
+                <label>
+                  Module Name
+                  <input name="name" type="text" required>
+                </label>
+                <label>
+                  Module Key
+                  <input name="moduleKey" type="text" required>
+                </label>
+                <label>
+                  Description
+                  <textarea name="description" rows="3"></textarea>
+                </label>
+                <label>
+                  Status
+                  <select name="status">
+                    <option value="draft">Draft</option>
+                    <option value="published">Published</option>
+                    <option value="archived">Archived</option>
+                  </select>
+                </label>
+                <label class="checkbox-label">
+                  <input name="showInMenu" type="checkbox">
+                  Show in menu when published
+                </label>
+                <div class="form-actions">
+                  <button type="submit">Save Module</button>
+                  <button type="button" class="secondary" id="cancelModuleButton">Cancel</button>
                 </div>
-              </div>
+              </form>
+            </div>
 
+            <section id="adminFormsSection" class="admin-section" hidden>
               <div class="builder-layout">
                 <aside class="builder-list">
                   <label class="compact-label">
-                    Search Forms
-                    <input id="formBuilderSearch" type="search" placeholder="Search forms">
+                    Search Modules
+                    <input id="formBuilderSearch" type="search" placeholder="Search modules">
                   </label>
                   <div id="formModuleRows" class="module-list"></div>
                 </aside>
 
-                <div class="table-wrap config-table-wrap">
-                  <table class="config-table">
-                    <thead>
-                      <tr>
-                        <th>Field</th>
-                        <th>Type</th>
-                        <th>Show In Table</th>
-                        <th>Form</th>
-                        <th>Import</th>
-                        <th>Required</th>
-                        <th>Formula</th>
-                        <th></th>
-                      </tr>
-                    </thead>
-                    <tbody id="fieldConfigRows"></tbody>
-                  </table>
+                <div class="builder-main">
+                  <div class="section-heading">
+                    <div>
+                      <h2>Form Builder</h2>
+                      <p>Configure module fields, table columns, forms, and import columns.</p>
+                    </div>
+                    <div class="toolbar-actions">
+                      <button type="button" class="secondary" id="addFormBuilderButton">Add Form</button>
+                    </div>
+                  </div>
+
+                  <div class="table-actions form-builder-context-actions">
+                    <div>
+                      <strong id="formBuilderActiveTitle">Select a module</strong>
+                      <small id="formBuilderActiveMeta">Choose a module to manage its fields and layouts.</small>
+                    </div>
+                    <div class="toolbar-actions">
+                      <button type="button" class="secondary" id="formulaButton">Formula</button>
+                      <button type="button" class="secondary" id="formDesignButton">Form Design</button>
+                      <button type="button" class="secondary" id="fieldLinkageButton">Field Linkage</button>
+                      <button type="button" id="addFieldButton">Add Field</button>
+                      <button type="button" class="secondary" id="batchAddFieldsButton">Batch Edit</button>
+                      <button type="button" class="secondary" id="fieldPropertiesButton">Field Properties</button>
+                      <button type="button" class="secondary" id="importExportMappingButton">Import/Export Mapping</button>
+                    </div>
+                  </div>
+
+                  <div class="table-wrap config-table-wrap">
+                    <table class="config-table">
+                      <thead>
+                        <tr>
+                          <th>Field</th>
+                          <th>Type</th>
+                          <th>Show In Table</th>
+                          <th>Form</th>
+                          <th>Import</th>
+                          <th>Required</th>
+                          <th>Formula</th>
+                          <th></th>
+                        </tr>
+                      </thead>
+                      <tbody id="fieldConfigRows"></tbody>
+                    </table>
+                  </div>
                 </div>
               </div>
             </section>
 
             <section id="adminBrowserButtonsSection" class="admin-section" hidden>
-              <div class="section-heading">
-                <div>
-                  <h2>Browser Buttons</h2>
-                  <p>Lookup definitions for master-data selection across modules.</p>
-                </div>
-              </div>
-              <div class="browser-button-workspace">
-                <aside class="panel browser-source-panel">
+              <div class="builder-layout">
+                <aside class="builder-list browser-source-panel">
                   <div class="browser-source-heading">
                     <strong>Modules</strong>
                     <small>Module</small>
@@ -324,8 +440,15 @@
                   <input id="browserSourceSearch" type="search" placeholder="Search module">
                   <div id="browserSourceRows" class="browser-source-list"></div>
                 </aside>
-                <div class="browser-button-main">
-                  <div class="panel browser-button-list-panel">
+
+                <div class="builder-main browser-button-main">
+                  <div class="section-heading">
+                    <div>
+                      <h2>Browser Buttons</h2>
+                      <p>Lookup definitions for master-data selection across modules.</p>
+                    </div>
+                  </div>
+                  <div class="browser-button-list-panel">
                     <div class="browser-button-toolbar">
                       <div>
                         <strong id="activeBrowserSourceTitle">Select a module</strong>
@@ -400,89 +523,312 @@
             </section>
 
             <section id="adminPagesSection" class="admin-section" hidden>
-              <div class="section-heading">
-                <div>
-                  <h2>Module Pages</h2>
-                  <p>Publish module forms as usable CRM list, create, edit, and detail pages.</p>
+              <div class="builder-layout">
+                <aside class="builder-list">
+                  <label class="compact-label">
+                    Search Pages
+                    <input id="modulePageSearch" type="search" placeholder="Search pages">
+                  </label>
+                  <div id="modulePageSummaryTiles" class="admin-summary-grid"></div>
+                </aside>
+
+                <div class="builder-main">
+                  <div class="section-heading">
+                    <div>
+                      <h2>Pages</h2>
+                      <p>Publish module forms as usable CRM list, create, edit, and detail pages.</p>
+                    </div>
+                  </div>
+                  <div class="table-wrap config-table-wrap">
+                    <table class="config-table">
+                      <thead>
+                        <tr>
+                          <th>Page</th>
+                          <th>State</th>
+                          <th>Menu</th>
+                          <th>Fields</th>
+                          <th>Layouts</th>
+                          <th>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody id="modulePageRows"></tbody>
+                    </table>
+                  </div>
                 </div>
-                <span class="status-pill">Phase 4</span>
-              </div>
-              <div class="empty-state">
-                <h3>Page Publisher Planned</h3>
-                <p>Published modules will automatically become user-facing CRM pages with search, filters, tables, and forms.</p>
               </div>
             </section>
 
             <section id="adminActionFlowSection" class="admin-section" hidden>
-              <div class="section-heading">
-                <div>
-                  <h2>Action Flow</h2>
-                  <p>Configure business logic with triggers, conditions, actions, scheduling, integrations, and logs.</p>
+              <div class="builder-layout">
+                <aside class="builder-list">
+                  <span class="status-pill">Phase 5</span>
+                  <div class="empty-state">
+                    <h3>Planned</h3>
+                    <p>Record-created, record-updated, and status-changed triggers.</p>
+                  </div>
+                </aside>
+
+                <div class="builder-main">
+                  <div class="section-heading">
+                    <div>
+                      <h2>Action Flow</h2>
+                      <p>Configure business logic with triggers, conditions, actions, scheduling, integrations, and logs.</p>
+                    </div>
+                  </div>
+                  <div class="empty-state">
+                    <h3>Automation Engine Planned</h3>
+                    <p>The first version will support record-created, record-updated, and status-changed triggers.</p>
+                  </div>
                 </div>
-                <span class="status-pill">Phase 5</span>
-              </div>
-              <div class="empty-state">
-                <h3>Automation Engine Planned</h3>
-                <p>The first version will support record-created, record-updated, and status-changed triggers.</p>
               </div>
             </section>
 
             <section id="adminPermissionsSection" class="admin-section" hidden>
-              <div class="section-heading">
-                <div>
-                  <h2>Permissions</h2>
-                  <p>Control who can view, create, edit, delete, import, export, and configure each module.</p>
-                </div>
-                <div class="toolbar-actions">
+              <div class="builder-layout">
+                <aside class="builder-list">
+                  <label class="compact-label">
+                    Module
                   <select id="permissionModuleSelect" aria-label="Permission module">
                     <option value="customers">Customers</option>
                     <option value="users">Users</option>
                   </select>
+                  </label>
                   <button type="button" id="savePermissionsButton">Save Permissions</button>
-                </div>
-              </div>
-              <div class="permissions-workspace">
-                <div class="permissions-panel">
-                  <div class="permissions-panel-heading">
-                    <strong>Module Actions</strong>
-                    <small>Applies to the whole module.</small>
+                </aside>
+
+                <div class="builder-main">
+                  <div class="section-heading">
+                    <div>
+                      <h2>Permissions</h2>
+                      <p>Control who can view, create, edit, delete, import, export, and configure each module.</p>
+                    </div>
                   </div>
-                  <div class="table-wrap permissions-table-wrap">
-                    <table class="config-table permissions-table">
-                      <thead>
-                        <tr>
-                          <th>Module Action</th>
-                          <th>Roles</th>
-                          <th>Specific Users</th>
-                        </tr>
-                      </thead>
-                      <tbody id="permissionRows"></tbody>
-                    </table>
-                  </div>
-                </div>
-                <div class="permissions-panel">
-                  <div class="permissions-panel-heading">
-                    <strong>Field Actions</strong>
-                    <small>Controls each field for view, create, edit, import, and export.</small>
-                  </div>
-                  <div class="table-wrap permissions-table-wrap field-permissions-table-wrap">
-                    <table class="config-table permissions-table field-permissions-table">
-                      <thead>
-                        <tr>
-                          <th>Field</th>
-                          <th>View</th>
-                          <th>Create</th>
-                          <th>Edit</th>
-                          <th>Import</th>
-                          <th>Export</th>
-                        </tr>
-                      </thead>
-                      <tbody id="fieldPermissionRows"></tbody>
-                    </table>
+                  <div class="permissions-workspace">
+                    <div class="permissions-panel">
+                      <div class="permissions-panel-heading">
+                        <strong>Module Actions</strong>
+                        <small>Applies to the whole module.</small>
+                      </div>
+                      <div class="table-wrap permissions-table-wrap">
+                        <table class="config-table permissions-table">
+                          <thead>
+                            <tr>
+                              <th>Module Action</th>
+                              <th>Roles</th>
+                              <th>Specific Users</th>
+                            </tr>
+                          </thead>
+                          <tbody id="permissionRows"></tbody>
+                        </table>
+                      </div>
+                    </div>
+                    <div class="permissions-panel">
+                      <div class="permissions-panel-heading">
+                        <strong>Field Actions</strong>
+                        <small>Controls each field for view, create, edit, import, and export.</small>
+                      </div>
+                      <div class="table-wrap permissions-table-wrap field-permissions-table-wrap">
+                        <table class="config-table permissions-table field-permissions-table">
+                          <thead>
+                            <tr>
+                              <th>Field</th>
+                              <th>View</th>
+                              <th>Create</th>
+                              <th>Edit</th>
+                              <th>Import</th>
+                              <th>Export</th>
+                            </tr>
+                          </thead>
+                          <tbody id="fieldPermissionRows"></tbody>
+                        </table>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
             </section>
+
+            <section id="adminApiSection" class="admin-section" hidden>
+              <div class="builder-layout">
+                <aside class="builder-list">
+                  <div class="tab-strip api-tabs" role="tablist" aria-label="API workspace">
+                    <span class="tab-item is-active">
+                      <button type="button" class="tab-button is-active" data-api-tab="interfaces" role="tab">Interfaces</button>
+                    </span>
+                    <span class="tab-item">
+                      <button type="button" class="tab-button" data-api-tab="connectors" role="tab">Connectors</button>
+                    </span>
+                  </div>
+                </aside>
+
+                <div class="builder-main api-workspace">
+                  <div class="section-heading">
+                    <div>
+                      <h2>API</h2>
+                      <p>Configure interfaces, REST connectors, authentication, headers, and reusable endpoints.</p>
+                    </div>
+                  </div>
+
+                <section id="apiInterfacesTab" class="api-tab-panel">
+                  <div class="table-actions api-table-actions">
+                    <button type="button" id="newApiConnectorButton">New Connector</button>
+                  </div>
+                  <div class="table-wrap config-table-wrap">
+                    <table class="config-table">
+                      <thead>
+                        <tr>
+                          <th>Interface</th>
+                          <th>Connector</th>
+                          <th>Method</th>
+                          <th>Path</th>
+                          <th>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody id="apiInterfaceRows"></tbody>
+                    </table>
+                  </div>
+                </section>
+
+                <section id="apiConnectorsTab" class="api-tab-panel" hidden>
+                  <div class="table-wrap config-table-wrap">
+                    <table class="config-table">
+                      <thead>
+                        <tr>
+                          <th>Connector</th>
+                          <th>Base URL</th>
+                          <th>Auth</th>
+                          <th>Endpoints</th>
+                          <th>Status</th>
+                          <th>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody id="apiConnectorRows"></tbody>
+                    </table>
+                  </div>
+                </section>
+              </div>
+              </div>
+
+              <div id="apiConnectorModal" class="modal-backdrop" hidden>
+                <form id="apiConnectorForm" class="panel modal-card api-connector-modal-card">
+                  <div class="modal-header">
+                    <h2 id="apiConnectorFormTitle">New Connector</h2>
+                    <div class="modal-title-actions">
+                      <button type="button" class="icon-button fullscreen-button" data-modal-fullscreen aria-label="Enlarge to full screen" aria-pressed="false" title="Enlarge to full screen"></button>
+                      <button type="button" class="icon-button" id="closeApiConnectorModal" aria-label="Close">x</button>
+                    </div>
+                  </div>
+                  <input name="editingConnectorKey" type="hidden">
+                  <div class="api-connector-grid">
+                    <label>
+                      Connector Name
+                      <input name="name" type="text" required>
+                    </label>
+                    <label>
+                      Connector Key
+                      <input name="connectorKey" type="text">
+                    </label>
+                    <label class="api-wide-field">
+                      Base URL
+                      <input name="baseUrl" type="url" placeholder="https://api.example.com" required>
+                    </label>
+                    <label>
+                      Auth Type
+                      <select name="authType">
+                        <option value="none">None</option>
+                        <option value="api_key">API Key</option>
+                        <option value="bearer">Bearer Token</option>
+                        <option value="basic">Basic</option>
+                        <option value="oauth">OAuth</option>
+                      </select>
+                    </label>
+                    <label class="checkbox-label api-enabled-field">
+                      <input name="enabled" type="checkbox" checked>
+                      Enabled
+                    </label>
+                    <label class="api-wide-field">
+                      Auth Config JSON
+                      <textarea name="authConfig" rows="5" placeholder='{"apiKeyName":"X-API-Key","apiKeyValue":"..."}'></textarea>
+                    </label>
+                    <label class="api-wide-field">
+                      Default Headers JSON
+                      <textarea name="defaultHeaders" rows="4" placeholder='{"Content-Type":"application/json"}'></textarea>
+                    </label>
+                  </div>
+                  <div class="api-endpoint-editor">
+                    <div class="permissions-panel-heading">
+                      <strong>Endpoints</strong>
+                      <button type="button" class="secondary small-button" id="addApiEndpointButton">Add Endpoint</button>
+                    </div>
+                    <div class="table-wrap">
+                      <table class="config-table api-endpoint-table">
+                        <thead>
+                          <tr>
+                            <th>Key</th>
+                            <th>Method</th>
+                            <th>Path</th>
+                            <th></th>
+                          </tr>
+                        </thead>
+                        <tbody id="apiEndpointRows"></tbody>
+                      </table>
+                    </div>
+                  </div>
+                  <div class="form-actions end-actions">
+                    <button type="submit" id="saveApiConnectorButton">Save Connector</button>
+                    <button type="button" class="secondary" id="cancelApiConnectorButton">Cancel</button>
+                  </div>
+                </form>
+              </div>
+            </section>
+          </div>
+
+          <div id="formBuilderCreateModal" class="modal-backdrop" hidden>
+            <form id="formBuilderCreateForm" class="panel modal-card narrow-modal">
+              <div class="modal-header">
+                <h2>Create Form</h2>
+                <div class="modal-title-actions">
+                  <button type="button" class="icon-button fullscreen-button" data-modal-fullscreen aria-label="Enlarge to full screen" aria-pressed="false" title="Enlarge to full screen"></button>
+                  <button type="button" class="icon-button" id="closeFormBuilderCreateModal" aria-label="Close">x</button>
+                </div>
+              </div>
+              <label>
+                Form Type
+                <select name="formType">
+                  <option value="module">Module form</option>
+                  <option value="workflow">Workflow form</option>
+                </select>
+              </label>
+              <label>
+                Form Name
+                <input name="name" type="text" required>
+              </label>
+              <label>
+                Form Key
+                <input name="formKey" type="text" required>
+              </label>
+              <label>
+                Description
+                <textarea name="description" rows="3"></textarea>
+              </label>
+              <label class="form-builder-workflow-field">
+                Starter Field Label
+                <input name="starterFieldLabel" type="text" value="Title">
+              </label>
+              <label class="form-builder-workflow-field">
+                Starter Field Type
+                <select name="starterFieldType">
+                  <option value="textbox">Textbox</option>
+                  <option value="textarea">Textarea</option>
+                  <option value="date">Date</option>
+                  <option value="checkbox">Checkbox</option>
+                </select>
+              </label>
+              <div class="form-actions">
+                <button type="submit">Create Form</button>
+                <button type="button" class="secondary" id="cancelFormBuilderCreateButton">Cancel</button>
+              </div>
+            </form>
           </div>
 
           <div id="fieldConfigModal" class="modal-backdrop" hidden>
@@ -829,6 +1175,89 @@
                 <button type="submit" id="saveFormulaButton">Save</button>
                 <button type="button" class="secondary" id="clearFormulaButton">Clear</button>
                 <button type="button" class="secondary" id="cancelFormulaButton">Cancel</button>
+              </div>
+            </form>
+          </div>
+
+          <div id="fieldLinkageModal" class="modal-backdrop" hidden>
+            <form id="fieldLinkageForm" class="panel modal-card field-linkage-modal-card">
+              <div class="modal-header">
+                <div>
+                  <h2 id="fieldLinkageTitle">Field Linkage</h2>
+                  <p class="muted">Map source columns into form fields when a trigger field changes.</p>
+                </div>
+                <div class="modal-title-actions">
+                  <button type="button" class="icon-button fullscreen-button" data-modal-fullscreen aria-label="Enlarge to full screen" aria-pressed="false" title="Enlarge to full screen"></button>
+                  <button type="button" class="icon-button" id="closeFieldLinkageModal" aria-label="Close">x</button>
+                </div>
+              </div>
+              <input name="fieldKey" type="hidden">
+              <div class="field-linkage-grid">
+                <label>
+                  <span>Trigger Field</span>
+                  <select name="triggerField"></select>
+                </label>
+                <label>
+                  <span>Trigger</span>
+                  <select name="triggerCondition">
+                    <option value="on_change">On Change</option>
+                    <option value="on_select">On Select</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Primary Key Match</span>
+                  <input name="primaryKeyField" placeholder="a.id">
+                </label>
+                <label class="field-linkage-check">
+                  <input name="clearOnEmpty" type="checkbox">
+                  <span>Clear mapped targets when source is empty</span>
+                </label>
+              </div>
+              <section class="field-linkage-editor">
+                <div class="field-linkage-heading">
+                  <strong>Source Tables</strong>
+                  <button type="button" class="secondary small-button" data-add-linkage-row="source">Add Source</button>
+                </div>
+                <div class="table-wrap">
+                  <table class="field-linkage-table">
+                    <thead><tr><th>Module</th><th>Table</th><th>Alias</th><th></th></tr></thead>
+                    <tbody id="fieldLinkageSourceRows"></tbody>
+                  </table>
+                </div>
+              </section>
+              <section class="field-linkage-editor">
+                <div class="field-linkage-heading">
+                  <strong>Join Rules</strong>
+                  <button type="button" class="secondary small-button" data-add-linkage-row="join">Add Join</button>
+                </div>
+                <div class="table-wrap">
+                  <table class="field-linkage-table">
+                    <thead><tr><th>Left Field</th><th>Operator</th><th>Right Field</th><th></th></tr></thead>
+                    <tbody id="fieldLinkageJoinRows"></tbody>
+                  </table>
+                </div>
+              </section>
+              <section class="field-linkage-editor">
+                <label>
+                  <span>Guarded SQL WHERE</span>
+                  <textarea name="sourceWhere" rows="3" placeholder="a.status = 'active'"></textarea>
+                </label>
+              </section>
+              <section class="field-linkage-editor">
+                <div class="field-linkage-heading">
+                  <strong>Mappings</strong>
+                  <button type="button" class="secondary small-button" data-add-linkage-row="mapping">Add Mapping</button>
+                </div>
+                <div class="table-wrap">
+                  <table class="field-linkage-table">
+                    <thead><tr><th>Source Field</th><th>Target Field</th><th>Coerce</th><th></th></tr></thead>
+                    <tbody id="fieldLinkageMappingRows"></tbody>
+                  </table>
+                </div>
+              </section>
+              <div class="form-actions end-actions">
+                <button type="submit" id="saveFieldLinkageButton">Save Linkage</button>
+                <button type="button" class="secondary" id="cancelFieldLinkageButton">Cancel</button>
               </div>
             </form>
           </div>

@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const { config } = require('../../shared/config');
 const { AppError } = require('../../shared/errors');
+const { findUserById } = require('./auth.repository');
 
 function requireAuth(req, _res, next) {
   const header = req.headers.authorization || '';
@@ -11,12 +12,24 @@ function requireAuth(req, _res, next) {
     return;
   }
 
-  try {
-    req.user = jwt.verify(token, config.jwtSecret);
-    next();
-  } catch (_error) {
-    next(new AppError('Invalid or expired token', 401));
-  }
+  Promise.resolve()
+    .then(async () => {
+      const decoded = jwt.verify(token, config.jwtSecret, {
+        algorithms: ['HS256'],
+        audience: config.jwtAudience,
+        issuer: config.jwtIssuer
+      });
+      const userId = decoded.sub || decoded.id;
+      const user = userId ? await findUserById(userId) : null;
+      if (!user || user.status !== 'active') {
+        throw new AppError('Invalid or expired token', 401);
+      }
+      req.user = user;
+      next();
+    })
+    .catch((error) => {
+      next(error instanceof AppError ? error : new AppError('Invalid or expired token', 401));
+    });
 }
 
 function requireRole(...roles) {

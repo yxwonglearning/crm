@@ -50,8 +50,8 @@ function rowAllows(row, action) {
   return Boolean(row[actionColumns[action]]);
 }
 
-function subjectsFromRows(actionList, rows, hasStoredRules) {
-  const subjects = hasStoredRules ? blankActionSubjects(actionList) : defaultSubjectsForModule();
+function subjectsFromRows(actionList, rows, hasStoredRules, defaultSubjects = defaultSubjectsForModule()) {
+  const subjects = hasStoredRules ? blankActionSubjects(actionList) : defaultSubjects;
   rows.forEach((row) => {
     actionList.forEach((action) => {
       if (!rowAllows(row, action)) return;
@@ -183,11 +183,12 @@ async function saveFieldPermissionMatrix(moduleKey, matrix) {
 async function listModulePermissionMatrix(moduleKey) {
   const config = await moduleConfig.getModuleConfig(moduleKey);
   const rows = await repository.listModulePermissions(moduleKey);
+  const defaultSubjects = config.module?.system ? defaultSubjectsForModule() : blankActionSubjects(moduleActions);
   return {
     module: config.module,
     roles,
     actions: moduleActions,
-    permissions: subjectsFromRows(moduleActions, rows, rows.length > 0)
+    permissions: subjectsFromRows(moduleActions, rows, rows.length > 0, defaultSubjects)
   };
 }
 
@@ -204,6 +205,30 @@ async function userModulePermissions(moduleKey, user) {
   if (user.role === 'admin' || rows.length === 0) {
     return moduleActions.reduce((result, action) => ({ ...result, [action]: true }), {});
   }
+
+  const userId = String(user.id);
+  const role = String(user.role);
+  const matchingRows = rows.filter((row) => (
+    (row.subject_type === 'role' && row.subject_key === role)
+    || (row.subject_type === 'user' && row.subject_key === userId)
+  ));
+
+  return moduleActions.reduce((result, action) => ({
+    ...result,
+    [action]: matchingRows.some((row) => rowAllows(row, action))
+  }), {});
+}
+
+async function userModulePageAccessAllowed(moduleKey, user) {
+  const pagePermissions = await userModulePagePermissions(moduleKey, user);
+  return Boolean(pagePermissions.view);
+}
+
+async function userModulePagePermissions(moduleKey, user) {
+  const empty = moduleActions.reduce((result, action) => ({ ...result, [action]: false }), {});
+  if (!user) return empty;
+  const rows = await repository.listModulePermissions(moduleKey);
+  if (!rows.length) return empty;
 
   const userId = String(user.id);
   const role = String(user.role);
@@ -283,6 +308,8 @@ module.exports = {
   listModulePermissionMatrix,
   saveModulePermissionMatrix,
   userModulePermissions,
+  userModulePageAccessAllowed,
+  userModulePagePermissions,
   assertModuleActionAllowed,
   listFieldPermissionMatrix,
   saveFieldPermissionMatrix,

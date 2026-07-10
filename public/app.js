@@ -1,6 +1,33 @@
+const authStorageKeys = {
+  token: 'crm.token',
+  user: 'crm.user',
+  remembered: 'crm.remembered'
+};
+
+function parseStoredJson(value) {
+  try {
+    return JSON.parse(value || 'null');
+  } catch (_error) {
+    return null;
+  }
+}
+
+function readStoredSession() {
+  const remembered = localStorage.getItem(authStorageKeys.remembered) === 'true';
+  const storage = remembered ? localStorage : sessionStorage;
+  return {
+    token: storage.getItem(authStorageKeys.token) || '',
+    user: parseStoredJson(storage.getItem(authStorageKeys.user)),
+    remembered
+  };
+}
+
+const storedSession = readStoredSession();
+
 const state = {
-  token: localStorage.getItem('crm.token') || '',
-  user: JSON.parse(localStorage.getItem('crm.user') || 'null'),
+  token: storedSession.token,
+  user: storedSession.user,
+  rememberSession: storedSession.remembered,
   countries: [],
   users: [],
   customers: [],
@@ -8,7 +35,15 @@ const state = {
   customerPermissions: {},
   userFields: [],
   adminModules: [],
+  standaloneForms: [],
+  publishedModules: [],
+  moduleRuntimeConfigs: {},
+  moduleRuntimeRecords: {},
+  activeRuntimeModuleKey: '',
+  moduleRuntimeSearch: '',
   browserButtons: [],
+  apiConnectors: [],
+  activeApiTab: 'interfaces',
   permissionMatrix: null,
   fieldPermissionMatrix: null,
   activePermissionModule: 'customers',
@@ -19,6 +54,7 @@ const state = {
   adminMenuCollapsed: false,
   activeConfigModule: 'customers',
   formBuilderSearch: '',
+  modulePageSearch: '',
   editingFieldKey: '',
   batchActiveTable: 'main',
   batchDetailTables: [],
@@ -37,6 +73,7 @@ const state = {
   dragOverFormDesignFieldKey: '',
   draggingFormDesignDetailTable: '',
   dragOverFormDesignDetailTable: '',
+  editingFieldLinkageFieldKey: '',
   activeCustomerFormType: 'add',
   activeUserFormType: 'add',
   activeBrowserLookup: null,
@@ -47,6 +84,34 @@ const configModules = [
   { key: 'customers', name: 'Customers', description: 'Customer records and contact forms' },
   { key: 'users', name: 'Users', description: 'Team access and user profile forms' }
 ];
+
+function moduleCatalogItem(config) {
+  const module = config.module || config;
+  return {
+    key: module.moduleKey || module.key,
+    name: module.name,
+    description: module.description || '',
+    status: module.status || (module.enabled === false ? 'archived' : 'published'),
+    showInMenu: Boolean(module.showInMenu),
+    system: Boolean(module.system),
+    enabled: module.enabled !== false
+  };
+}
+
+function syncConfigModuleCatalog(modules = state.adminModules) {
+  const nextModules = modules.map(moduleCatalogItem).filter((module) => module.key);
+  configModules.splice(0, configModules.length, ...nextModules);
+  if (!configModules.some((module) => module.key === state.activeConfigModule)) {
+    state.activeConfigModule = configModules[0]?.key || 'customers';
+  }
+  if (!configModules.some((module) => module.key === state.activePermissionModule)) {
+    state.activePermissionModule = configModules[0]?.key || 'customers';
+  }
+}
+
+function moduleConfigByKey(moduleKey) {
+  return state.adminModules.find((config) => (config.module?.moduleKey || config.moduleKey) === moduleKey) || null;
+}
 
 const editableFieldTypes = [
   { value: 'textbox', label: 'Textbox' },
@@ -371,7 +436,9 @@ function formDesignStorageKey(moduleKey = state.activeConfigModule) {
 }
 
 function moduleFields(moduleKey = state.activeConfigModule) {
-  return moduleKey === 'users' ? state.userFields : state.customerFields;
+  if (moduleKey === 'users') return state.userFields;
+  if (moduleKey === 'customers') return state.customerFields;
+  return moduleConfigByKey(moduleKey)?.fields || [];
 }
 
 function defaultFormDesignOrder(moduleKey = state.activeConfigModule) {
@@ -385,9 +452,20 @@ function defaultFormDesignHiddenFields(moduleKey = state.activeConfigModule) {
 }
 
 function defaultFormDesignLayout(moduleKey = state.activeConfigModule) {
+  const fields = moduleFields(moduleKey);
+  const mainFieldKeys = fields.filter((field) => field.tableType !== 'detail').map((field) => field.fieldKey);
   return {
     order: defaultFormDesignOrder(moduleKey),
-    hidden: defaultFormDesignHiddenFields(moduleKey)
+    hidden: defaultFormDesignHiddenFields(moduleKey),
+    fieldSpans: {},
+    sections: [
+      {
+        id: 'section_general',
+        title: 'General',
+        columns: 1,
+        fieldKeys: mainFieldKeys
+      }
+    ]
   };
 }
 
@@ -410,12 +488,27 @@ function normalizeFormDesignLayout(layout, fallback = defaultFormDesignLayout())
   if (Array.isArray(layout)) {
     return {
       order: layout,
-      hidden: [...fallback.hidden]
+      hidden: [...fallback.hidden],
+      fieldSpans: { ...(fallback.fieldSpans || {}) },
+      sections: (fallback.sections || []).map((section) => ({ ...section, fieldKeys: [...(section.fieldKeys || [])] }))
     };
   }
+  const fallbackSections = Array.isArray(fallback.sections) && fallback.sections.length
+    ? fallback.sections
+    : [{ id: 'section_general', title: 'General', columns: 1, fieldKeys: [...(fallback.order || [])] }];
+  const sections = Array.isArray(layout?.sections) && layout.sections.length
+    ? layout.sections
+    : fallbackSections;
   return {
     order: Array.isArray(layout?.order) ? layout.order : [...fallback.order],
-    hidden: Array.isArray(layout?.hidden) ? layout.hidden : [...fallback.hidden]
+    hidden: Array.isArray(layout?.hidden) ? layout.hidden : [...fallback.hidden],
+    fieldSpans: { ...(fallback.fieldSpans || {}), ...(layout?.fieldSpans || {}) },
+    sections: sections.map((section, index) => ({
+      id: String(section?.id || `section_${index + 1}`),
+      title: String(section?.title || `Section ${index + 1}`),
+      columns: Math.min(3, Math.max(1, Number(section?.columns) || 1)),
+      fieldKeys: Array.isArray(section?.fieldKeys) ? [...section.fieldKeys] : []
+    }))
   };
 }
 
@@ -467,7 +560,38 @@ function orderedFormDesignFields(type = state.activeFormDesignType) {
 function updateFormDesignDraftOrder(type, fields) {
   const layouts = readFormDesignLayouts();
   layouts.draft[type].order = fields.map((field) => field.fieldKey);
+  syncFormDesignSectionsWithOrder(layouts.draft[type]);
   writeFormDesignLayouts(layouts);
+}
+
+function syncFormDesignSectionsWithOrder(layout) {
+  const mainFieldKeys = (layout.order || [])
+    .map((fieldKey) => findConfigField(fieldKey))
+    .filter((field) => field && field.tableType !== 'detail')
+    .map((field) => field.fieldKey);
+  const knownMain = new Set(mainFieldKeys);
+  const seen = new Set();
+  layout.sections = (layout.sections || []).map((section, index) => {
+    const fieldKeys = (section.fieldKeys || []).filter((fieldKey) => {
+      if (!knownMain.has(fieldKey) || seen.has(fieldKey)) return false;
+      seen.add(fieldKey);
+      return true;
+    });
+    return {
+      id: section.id || `section_${index + 1}`,
+      title: section.title || `Section ${index + 1}`,
+      columns: Math.min(3, Math.max(1, Number(section.columns) || 1)),
+      fieldKeys
+    };
+  });
+  if (!layout.sections.length) {
+    layout.sections.push({ id: 'section_general', title: 'General', columns: 1, fieldKeys: [] });
+  }
+  const missing = mainFieldKeys.filter((fieldKey) => !seen.has(fieldKey));
+  layout.sections[0].fieldKeys.push(...missing);
+  layout.fieldSpans = Object.fromEntries(Object.entries(layout.fieldSpans || {})
+    .filter(([fieldKey]) => knownMain.has(fieldKey))
+    .map(([fieldKey, span]) => [fieldKey, Math.min(3, Math.max(1, Number(span) || 1))]));
 }
 
 function formDesignHiddenFieldKeys(type = state.activeFormDesignType) {
@@ -625,7 +749,7 @@ function updateFormDesignSelectionUI() {
   if (help) {
     help.textContent = formDesignSelectedHelpText(selectedField);
   }
-  $$('[data-design-action="edit-field"], [data-design-action="formula"]').forEach((button) => {
+  $$('[data-design-action="edit-field"], [data-design-action="formula"], [data-design-action="field-linkage"]').forEach((button) => {
     button.disabled = !selectedField;
   });
 }
@@ -648,8 +772,10 @@ function formLabelText(field) {
 }
 
 function formDesignFieldCard(field) {
+  const layout = activeFormDesignLayout();
+  const span = Math.min(layout.sections?.find((section) => (section.fieldKeys || []).includes(field.fieldKey))?.columns || 1, Number(layout.fieldSpans?.[field.fieldKey] || 1));
   return `
-    <article class="form-design-field form-design-preview-field ${field.fieldKey === state.selectedFormDesignFieldKey ? 'is-selected' : ''} ${field.fieldKey === state.draggingFormDesignFieldKey ? 'is-dragging' : ''} ${field.fieldKey === state.dragOverFormDesignFieldKey ? 'is-drag-over' : ''}" data-design-field="${escapeHtml(field.fieldKey)}" draggable="true" title="Drag to reorder. Double-click to configure formula.">
+    <article class="form-design-field form-design-preview-field ${field.fieldKey === state.selectedFormDesignFieldKey ? 'is-selected' : ''} ${field.fieldKey === state.draggingFormDesignFieldKey ? 'is-dragging' : ''} ${field.fieldKey === state.dragOverFormDesignFieldKey ? 'is-drag-over' : ''}" data-design-field="${escapeHtml(field.fieldKey)}" draggable="true" title="Drag to reorder. Double-click to configure formula." style="grid-column: span ${span};">
       ${renderFormDesignMainField(field)}
       <div class="form-design-field-meta">
         ${field.formulaEnabled ? '<span class="formula-badge">fx</span>' : ''}
@@ -771,7 +897,7 @@ function renderFormDesignPreviewControl(field) {
     return `<input type="checkbox" disabled>`;
   }
   if (field.type === 'browser_button') {
-    return renderBrowserFieldInput(field, value, { detailField: options.detailField });
+    return renderBrowserFieldInput(field, '', { detailField: false });
   }
   if (field.type === 'attach_document') {
     return `<input type="file" disabled>`;
@@ -892,7 +1018,9 @@ function copyFormDesignLayout(sourceType) {
   const layouts = readFormDesignLayouts();
   layouts.draft[state.activeFormDesignType] = {
     order: [...(layouts.draft[sourceType]?.order || defaultFormDesignOrder())],
-    hidden: [...(layouts.draft[sourceType]?.hidden || [])]
+    hidden: [...(layouts.draft[sourceType]?.hidden || [])],
+    fieldSpans: { ...(layouts.draft[sourceType]?.fieldSpans || {}) },
+    sections: (layouts.draft[sourceType]?.sections || []).map((section) => ({ ...section, fieldKeys: [...(section.fieldKeys || [])] }))
   };
   writeFormDesignLayouts(layouts);
   renderFormDesignDrawer();
@@ -901,7 +1029,9 @@ function copyFormDesignLayout(sourceType) {
 
 function activeFormDesignLayout() {
   const layouts = readFormDesignLayouts();
-  return layouts.draft[state.activeFormDesignType] || defaultFormDesignLayout();
+  const layout = layouts.draft[state.activeFormDesignType] || defaultFormDesignLayout();
+  syncFormDesignSectionsWithOrder(layout);
+  return layout;
 }
 
 async function saveFormDesignDraft() {
@@ -925,7 +1055,9 @@ async function publishFormDesign() {
   const layouts = readFormDesignLayouts();
   layouts.published[state.activeFormDesignType] = {
     order: [...(layouts.draft[state.activeFormDesignType]?.order || defaultFormDesignOrder())],
-    hidden: [...(layouts.draft[state.activeFormDesignType]?.hidden || [])]
+    hidden: [...(layouts.draft[state.activeFormDesignType]?.hidden || [])],
+    fieldSpans: { ...(layouts.draft[state.activeFormDesignType]?.fieldSpans || {}) },
+    sections: (layouts.draft[state.activeFormDesignType]?.sections || []).map((section) => ({ ...section, fieldKeys: [...(section.fieldKeys || [])] }))
   };
   writeFormDesignLayouts(layouts);
   const formName = titleCaseMessage(state.activeFormDesignType);
@@ -1595,6 +1727,9 @@ async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({ error: 'Request failed' }));
+    if (response.status === 401 && path !== '/api/auth/login') {
+      clearSession();
+    }
     throw new Error(payload.error || 'Request failed');
   }
 
@@ -1959,6 +2094,7 @@ function browserLookupTargetInput() {
 function setBrowserLookupValue(result) {
   const input = browserLookupTargetInput();
   if (!input) return;
+  const lookup = state.activeBrowserLookup;
   input.value = result.value ?? '';
   const display = input.closest('.browser-field-control')?.querySelector('.browser-field-display');
   if (display) {
@@ -1967,6 +2103,97 @@ function setBrowserLookupValue(result) {
   input.dispatchEvent(new Event('input', { bubbles: true }));
   input.dispatchEvent(new Event('change', { bubbles: true }));
   closeBrowserLookupModal();
+}
+
+async function applyFieldLinkageFromLookup(lookup, result) {
+  if (!lookup?.fieldKey) return applyFieldLinkagesForTrigger('', result?.value, lookup);
+  return applyFieldLinkagesForTrigger(lookup.fieldKey, result?.value, lookup);
+}
+
+async function resolveFieldLinkageConfig(config, value) {
+  const mappings = Array.isArray(config.fieldMappings) ? config.fieldMappings : [];
+  if (!config.primaryKeyField || !mappings.length) return;
+  if (value === undefined || value === null || String(value).trim() === '') {
+    return { columns: {}, rows: [] };
+  }
+  return api('/api/browser-buttons/field-linkage/resolve', {
+    method: 'POST',
+    body: JSON.stringify({
+      ...config,
+      sourceFields: Array.from(new Set(mappings.map((mapping) => mapping.sourceField).filter(Boolean))),
+      value
+    })
+  });
+}
+
+function setLinkedTargetValue(target, value) {
+  if (!target) return;
+  if (target.type === 'checkbox') {
+    target.checked = Boolean(value);
+  } else {
+    target.value = value ?? '';
+  }
+  target.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function linkedTargetInput(context, targetField) {
+  if (context?.target === 'detail') {
+    return Array.from(context.row?.querySelectorAll('[data-detail-field]') || [])
+      .find((item) => item.dataset.detailField === targetField) || null;
+  }
+  return context?.form?.elements?.[targetField] || $('#customerForm')?.elements?.[targetField] || null;
+}
+
+async function applyFieldLinkageConfig(config, triggerValue, context = {}) {
+  const mappings = Array.isArray(config.fieldMappings) ? config.fieldMappings : [];
+  if (!mappings.length) return;
+  if ((triggerValue === undefined || triggerValue === null || String(triggerValue).trim() === '') && config.clearOnEmpty !== false) {
+    mappings.forEach((mapping) => {
+      if (!mapping.targetField || mapping.targetField.startsWith('__')) return;
+      setLinkedTargetValue(linkedTargetInput(context, mapping.targetField), '');
+    });
+    return;
+  }
+  const payload = await api('/api/browser-buttons/field-linkage/resolve', {
+    method: 'POST',
+    body: JSON.stringify({
+      ...config,
+      sourceFields: Array.from(new Set(mappings.map((mapping) => mapping.sourceField).filter(Boolean))),
+      value: triggerValue
+    })
+  });
+  const row = payload.rows?.[0]?.columns || payload.columns || {};
+  mappings.forEach((mapping) => {
+    if (!mapping.targetField || mapping.targetField.startsWith('__')) return;
+    setLinkedTargetValue(
+      linkedTargetInput(context, mapping.targetField),
+      coerceLinkedValue(row[mapping.sourceField], mapping.coerceType)
+    );
+  });
+}
+
+async function applyFieldLinkagesForTrigger(triggerField, triggerValue, context = {}) {
+  const configs = (context.fields || activeConfigFields())
+    .map((field) => field.lookupConfig ? { field, config: field.lookupConfig } : null)
+    .filter(Boolean)
+    .filter(({ field, config }) => (config.triggerField || field.fieldKey) === triggerField);
+  for (const { config } of configs) {
+    await applyFieldLinkageConfig(config, triggerValue, context);
+  }
+}
+
+function changedFormFieldContext(target, form, fields) {
+  const detailField = target.closest('[data-detail-field]');
+  const fieldKey = detailField?.dataset.detailField || target.name || '';
+  if (!fieldKey || !fields.some((field) => field.fieldKey === fieldKey)) return null;
+  return {
+    fieldKey,
+    value: target.type === 'checkbox' ? target.checked : target.value,
+    target: detailField ? 'detail' : 'main',
+    form,
+    row: target.closest('[data-detail-row]'),
+    fields
+  };
 }
 
 function renderBrowserLookupResults(payload) {
@@ -2042,6 +2269,9 @@ function showView(id) {
   closeImportModal();
   closeDeleteCustomerModal();
   closeUserModal();
+  closeModuleRecordModal();
+  closeApiConnectorModal();
+  closeFormBuilderCreateModal();
   closeFieldConfigModal();
   closeFormDesignDrawer();
   closeFormulaBuilderModal();
@@ -2050,7 +2280,7 @@ function showView(id) {
     view.hidden = view.id !== id;
   });
   $$('.nav-button').forEach((button) => {
-    button.classList.toggle('is-active', button.dataset.view === id);
+    button.classList.toggle('is-active', button.dataset.view === id && !button.dataset.moduleView);
   });
 }
 
@@ -2076,13 +2306,31 @@ function toggleAdminMenu() {
   $('#toggleAdminMenu').setAttribute('aria-label', state.adminMenuCollapsed ? 'Expand admin menu' : 'Collapse admin menu');
 }
 
-function setSession(token, user) {
+function clearStoredSession() {
+  [localStorage, sessionStorage].forEach((storage) => {
+    storage.removeItem(authStorageKeys.token);
+    storage.removeItem(authStorageKeys.user);
+  });
+  localStorage.removeItem(authStorageKeys.remembered);
+}
+
+function writeStoredSession(token, user, rememberSession) {
+  clearStoredSession();
+  const storage = rememberSession ? localStorage : sessionStorage;
+  storage.setItem(authStorageKeys.token, token);
+  storage.setItem(authStorageKeys.user, JSON.stringify(user));
+  if (rememberSession) {
+    localStorage.setItem(authStorageKeys.remembered, 'true');
+  }
+}
+
+function setSession(token, user, rememberSession = state.rememberSession) {
   state.token = token;
   state.user = user;
+  state.rememberSession = Boolean(rememberSession);
   document.body.classList.remove('is-auth');
   document.body.classList.add('is-app');
-  localStorage.setItem('crm.token', token);
-  localStorage.setItem('crm.user', JSON.stringify(user));
+  writeStoredSession(token, user, state.rememberSession);
   $('#sessionLabel').textContent = `${user.name} · ${user.role}`;
   $('#logoutButton').hidden = false;
   $('[data-view="usersView"]').hidden = user.role !== 'admin';
@@ -2092,10 +2340,10 @@ function setSession(token, user) {
 function clearSession() {
   state.token = '';
   state.user = null;
+  state.rememberSession = false;
   document.body.classList.remove('is-app');
   document.body.classList.add('is-auth');
-  localStorage.removeItem('crm.token');
-  localStorage.removeItem('crm.user');
+  clearStoredSession();
   $('#sessionLabel').textContent = 'Not signed in';
   $('#logoutButton').hidden = true;
   $('[data-view="usersView"]').hidden = false;
@@ -2191,6 +2439,44 @@ function customerPublishedFormFields(type = 'add') {
     ...layout.order.map((fieldKey) => byKey.get(fieldKey)).filter(Boolean),
     ...fields.filter((field) => !layout.order.includes(field.fieldKey))
   ].filter((field) => !hidden.has(field.fieldKey));
+}
+
+function publishedFormLayout(moduleKey, type = 'add') {
+  return readFormDesignLayouts(moduleKey).published?.[type] || defaultFormDesignLayout(moduleKey);
+}
+
+function renderPublishedMainSections(fields, layout, renderer) {
+  const fieldByKey = new Map(fields.filter((field) => field.tableType !== 'detail').map((field) => [field.fieldKey, field]));
+  const rendered = new Set();
+  const sections = Array.isArray(layout?.sections) && layout.sections.length
+    ? layout.sections
+    : [{ id: 'section_general', title: 'General', columns: 1, fieldKeys: fields.map((field) => field.fieldKey) }];
+  const sectionHtml = sections.map((section) => {
+    const columns = Math.min(3, Math.max(1, Number(section.columns) || 1));
+    const sectionFields = (section.fieldKeys || []).map((fieldKey) => fieldByKey.get(fieldKey)).filter(Boolean);
+    sectionFields.forEach((field) => rendered.add(field.fieldKey));
+    if (!sectionFields.length) return '';
+    return `
+      <section class="runtime-form-section">
+        <div class="runtime-form-section-heading">${escapeHtml(section.title || 'General')}</div>
+        <div class="runtime-form-section-grid" style="grid-template-columns: repeat(${columns}, minmax(0, 1fr));">
+          ${sectionFields.map((field) => {
+            const span = Math.min(columns, Math.max(1, Number(layout?.fieldSpans?.[field.fieldKey] || 1)));
+            return `<div class="runtime-form-field" style="grid-column: span ${span};">${renderer(field)}</div>`;
+          }).join('')}
+        </div>
+      </section>
+    `;
+  }).join('');
+  const leftovers = fields.filter((field) => field.tableType !== 'detail' && !rendered.has(field.fieldKey));
+  if (!leftovers.length) return sectionHtml;
+  return `${sectionHtml}
+    <section class="runtime-form-section">
+      <div class="runtime-form-section-heading">Other Fields</div>
+      <div class="runtime-form-section-grid">
+        ${leftovers.map((field) => `<div class="runtime-form-field">${renderer(field)}</div>`).join('')}
+      </div>
+    </section>`;
 }
 
 function userTableFields() {
@@ -2501,7 +2787,8 @@ function deleteSelectedDetailRows(section) {
 }
 
 function renderCustomerFormFields(customer = null) {
-  const mainFields = mainFormFields().map((field) => renderMainCustomerField(field, customer)).join('');
+  const layout = publishedFormLayout('customers', state.activeCustomerFormType);
+  const mainFields = renderPublishedMainSections(mainFormFields(), layout, (field) => renderMainCustomerField(field, customer));
   const detailTables = detailFormGroups()
     .map((group) => renderDetailTableSection(group.tableName, group.fields, customer))
     .join('');
@@ -2523,6 +2810,327 @@ function renderCustomerCell(customer, field) {
     return `<td>${renderReadonlyCheckbox(Boolean(value))}</td>`;
   }
   return `<td>${escapeHtml(value)}</td>`;
+}
+
+function runtimeModuleConfigs() {
+  return state.publishedModules;
+}
+
+function renderPublishedModuleNav() {
+  const container = $('#publishedModuleNav');
+  if (!container) return;
+  container.innerHTML = runtimeModuleConfigs().map((config) => {
+    const module = config.module || config;
+    return `<button class="nav-button module-nav-button" data-module-view="${escapeHtml(module.moduleKey || module.key)}">${escapeHtml(module.name)}</button>`;
+  }).join('');
+}
+
+function activeRuntimeConfig() {
+  return state.moduleRuntimeConfigs[state.activeRuntimeModuleKey] || null;
+}
+
+function runtimeMainFields(config = activeRuntimeConfig()) {
+  return (config?.fields || []).filter((field) => !field.archived && field.tableType !== 'detail');
+}
+
+function runtimeTableFields(config = activeRuntimeConfig()) {
+  const shown = runtimeMainFields(config).filter((field) => field.showInTable);
+  return shown.length ? shown : runtimeMainFields(config).slice(0, 6);
+}
+
+function runtimeFormFields(config = activeRuntimeConfig()) {
+  const fields = runtimeMainFields(config);
+  const layout = config?.formLayouts?.published?.add || {};
+  const hidden = new Set(layout.hidden || []);
+  fields
+    .filter((field) => !field.showInForm)
+    .forEach((field) => hidden.add(field.fieldKey));
+  const byKey = new Map(fields.map((field) => [field.fieldKey, field]));
+  return [
+    ...(layout.order || []).map((fieldKey) => byKey.get(fieldKey)).filter(Boolean),
+    ...fields.filter((field) => !(layout.order || []).includes(field.fieldKey))
+  ].filter((field) => !hidden.has(field.fieldKey));
+}
+
+function runtimeRecords() {
+  return state.moduleRuntimeRecords[state.activeRuntimeModuleKey] || [];
+}
+
+function runtimeRecordValue(record, field) {
+  return record?.customFields?.[field.fieldKey] ?? '';
+}
+
+function renderModuleRuntimeTableHead() {
+  const head = $('#moduleRecordTableHead');
+  if (!head) return;
+  head.innerHTML = `
+    ${runtimeTableFields().map((field) => `<th>${escapeHtml(field.label)}</th>`).join('')}
+    <th></th>
+  `;
+}
+
+function formDesignSectionOptions(selectedId = '') {
+  return (activeFormDesignLayout().sections || []).map((section) => (
+    `<option value="${escapeHtml(section.id)}" ${section.id === selectedId ? 'selected' : ''}>${escapeHtml(section.title || section.id)}</option>`
+  )).join('');
+}
+
+function formDesignSectionForField(fieldKey) {
+  return (activeFormDesignLayout().sections || []).find((section) => (section.fieldKeys || []).includes(fieldKey)) || null;
+}
+
+function formDesignMainFieldMap(fields) {
+  return new Map(fields.filter((field) => field.tableType !== 'detail').map((field) => [field.fieldKey, field]));
+}
+
+function renderFormDesignSection(section, index, mainFieldByKey, totalSections) {
+  const fields = (section.fieldKeys || []).map((fieldKey) => mainFieldByKey.get(fieldKey)).filter(Boolean);
+  const columns = Math.min(3, Math.max(1, Number(section.columns) || 1));
+  return `
+    <section class="form-layout-section" data-form-layout-section="${escapeHtml(section.id)}">
+      <div class="form-layout-section-header">
+        <label>
+          <span>Section</span>
+          <input value="${escapeHtml(section.title || '')}" data-form-section-title="${escapeHtml(section.id)}" aria-label="Section title">
+        </label>
+        <label>
+          <span>Columns</span>
+          <select data-form-section-columns="${escapeHtml(section.id)}">
+            ${[1, 2, 3].map((value) => `<option value="${value}" ${columns === value ? 'selected' : ''}>${value}</option>`).join('')}
+          </select>
+        </label>
+        <button type="button" class="secondary small-button" data-move-form-section="${escapeHtml(section.id)}" data-direction="-1" ${index <= 0 ? 'disabled' : ''}>Up</button>
+        <button type="button" class="secondary small-button" data-move-form-section="${escapeHtml(section.id)}" data-direction="1" ${index >= totalSections - 1 ? 'disabled' : ''}>Down</button>
+        <button type="button" class="secondary small-button" data-delete-form-section="${escapeHtml(section.id)}" ${totalSections <= 1 ? 'disabled' : ''}>Remove</button>
+      </div>
+      <div class="form-design-grid" style="grid-template-columns: repeat(${columns}, minmax(0, 1fr));">
+        ${fields.map(formDesignFieldCard).join('') || '<p class="muted form-layout-empty">No fields in this section.</p>'}
+      </div>
+    </section>
+  `;
+}
+
+function renderFormDesignSections(mainFields) {
+  const layout = activeFormDesignLayout();
+  syncFormDesignSectionsWithOrder(layout);
+  const mainFieldByKey = formDesignMainFieldMap(mainFields);
+  return (layout.sections || []).map((section, index, sections) => (
+    renderFormDesignSection(section, index, mainFieldByKey, sections.length)
+  )).join('');
+}
+
+function updateActiveFormDesignLayout(mutator) {
+  const layouts = readFormDesignLayouts();
+  const layout = layouts.draft[state.activeFormDesignType] || defaultFormDesignLayout();
+  mutator(layout);
+  syncFormDesignSectionsWithOrder(layout);
+  layouts.draft[state.activeFormDesignType] = layout;
+  writeFormDesignLayouts(layouts);
+  renderFormDesignDrawer();
+}
+
+function setFormDesignSectionColumns(sectionId, columns) {
+  updateActiveFormDesignLayout((layout) => {
+    const section = (layout.sections || []).find((item) => item.id === sectionId);
+    if (section) section.columns = Math.min(3, Math.max(1, Number(columns) || 1));
+  });
+}
+
+function renameFormDesignSection(sectionId, title) {
+  updateActiveFormDesignLayout((layout) => {
+    const section = (layout.sections || []).find((item) => item.id === sectionId);
+    if (section) section.title = String(title || '').trim() || 'Untitled Section';
+  });
+}
+
+function addFormDesignSection() {
+  updateActiveFormDesignLayout((layout) => {
+    const next = (layout.sections || []).length + 1;
+    layout.sections = layout.sections || [];
+    layout.sections.push({ id: `section_${Date.now()}`, title: `Section ${next}`, columns: 1, fieldKeys: [] });
+  });
+}
+
+function moveFormDesignSection(sectionId, direction) {
+  updateActiveFormDesignLayout((layout) => {
+    const sections = layout.sections || [];
+    const index = sections.findIndex((section) => section.id === sectionId);
+    const nextIndex = index + direction;
+    if (index < 0 || nextIndex < 0 || nextIndex >= sections.length) return;
+    [sections[index], sections[nextIndex]] = [sections[nextIndex], sections[index]];
+  });
+}
+
+function deleteFormDesignSection(sectionId) {
+  updateActiveFormDesignLayout((layout) => {
+    const sections = layout.sections || [];
+    if (sections.length <= 1) return;
+    const index = sections.findIndex((section) => section.id === sectionId);
+    if (index < 0) return;
+    const [removed] = sections.splice(index, 1);
+    sections[0].fieldKeys.push(...(removed.fieldKeys || []));
+  });
+}
+
+function moveFormDesignSelectedFieldToSection(sectionId) {
+  const fieldKey = state.selectedFormDesignFieldKey;
+  if (!fieldKey || !sectionId) return;
+  updateActiveFormDesignLayout((layout) => {
+    (layout.sections || []).forEach((section) => {
+      section.fieldKeys = (section.fieldKeys || []).filter((key) => key !== fieldKey);
+    });
+    const target = (layout.sections || []).find((section) => section.id === sectionId);
+    if (target) target.fieldKeys.push(fieldKey);
+  });
+}
+
+function setFormDesignSelectedFieldSpan(span) {
+  const fieldKey = state.selectedFormDesignFieldKey;
+  if (!fieldKey) return;
+  updateActiveFormDesignLayout((layout) => {
+    layout.fieldSpans = layout.fieldSpans || {};
+    layout.fieldSpans[fieldKey] = Math.min(3, Math.max(1, Number(span) || 1));
+  });
+}
+
+function renderModuleRuntimeRows() {
+  const body = $('#moduleRecordRows');
+  if (!body) return;
+  const fields = runtimeTableFields();
+  body.innerHTML = runtimeRecords().map((record) => `
+    <tr data-module-record-id="${escapeHtml(record.id)}">
+      ${fields.map((field) => {
+        const value = runtimeRecordValue(record, field);
+        return `<td>${field.type === 'checkbox' ? renderReadonlyCheckbox(Boolean(value)) : escapeHtml(value)}</td>`;
+      }).join('')}
+      <td>
+        <div class="table-action-group">
+          <button type="button" class="link-button" data-edit-module-record="${escapeHtml(record.id)}">Edit</button>
+          <button type="button" class="link-button danger-link" data-delete-module-record="${escapeHtml(record.id)}">Delete</button>
+        </div>
+      </td>
+    </tr>
+  `).join('') || `<tr><td colspan="${fields.length + 1}">No records found.</td></tr>`;
+}
+
+function renderModuleRuntimeView() {
+  const config = activeRuntimeConfig();
+  if (!config) return;
+  const module = config.module;
+  $('#moduleRuntimeTitle').textContent = module.name;
+  $('#moduleRuntimeDescription').textContent = module.description || 'Generated module page.';
+  $('#moduleRuntimeSearch').value = state.moduleRuntimeSearch;
+  const templateLink = $('#moduleImportTemplateLink');
+  const exportLink = $('#moduleExportLink');
+  const moduleKey = encodeURIComponent(module.moduleKey);
+  templateLink.href = `/api/imports/modules/${moduleKey}/template`;
+  templateLink.hidden = false;
+  exportLink.href = `/api/imports/modules/${moduleKey}/export`;
+  exportLink.hidden = false;
+  renderModuleRuntimeTableHead();
+  renderModuleRuntimeRows();
+  $$('.nav-button').forEach((button) => {
+    button.classList.toggle('is-active', button.dataset.moduleView === module.moduleKey);
+  });
+}
+
+async function loadPublishedModules() {
+  const payload = await api('/api/modules').catch(() => ({ modules: [] }));
+  state.publishedModules = payload.modules || [];
+  renderPublishedModuleNav();
+}
+
+async function loadModuleRuntimeRecords(moduleKey = state.activeRuntimeModuleKey) {
+  const params = new URLSearchParams();
+  if (state.moduleRuntimeSearch.trim()) params.set('search', state.moduleRuntimeSearch.trim());
+  const query = params.toString();
+  const payload = await api(`/api/modules/${encodeURIComponent(moduleKey)}/records${query ? `?${query}` : ''}`);
+  state.moduleRuntimeRecords[moduleKey] = payload.records || [];
+  if (payload.module && payload.fields) {
+    state.moduleRuntimeConfigs[moduleKey] = payload;
+  }
+  renderModuleRuntimeView();
+}
+
+async function openRuntimeModulePage(moduleKey) {
+  state.activeRuntimeModuleKey = moduleKey;
+  state.moduleRuntimeSearch = '';
+  const config = await api(`/api/modules/${encodeURIComponent(moduleKey)}/config`);
+  state.moduleRuntimeConfigs[moduleKey] = config;
+  showView('moduleRuntimeView');
+  await loadModuleRuntimeRecords(moduleKey);
+}
+
+function renderModuleRecordForm(record = null) {
+  const container = $('#moduleRecordFormFields');
+  if (!container) return;
+  container.innerHTML = runtimeFormFields().map((field) => `
+    <label>
+      ${formLabelText(field)}
+      ${renderCustomerFieldInput(field, runtimeRecordValue(record, field))}
+    </label>
+  `).join('');
+}
+
+function openModuleRecordModal(recordId = '') {
+  const form = $('#moduleRecordForm');
+  const modal = $('#moduleRecordModal');
+  if (!form || !modal) return;
+  const record = runtimeRecords().find((item) => String(item.id) === String(recordId)) || null;
+  form.reset();
+  form.elements.id.value = record?.id || '';
+  $('#moduleRecordFormTitle').textContent = record ? 'Edit Record' : 'Add Record';
+  $('#saveModuleRecordButton').textContent = record ? 'Save Record' : 'Create Record';
+  renderModuleRecordForm(record);
+  modal.hidden = false;
+  document.body.classList.add('modal-open');
+}
+
+function closeModuleRecordModal() {
+  const modal = $('#moduleRecordModal');
+  if (!modal) return;
+  resetModalFullscreen(modal);
+  modal.hidden = true;
+  document.body.classList.remove('modal-open');
+}
+
+function collectModuleRecordForm() {
+  const form = $('#moduleRecordForm');
+  const input = serializeForm(form);
+  runtimeFormFields().forEach((field) => {
+    if (field.type === 'checkbox') {
+      input[field.fieldKey] = form.elements[field.fieldKey]?.checked || false;
+    }
+  });
+  return input;
+}
+
+async function saveModuleRecord(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const id = form.elements.id.value;
+  const moduleKey = state.activeRuntimeModuleKey;
+  const endpoint = id
+    ? `/api/modules/${encodeURIComponent(moduleKey)}/records/${encodeURIComponent(id)}`
+    : `/api/modules/${encodeURIComponent(moduleKey)}/records`;
+  await api(endpoint, {
+    method: id ? 'PUT' : 'POST',
+    body: JSON.stringify(collectModuleRecordForm())
+  });
+  closeModuleRecordModal();
+  await loadModuleRuntimeRecords(moduleKey);
+  toast(id ? 'Record Saved.' : 'Record Created.');
+}
+
+async function deleteModuleRecord(recordId) {
+  const moduleKey = state.activeRuntimeModuleKey;
+  if (!recordId || !confirm('Delete this record?')) return;
+  await api(`/api/modules/${encodeURIComponent(moduleKey)}/records`, {
+    method: 'DELETE',
+    body: JSON.stringify({ ids: [Number(recordId)] })
+  });
+  await loadModuleRuntimeRecords(moduleKey);
+  toast('Record Deleted.');
 }
 
 function userFieldValue(user, field) {
@@ -2664,7 +3272,8 @@ function renderGenericFieldInput(field, value = '', editing = false) {
 
 function renderUserFormFields(user = null) {
   const editing = Boolean(user);
-  $('#userFormFields').innerHTML = userFormFields().map((field) => {
+  const layout = publishedFormLayout('users', state.activeUserFormType);
+  $('#userFormFields').innerHTML = renderPublishedMainSections(userFormFields(), layout, (field) => {
     const input = `
       <label>
         ${labelTextWithRequired(field)}
@@ -2681,7 +3290,7 @@ function renderUserFormFields(user = null) {
         <input name="confirmPassword" type="password" minlength="8" ${required} autocomplete="new-password">
       </label>
     `;
-  }).join('');
+  });
 }
 
 function renderFieldConfig() {
@@ -2689,6 +3298,16 @@ function renderFieldConfig() {
   if (!body) return;
   const fields = activeConfigFields();
   const module = configModules.find((item) => item.key === state.activeConfigModule);
+  const moduleName = module?.name || titleCaseMessage(state.activeConfigModule);
+  const fieldCount = fields.length;
+
+  const activeTitle = $('#formBuilderActiveTitle');
+  if (activeTitle) activeTitle.textContent = moduleName;
+
+  const activeMeta = $('#formBuilderActiveMeta');
+  if (activeMeta) {
+    activeMeta.textContent = `${state.activeConfigModule} module - ${fieldCount} field${fieldCount === 1 ? '' : 's'} across main/detail tables.`;
+  }
 
   body.innerHTML = fields.map((field) => `
     <tr data-field-key="${escapeHtml(field.fieldKey)}">
@@ -2703,10 +3322,24 @@ function renderFieldConfig() {
       <td>${renderReadonlyCheckbox(field.showInImport)}</td>
       <td>${renderReadonlyCheckbox(field.required)}</td>
       <td>${field.formulaEnabled ? '<span class="formula-badge">fx</span>' : ''}</td>
-      <td><button type="button" class="link-button" data-edit-field="${escapeHtml(field.fieldKey)}">Edit</button></td>
+      <td>
+        <div class="table-action-group">
+          <button type="button" class="link-button" data-edit-field="${escapeHtml(field.fieldKey)}">Edit</button>
+          <button type="button" class="link-button" data-open-field-linkage="${escapeHtml(field.fieldKey)}">Field Linkage</button>
+        </div>
+      </td>
     </tr>
-  `).join('') || `<tr><td colspan="8">No fields found for ${escapeHtml(module?.name || 'this form')}.</td></tr>`;
+  `).join('') || `<tr><td colspan="8">No fields found for ${escapeHtml(moduleName)}.</td></tr>`;
   renderFormModuleList();
+}
+
+function openDefaultFieldLinkage() {
+  const field = activeConfigFields()[0];
+  if (!field) {
+    toast('Add a field before configuring Field Linkage.', 'error');
+    return;
+  }
+  openFieldLinkageModal(field.fieldKey);
 }
 
 function permissionModuleName() {
@@ -2894,7 +3527,504 @@ async function savePermissionMatrix() {
 }
 
 function moduleFieldCount(moduleKey) {
-  return moduleKey === 'users' ? state.userFields.length : state.customerFields.length;
+  if (moduleKey === 'users') return state.userFields.length;
+  if (moduleKey === 'customers') return state.customerFields.length;
+  return moduleConfigByKey(moduleKey)?.fields?.length || 0;
+}
+
+function moduleStatusLabel(status) {
+  return titleCaseMessage(status || 'draft');
+}
+
+function moduleStatusClass(status) {
+  return `status-${String(status || 'draft').toLowerCase()}`;
+}
+
+function renderAdminModules() {
+  const rows = $('#moduleBuilderRows');
+  const summary = $('#moduleSummaryTiles');
+  if (!rows) return;
+  const modules = configModules;
+  if (summary) {
+    const published = modules.filter((module) => module.status === 'published').length;
+    const custom = modules.filter((module) => !module.system).length;
+    summary.innerHTML = [
+      ['Total Modules', modules.length],
+      ['Published', published],
+      ['Custom Modules', custom]
+    ].map(([label, value]) => `
+      <div class="summary-tile">
+        <strong>${escapeHtml(value)}</strong>
+        <span>${escapeHtml(label)}</span>
+      </div>
+    `).join('');
+  }
+
+  rows.innerHTML = modules.map((module) => `
+    <tr data-module-row="${escapeHtml(module.key)}">
+      <td>
+        <strong>${escapeHtml(module.name)}</strong>
+        <div class="muted">${escapeHtml(module.key)}</div>
+        <div class="muted">${escapeHtml(module.description || 'No description')}</div>
+      </td>
+      <td><span class="status-pill ${escapeHtml(moduleStatusClass(module.status))}">${escapeHtml(moduleStatusLabel(module.status))}</span></td>
+      <td>${module.showInMenu ? 'Visible' : 'Hidden'}</td>
+      <td>${moduleFieldCount(module.key)}</td>
+      <td>${module.system ? 'System' : 'Custom'}</td>
+      <td>
+        <div class="table-action-group">
+          <button type="button" class="link-button" data-edit-module-fields="${escapeHtml(module.key)}">Edit Form Fields</button>
+          ${module.system ? '' : `<button type="button" class="link-button" data-edit-module="${escapeHtml(module.key)}">Edit</button>`}
+          ${module.system ? '' : `<button type="button" class="link-button danger-link" data-delete-module="${escapeHtml(module.key)}">Delete</button>`}
+        </div>
+      </td>
+    </tr>
+  `).join('') || '<tr><td colspan="6">No modules configured yet.</td></tr>';
+}
+
+function modulePageState(module) {
+  if (module.status === 'archived' || module.enabled === false) {
+    return { label: 'Archived', className: 'status-archived' };
+  }
+  if (module.status !== 'published') {
+    return { label: 'Draft', className: 'status-draft' };
+  }
+  if (!module.showInMenu) {
+    return { label: 'Published, Menu Hidden', className: 'status-draft' };
+  }
+  return { label: 'Published Live', className: 'status-published' };
+}
+
+function publishedLayoutCount(moduleKey) {
+  const published = readFormDesignLayouts(moduleKey).published || {};
+  return formDesignTypes.filter((type) => (published[type]?.order || []).length).length;
+}
+
+function modulePagePath(module) {
+  if (module.key === 'customers') return 'Customers';
+  if (module.key === 'users') return 'Users';
+  return module.showInMenu ? module.name : 'Menu hidden';
+}
+
+function renderAdminModulePages() {
+  const rows = $('#modulePageRows');
+  const summary = $('#modulePageSummaryTiles');
+  if (!rows) return;
+  const search = state.modulePageSearch.trim().toLowerCase();
+  const modules = configModules.filter((module) => (
+    !search ||
+    module.name.toLowerCase().includes(search) ||
+    module.description.toLowerCase().includes(search) ||
+    module.key.toLowerCase().includes(search)
+  ));
+
+  if (summary) {
+    const live = configModules.filter((module) => module.status === 'published' && module.showInMenu).length;
+    const hidden = configModules.filter((module) => module.status === 'published' && !module.showInMenu).length;
+    const draft = configModules.filter((module) => module.status !== 'published').length;
+    summary.innerHTML = [
+      ['Live Pages', live],
+      ['Menu Hidden', hidden],
+      ['Draft Modules', draft]
+    ].map(([label, value]) => `
+      <div class="summary-tile">
+        <strong>${escapeHtml(value)}</strong>
+        <span>${escapeHtml(label)}</span>
+      </div>
+    `).join('');
+  }
+
+  rows.innerHTML = modules.map((module) => {
+    const pageState = modulePageState(module);
+    const systemView = module.key === 'customers' ? 'customersView' : module.key === 'users' ? 'usersView' : '';
+    const runtimeModule = !module.system && module.status === 'published';
+    return `
+      <tr data-module-page-row="${escapeHtml(module.key)}">
+        <td>
+          <strong>${escapeHtml(module.name)}</strong>
+          <div class="muted">${escapeHtml(module.key)}</div>
+          <div class="muted">${escapeHtml(module.description || 'No description')}</div>
+        </td>
+        <td><span class="status-pill ${escapeHtml(pageState.className)}">${escapeHtml(pageState.label)}</span></td>
+        <td>${escapeHtml(modulePagePath(module))}</td>
+        <td>${moduleFieldCount(module.key)}</td>
+        <td>${publishedLayoutCount(module.key)} / ${formDesignTypes.length}</td>
+        <td>
+          <div class="table-action-group">
+            ${systemView ? `<button type="button" class="link-button" data-open-module-page="${escapeHtml(systemView)}">Open Page</button>` : ''}
+            ${runtimeModule ? `<button type="button" class="link-button" data-open-runtime-module="${escapeHtml(module.key)}">Open Page</button>` : ''}
+            <button type="button" class="link-button" data-edit-module-fields="${escapeHtml(module.key)}">Edit Form Fields</button>
+            ${module.system ? '' : `<button type="button" class="link-button" data-edit-module="${escapeHtml(module.key)}">Publish Settings</button>`}
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('') || '<tr><td colspan="6">No pages found.</td></tr>';
+}
+
+function slugModuleKeyPreview(value) {
+  const key = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_+/g, '_');
+  return /^[a-z]/.test(key) ? key : key ? `m_${key}` : '';
+}
+
+function slugFormKeyPreview(value) {
+  return slugModuleKeyPreview(value);
+}
+
+function moduleByKey(moduleKey) {
+  return configModules.find((module) => module.key === moduleKey) || null;
+}
+
+function openModuleModal(moduleKey = '') {
+  const form = $('#moduleForm');
+  const modal = $('#moduleModal');
+  if (!form || !modal) return;
+  const module = moduleKey ? moduleByKey(moduleKey) : null;
+  form.reset();
+  form.dataset.moduleKeyEdited = module ? 'true' : 'false';
+  form.elements.editingModuleKey.value = module?.key || '';
+  form.elements.name.value = module?.name || '';
+  form.elements.moduleKey.value = module?.key || '';
+  form.elements.moduleKey.readOnly = Boolean(module);
+  form.elements.description.value = module?.description || '';
+  form.elements.status.value = module?.status || 'draft';
+  form.elements.showInMenu.checked = Boolean(module?.showInMenu);
+  $('#moduleFormTitle').textContent = module ? 'Edit Module' : 'New Module';
+  modal.hidden = false;
+  document.body.classList.add('modal-open');
+  form.elements.name.focus();
+}
+
+function closeModuleModal() {
+  const modal = $('#moduleModal');
+  if (!modal) return;
+  modal.hidden = true;
+  document.body.classList.remove('modal-open');
+}
+
+function syncFormBuilderCreateFields() {
+  const form = $('#formBuilderCreateForm');
+  if (!form) return;
+  const isWorkflow = form.elements.formType.value === 'workflow';
+  $$('.form-builder-workflow-field').forEach((field) => {
+    field.hidden = !isWorkflow;
+  });
+  form.elements.starterFieldLabel.required = isWorkflow;
+}
+
+function openFormBuilderCreateModal() {
+  const form = $('#formBuilderCreateForm');
+  const modal = $('#formBuilderCreateModal');
+  if (!form || !modal) return;
+  form.reset();
+  form.dataset.formKeyEdited = 'false';
+  syncFormBuilderCreateFields();
+  modal.hidden = false;
+  document.body.classList.add('modal-open');
+  form.elements.name.focus();
+}
+
+function closeFormBuilderCreateModal() {
+  const modal = $('#formBuilderCreateModal');
+  if (!modal) return;
+  modal.hidden = true;
+  document.body.classList.remove('modal-open');
+}
+
+async function saveFormBuilderCreate(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const formType = form.elements.formType.value;
+  const name = form.elements.name.value.trim();
+  const formKey = form.elements.formKey.value.trim();
+  const description = form.elements.description.value.trim();
+  if (formType === 'module') {
+    await api('/api/sysadmin/modules', {
+      method: 'POST',
+      body: JSON.stringify({
+        name,
+        moduleKey: formKey,
+        description,
+        status: 'draft',
+        showInMenu: false
+      })
+    });
+    state.activeConfigModule = formKey;
+    await refreshAdminModules();
+    showAdminSection('adminFormsSection');
+    renderFieldConfig();
+    closeFormBuilderCreateModal();
+    toast('Module Form Created.');
+    return;
+  }
+
+  const starterLabel = form.elements.starterFieldLabel.value.trim() || 'Title';
+  const starterFieldKey = slugFieldKeyPreview(starterLabel) || 'title';
+  const payload = await api('/api/sysadmin/forms', {
+    method: 'POST',
+    body: JSON.stringify({
+      name,
+      formKey,
+      description,
+      fields: [{
+        label: starterLabel,
+        fieldKey: starterFieldKey,
+        databaseFieldName: starterFieldKey,
+        type: form.elements.starterFieldType.value,
+        tableType: 'main',
+        showInTable: true,
+        showInForm: true,
+        showInImport: true,
+        required: false
+      }]
+    })
+  });
+  state.standaloneForms = payload.forms || [];
+  closeFormBuilderCreateModal();
+  toast('Workflow Form Created.');
+}
+
+async function refreshAdminModules() {
+  const payload = await api('/api/sysadmin/modules');
+  state.adminModules = payload.modules || [];
+  syncConfigModuleCatalog();
+  renderAdminModules();
+  renderAdminModulePages();
+  renderFormModuleList();
+  renderBrowserSources();
+  renderPermissions();
+  await loadPublishedModules();
+}
+
+async function saveModule(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const editingModuleKey = form.elements.editingModuleKey.value;
+  const body = {
+    name: form.elements.name.value.trim(),
+    moduleKey: form.elements.moduleKey.value.trim(),
+    description: form.elements.description.value.trim(),
+    status: form.elements.status.value,
+    showInMenu: form.elements.showInMenu.checked
+  };
+  if (body.status !== 'published') body.showInMenu = false;
+  const endpoint = editingModuleKey
+    ? `/api/sysadmin/modules/${encodeURIComponent(editingModuleKey)}`
+    : '/api/sysadmin/modules';
+  const method = editingModuleKey ? 'PATCH' : 'POST';
+  await api(endpoint, {
+    method,
+    body: JSON.stringify(editingModuleKey ? {
+      name: body.name,
+      description: body.description,
+      status: body.status,
+      showInMenu: body.showInMenu
+    } : body)
+  });
+  closeModuleModal();
+  await refreshAdminModules();
+  toast(editingModuleKey ? 'Module Saved.' : 'Module Created.');
+}
+
+async function deleteModule(moduleKey) {
+  const module = moduleByKey(moduleKey);
+  if (!module || module.system) return;
+  if (!confirm(`Delete ${module.name}? This cannot be undone.`)) return;
+  await api(`/api/sysadmin/modules/${encodeURIComponent(moduleKey)}`, { method: 'DELETE' });
+  await refreshAdminModules();
+  toast('Module Deleted.');
+}
+
+function slugApiKeyPreview(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 80);
+}
+
+function parseConnectorJson(value, label) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return {};
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+      throw new Error(`${label} must be a JSON object.`);
+    }
+    return parsed;
+  } catch (error) {
+    throw new Error(error.message.includes('JSON') ? error.message : `${label} must be valid JSON.`);
+  }
+}
+
+function connectorEndpoints(connector) {
+  return Array.isArray(connector?.endpoints) ? connector.endpoints : [];
+}
+
+function renderApiTabs() {
+  $$('.api-tabs [data-api-tab]').forEach((button) => {
+    const active = button.dataset.apiTab === state.activeApiTab;
+    button.classList.toggle('is-active', active);
+    button.closest('.tab-item')?.classList.toggle('is-active', active);
+  });
+  $('#apiInterfacesTab').hidden = state.activeApiTab !== 'interfaces';
+  $('#apiConnectorsTab').hidden = state.activeApiTab !== 'connectors';
+}
+
+function renderApiInterfaces() {
+  const rows = $('#apiInterfaceRows');
+  if (!rows) return;
+  const interfaces = state.apiConnectors.flatMap((connector) => (
+    connectorEndpoints(connector).map((endpoint) => ({ connector, endpoint }))
+  ));
+  rows.innerHTML = interfaces.map(({ connector, endpoint }) => `
+    <tr>
+      <td>
+        <strong>${escapeHtml(endpoint.name || endpoint.key || endpoint.path || 'Endpoint')}</strong>
+        <div class="muted">${escapeHtml(endpoint.key || '')}</div>
+      </td>
+      <td>
+        <strong>${escapeHtml(connector.name)}</strong>
+        <div class="muted">${escapeHtml(connector.connectorKey)}</div>
+      </td>
+      <td>${escapeHtml(endpoint.method || 'GET')}</td>
+      <td>${escapeHtml(endpoint.path || '/')}</td>
+      <td><span class="status-pill ${connector.enabled === false ? 'status-draft' : 'status-published'}">${connector.enabled === false ? 'Disabled' : 'Active'}</span></td>
+    </tr>
+  `).join('') || '<tr><td colspan="5">No API interfaces configured yet. Add endpoints in the Connectors tab.</td></tr>';
+}
+
+function renderApiConnectors() {
+  const rows = $('#apiConnectorRows');
+  if (!rows) return;
+  rows.innerHTML = state.apiConnectors.map((connector) => `
+    <tr data-api-connector="${escapeHtml(connector.connectorKey)}">
+      <td>
+        <strong>${escapeHtml(connector.name)}</strong>
+        <div class="muted">${escapeHtml(connector.connectorKey)}</div>
+      </td>
+      <td>${escapeHtml(connector.baseUrl)}</td>
+      <td>${escapeHtml(titleCaseMessage(connector.authType || 'none'))}</td>
+      <td>${connectorEndpoints(connector).length}</td>
+      <td><span class="status-pill ${connector.enabled === false ? 'status-draft' : 'status-published'}">${connector.enabled === false ? 'Disabled' : 'Enabled'}</span></td>
+      <td>
+        <div class="table-action-group">
+          <button type="button" class="link-button" data-edit-api-connector="${escapeHtml(connector.connectorKey)}">Edit</button>
+          <button type="button" class="link-button danger-link" data-delete-api-connector="${escapeHtml(connector.connectorKey)}">Delete</button>
+        </div>
+      </td>
+    </tr>
+  `).join('') || '<tr><td colspan="6">No API connectors configured yet.</td></tr>';
+}
+
+function renderApiWorkspace() {
+  renderApiTabs();
+  renderApiInterfaces();
+  renderApiConnectors();
+}
+
+async function refreshApiConnectors() {
+  const payload = await api('/api/action-flows/connectors');
+  state.apiConnectors = payload.connectors || [];
+  renderApiWorkspace();
+}
+
+function renderApiEndpointRows(endpoints = []) {
+  const rows = $('#apiEndpointRows');
+  if (!rows) return;
+  const items = endpoints.length ? endpoints : [{ key: '', method: 'GET', path: '' }];
+  rows.innerHTML = items.map((endpoint) => `
+    <tr data-api-endpoint-row>
+      <td><input name="endpointKey" value="${escapeHtml(endpoint.key || '')}" placeholder="extract"></td>
+      <td>
+        <select name="endpointMethod">
+          ${['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((method) => (
+            `<option value="${method}" ${String(endpoint.method || 'GET').toUpperCase() === method ? 'selected' : ''}>${method}</option>`
+          )).join('')}
+        </select>
+      </td>
+      <td><input name="endpointPath" value="${escapeHtml(endpoint.path || '')}" placeholder="/extract"></td>
+      <td><button type="button" class="link-button danger-link" data-remove-api-endpoint>Remove</button></td>
+    </tr>
+  `).join('');
+}
+
+function openApiConnectorModal(connectorKey = '') {
+  const form = $('#apiConnectorForm');
+  const modal = $('#apiConnectorModal');
+  if (!form || !modal) return;
+  const connector = state.apiConnectors.find((item) => item.connectorKey === connectorKey) || null;
+  form.reset();
+  form.elements.editingConnectorKey.value = connector?.connectorKey || '';
+  form.elements.name.value = connector?.name || '';
+  form.elements.connectorKey.value = connector?.connectorKey || '';
+  form.elements.connectorKey.readOnly = Boolean(connector);
+  form.elements.baseUrl.value = connector?.baseUrl || '';
+  form.elements.authType.value = connector?.authType || 'none';
+  form.elements.enabled.checked = connector?.enabled !== false;
+  form.elements.authConfig.value = connector ? JSON.stringify(connector.authConfig || {}, null, 2) : '';
+  form.elements.defaultHeaders.value = connector ? JSON.stringify(connector.defaultHeaders || {}, null, 2) : '';
+  renderApiEndpointRows(connectorEndpoints(connector));
+  $('#apiConnectorFormTitle').textContent = connector ? 'Edit Connector' : 'New Connector';
+  modal.hidden = false;
+  document.body.classList.add('modal-open');
+  form.elements.name.focus();
+}
+
+function closeApiConnectorModal() {
+  const modal = $('#apiConnectorModal');
+  if (!modal) return;
+  resetModalFullscreen(modal);
+  modal.hidden = true;
+  document.body.classList.remove('modal-open');
+}
+
+function collectApiEndpoints() {
+  return $$('#apiEndpointRows [data-api-endpoint-row]')
+    .map((row) => ({
+      key: row.querySelector('[name="endpointKey"]').value.trim(),
+      method: row.querySelector('[name="endpointMethod"]').value,
+      path: row.querySelector('[name="endpointPath"]').value.trim()
+    }))
+    .filter((endpoint) => endpoint.key || endpoint.path);
+}
+
+async function saveApiConnector(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const data = serializeForm(form);
+  const body = {
+    connectorKey: data.connectorKey || slugApiKeyPreview(data.name),
+    name: data.name.trim(),
+    baseUrl: data.baseUrl.trim(),
+    authType: data.authType || 'none',
+    enabled: form.elements.enabled.checked,
+    authConfig: parseConnectorJson(data.authConfig, 'Auth Config JSON'),
+    defaultHeaders: parseConnectorJson(data.defaultHeaders, 'Default Headers JSON'),
+    endpoints: collectApiEndpoints()
+  };
+  await api('/api/action-flows/connectors', {
+    method: 'POST',
+    body: JSON.stringify(body)
+  });
+  closeApiConnectorModal();
+  await refreshApiConnectors();
+  state.activeApiTab = 'connectors';
+  renderApiWorkspace();
+  toast(data.editingConnectorKey ? 'Connector Saved.' : 'Connector Created.');
+}
+
+async function deleteApiConnector(connectorKey) {
+  if (!connectorKey || !confirm('Delete this API connector?')) return;
+  await api(`/api/action-flows/connectors/${encodeURIComponent(connectorKey)}`, { method: 'DELETE' });
+  await refreshApiConnectors();
+  toast('Connector Deleted.');
 }
 
 function renderFormModuleList() {
@@ -2916,7 +4046,7 @@ function renderFormModuleList() {
       </span>
       <em>${moduleFieldCount(module.key)}</em>
     </button>
-  `).join('') || '<p class="muted module-list-empty">No forms found.</p>';
+  `).join('') || '<p class="muted module-list-empty">No modules found.</p>';
 }
 
 function renderFormDesignDrawer() {
@@ -2928,6 +4058,8 @@ function renderFormDesignDrawer() {
     state.selectedFormDesignFieldKey = '';
   }
   const selectedField = selectedFormDesignField();
+  const selectedSection = selectedField ? formDesignSectionForField(selectedField.fieldKey) : null;
+  const selectedSpan = selectedField ? Number(activeFormDesignLayout().fieldSpans?.[selectedField.fieldKey] || 1) : 1;
   const selectedIndex = fields.findIndex((field) => field.fieldKey === state.selectedFormDesignFieldKey);
   const hiddenFields = fields.filter((field) => !isFormDesignFieldVisible(field));
   const visibleFields = fields.filter((field) => isFormDesignFieldVisible(field));
@@ -2956,7 +4088,23 @@ function renderFormDesignDrawer() {
         <button type="button" class="secondary small-button" data-design-action="add-field">Add Field</button>
         <button type="button" class="secondary small-button" data-design-action="edit-field" ${selectedField ? '' : 'disabled'}>Edit Field</button>
         <button type="button" class="secondary small-button" data-design-action="formula" ${selectedField ? '' : 'disabled'}>Formula</button>
+        <button type="button" class="secondary small-button" data-design-action="field-linkage" ${selectedField ? '' : 'disabled'}>Field Linkage</button>
       </div>
+    </div>
+    <div class="form-layout-toolbar">
+      <button type="button" class="secondary small-button" data-add-form-section>Add Section</button>
+      <label>
+        <span>Selected Section</span>
+        <select data-selected-field-section ${selectedField && selectedField.tableType !== 'detail' ? '' : 'disabled'}>
+          ${formDesignSectionOptions(selectedSection?.id || '')}
+        </select>
+      </label>
+      <label>
+        <span>Field Span</span>
+        <select data-selected-field-span ${selectedField && selectedField.tableType !== 'detail' ? '' : 'disabled'}>
+          ${[1, 2, 3].map((value) => `<option value="${value}" ${selectedSpan === value ? 'selected' : ''}>${value}</option>`).join('')}
+        </select>
+      </label>
     </div>
     <div class="form-design-workspace">
       <div class="form-design-section form-design-dropzone" data-design-dropzone="form">
@@ -2965,9 +4113,7 @@ function renderFormDesignDrawer() {
             <strong>${escapeHtml(titleCaseMessage(state.activeFormDesignType))} Form</strong>
             <span>${mainFields.length} main fields</span>
           </div>
-          <div class="form-design-grid">
-            ${fields.map(formDesignFieldCard).join('') || '<p class="muted">No fields available for this form.</p>'}
-          </div>
+          ${renderFormDesignSections(fields)}
           <div class="form-design-detail-area form-design-dropzone" data-design-dropzone="form">
             <div class="form-design-section-heading">
               <strong>Detail Tables</strong>
@@ -2991,8 +4137,175 @@ function renderFormDesignDrawer() {
   `;
 }
 
+function fieldLinkageConfig(field) {
+  return field?.lookupConfig || {};
+}
+
+function fieldLinkageSourceRows(config = {}) {
+  const rows = Array.isArray(config.sourceTables) && config.sourceTables.length
+    ? config.sourceTables
+    : [{ moduleKey: config.sourceModule || state.activeConfigModule, tableName: config.sourceTable || activeModuleKeyBase(), alias: 'a' }];
+  return rows.map((row, index) => ({
+    moduleKey: row.moduleKey || config.sourceModule || state.activeConfigModule,
+    tableName: row.tableName || '',
+    alias: row.alias || String.fromCharCode(97 + index)
+  }));
+}
+
+function fieldLinkageJoinRows(config = {}) {
+  return Array.isArray(config.sourceJoins) && config.sourceJoins.length
+    ? config.sourceJoins
+    : [{ leftField: '', operator: '=', rightField: '' }];
+}
+
+function fieldLinkageMappingRows(config = {}) {
+  return Array.isArray(config.fieldMappings) && config.fieldMappings.length
+    ? config.fieldMappings
+    : [{ sourceField: '', targetField: '', coerceType: 'auto' }];
+}
+
+function renderFieldLinkageTriggerOptions(selected = '') {
+  return activeConfigFields().map((field) => (
+    `<option value="${escapeHtml(field.fieldKey)}" ${field.fieldKey === selected ? 'selected' : ''}>${escapeHtml(field.label)}</option>`
+  )).join('');
+}
+
+function renderFieldLinkageRows(rows, type) {
+  if (type === 'source') {
+    return rows.map((row) => `
+      <tr data-linkage-source-row>
+        <td><input name="sourceModule" value="${escapeHtml(row.moduleKey || '')}" placeholder="${escapeHtml(state.activeConfigModule)}"></td>
+        <td><input name="sourceTable" value="${escapeHtml(row.tableName || '')}" placeholder="customers"></td>
+        <td><input name="sourceAlias" value="${escapeHtml(row.alias || '')}" placeholder="a"></td>
+        <td><button type="button" class="link-button danger-link" data-remove-linkage-row>Remove</button></td>
+      </tr>
+    `).join('');
+  }
+  if (type === 'join') {
+    return rows.map((row) => `
+      <tr data-linkage-join-row>
+        <td><input name="joinLeftField" value="${escapeHtml(row.leftField || '')}" placeholder="a.id"></td>
+        <td>
+          <select name="joinOperator">
+            ${['=', '<>', '>', '>=', '<', '<='].map((operator) => `<option value="${escapeHtml(operator)}" ${operator === (row.operator || '=') ? 'selected' : ''}>${escapeHtml(operator)}</option>`).join('')}
+          </select>
+        </td>
+        <td><input name="joinRightField" value="${escapeHtml(row.rightField || '')}" placeholder="b.mainid"></td>
+        <td><button type="button" class="link-button danger-link" data-remove-linkage-row>Remove</button></td>
+      </tr>
+    `).join('');
+  }
+  return rows.map((row) => `
+    <tr data-linkage-mapping-row>
+      <td><input name="mappingSourceField" value="${escapeHtml(row.sourceField || '')}" placeholder="a.name"></td>
+      <td>
+        <select name="mappingTargetField">
+          <option value="">Select field</option>
+          ${activeConfigFields().map((field) => `<option value="${escapeHtml(field.fieldKey)}" ${field.fieldKey === row.targetField ? 'selected' : ''}>${escapeHtml(field.label)}</option>`).join('')}
+          <option value="__lookupDisplay" ${row.targetField === '__lookupDisplay' ? 'selected' : ''}>Lookup Display</option>
+          <option value="__dialCodeDisplay" ${row.targetField === '__dialCodeDisplay' ? 'selected' : ''}>Dial Code Display</option>
+        </select>
+      </td>
+      <td>
+        <select name="mappingCoerceType">
+          ${['auto', 'text', 'number', 'integer', 'boolean', 'date'].map((typeValue) => `<option value="${typeValue}" ${typeValue === (row.coerceType || 'auto') ? 'selected' : ''}>${titleCaseMessage(typeValue)}</option>`).join('')}
+        </select>
+      </td>
+      <td><button type="button" class="link-button danger-link" data-remove-linkage-row>Remove</button></td>
+    </tr>
+  `).join('');
+}
+
+function renderFieldLinkageModal(field) {
+  const form = $('#fieldLinkageForm');
+  if (!form || !field) return;
+  const config = fieldLinkageConfig(field);
+  const triggerField = config.triggerField || field.fieldKey;
+  state.editingFieldLinkageFieldKey = field.fieldKey;
+  form.elements.fieldKey.value = field.fieldKey;
+  form.elements.triggerField.innerHTML = renderFieldLinkageTriggerOptions(triggerField);
+  form.elements.triggerCondition.value = config.triggerCondition || 'on_change';
+  form.elements.primaryKeyField.value = config.primaryKeyField || '';
+  form.elements.sourceWhere.value = config.sourceWhere || '';
+  form.elements.clearOnEmpty.checked = config.clearOnEmpty !== false;
+  $('#fieldLinkageTitle').textContent = `Field Linkage - ${field.label}`;
+  $('#fieldLinkageSourceRows').innerHTML = renderFieldLinkageRows(fieldLinkageSourceRows(config), 'source');
+  $('#fieldLinkageJoinRows').innerHTML = renderFieldLinkageRows(fieldLinkageJoinRows(config), 'join');
+  $('#fieldLinkageMappingRows').innerHTML = renderFieldLinkageRows(fieldLinkageMappingRows(config), 'mapping');
+}
+
+function openFieldLinkageModal(fieldKey = state.selectedFormDesignFieldKey) {
+  const field = findConfigField(fieldKey);
+  if (!field) return;
+  renderFieldLinkageModal(field);
+  $('#fieldLinkageModal').hidden = false;
+  document.body.classList.add('modal-open');
+}
+
+function closeFieldLinkageModal() {
+  const modal = $('#fieldLinkageModal');
+  if (!modal) return;
+  resetModalFullscreen(modal);
+  modal.hidden = true;
+  state.editingFieldLinkageFieldKey = '';
+  if ($('#formDesignDrawer')?.hidden !== false) {
+    document.body.classList.remove('modal-open');
+  }
+}
+
+function addFieldLinkageRow(type) {
+  const rowMap = {
+    source: ['#fieldLinkageSourceRows', renderFieldLinkageRows([{ moduleKey: state.activeConfigModule, tableName: '', alias: '' }], 'source')],
+    join: ['#fieldLinkageJoinRows', renderFieldLinkageRows([{ leftField: '', operator: '=', rightField: '' }], 'join')],
+    mapping: ['#fieldLinkageMappingRows', renderFieldLinkageRows([{ sourceField: '', targetField: '', coerceType: 'auto' }], 'mapping')]
+  };
+  const [selector, html] = rowMap[type] || [];
+  if (selector) $(selector).insertAdjacentHTML('beforeend', html);
+}
+
+function collectFieldLinkageConfig(form) {
+  const sourceTables = $$('#fieldLinkageSourceRows [data-linkage-source-row]').map((row, index) => ({
+    moduleKey: row.querySelector('[name="sourceModule"]').value.trim(),
+    tableName: row.querySelector('[name="sourceTable"]').value.trim(),
+    alias: row.querySelector('[name="sourceAlias"]').value.trim() || String.fromCharCode(97 + index)
+  })).filter((row) => row.tableName);
+  const sourceJoins = $$('#fieldLinkageJoinRows [data-linkage-join-row]').map((row) => ({
+    leftField: row.querySelector('[name="joinLeftField"]').value.trim(),
+    operator: row.querySelector('[name="joinOperator"]').value,
+    rightField: row.querySelector('[name="joinRightField"]').value.trim()
+  })).filter((row) => row.leftField && row.rightField);
+  const fieldMappings = $$('#fieldLinkageMappingRows [data-linkage-mapping-row]').map((row) => ({
+    sourceField: row.querySelector('[name="mappingSourceField"]').value.trim(),
+    targetField: row.querySelector('[name="mappingTargetField"]').value,
+    coerceType: row.querySelector('[name="mappingCoerceType"]').value
+  })).filter((row) => row.sourceField && row.targetField);
+  const field = findConfigField(form.elements.fieldKey.value);
+  return {
+    browserButtonKey: field?.lookupConfig?.browserButtonKey || '',
+    triggerField: form.elements.triggerField.value,
+    triggerCondition: form.elements.triggerCondition.value,
+    sourceModule: sourceTables[0]?.moduleKey || state.activeConfigModule,
+    sourceTable: sourceTables[0]?.tableName || '',
+    sourceTables,
+    sourceJoins,
+    primaryKeyField: form.elements.primaryKeyField.value.trim(),
+    sourceWhere: form.elements.sourceWhere.value.trim(),
+    clearOnEmpty: form.elements.clearOnEmpty.checked,
+    fieldMappings
+  };
+}
+
+function coerceLinkedValue(value, type = 'auto') {
+  if (value === undefined || value === null) return '';
+  if (type === 'number') return Number(value);
+  if (type === 'integer') return parseInt(value, 10);
+  if (type === 'boolean') return ['true', '1', 'yes', 'y'].includes(String(value).toLowerCase());
+  return value;
+}
+
 function openFormDesignDrawer() {
   state.activeFormDesignType = state.activeFormDesignType || 'add';
+  renderFieldConfig();
   renderFormDesignDrawer();
   $('#formDesignDrawer').hidden = false;
   document.body.classList.add('modal-open');
@@ -3011,7 +4324,9 @@ function closeFormDesignDrawer() {
 }
 
 function activeConfigFields() {
-  return state.activeConfigModule === 'users' ? state.userFields : state.customerFields;
+  if (state.activeConfigModule === 'users') return state.userFields;
+  if (state.activeConfigModule === 'customers') return state.customerFields;
+  return moduleConfigByKey(state.activeConfigModule)?.fields || [];
 }
 
 function findConfigField(fieldKey) {
@@ -3116,10 +4431,16 @@ function setModuleConfig(moduleKey, fields, formLayouts = null) {
     state.userFields = fields;
     renderUserFormFields();
     renderUsers();
-  } else {
+  } else if (moduleKey === 'customers') {
     state.customerFields = fields;
     renderCustomerFormFields();
     renderCustomers();
+  } else {
+    const config = moduleConfigByKey(moduleKey);
+    if (config) {
+      config.fields = fields;
+      config.formLayouts = formLayouts || config.formLayouts;
+    }
   }
   renderFieldConfig();
   if (!$('#formDesignDrawer')?.hidden) {
@@ -3172,7 +4493,7 @@ function formatImportResult(result, refreshFailed = false) {
 }
 
 async function loadBootstrap() {
-  const [countries, users, customerConfig, userConfig, browserButtons, adminModules] = await Promise.all([
+  const [countries, users, customerConfig, userConfig, browserButtons, adminModules, publishedModules] = await Promise.all([
     api('/api/countries'),
     api('/api/users').catch((error) => {
       if (state.user?.role === 'admin') throw error;
@@ -3184,13 +4505,16 @@ async function loadBootstrap() {
       return { fields: [] };
     }),
     api(state.user?.role === 'admin' ? '/api/sysadmin/browser-buttons' : '/api/browser-buttons'),
-    state.user?.role === 'admin' ? api('/api/sysadmin/modules') : Promise.resolve({ modules: [] })
+    state.user?.role === 'admin' ? api('/api/sysadmin/modules') : Promise.resolve({ modules: [] }),
+    api('/api/modules').catch(() => ({ modules: [] }))
   ]);
 
   state.countries = countries.countries;
   state.users = users.users;
   state.browserButtons = browserButtons.browserButtons || [];
   state.adminModules = adminModules.modules || [];
+  state.publishedModules = publishedModules.modules || [];
+  syncConfigModuleCatalog();
   state.customerFields = customerConfig.fields;
   state.customerPermissions = customerConfig.permissions || {};
   state.userFields = userConfig.fields;
@@ -3200,6 +4524,9 @@ async function loadBootstrap() {
   renderUsers();
   renderOwners();
   renderUserFormFields();
+  renderAdminModules();
+  renderAdminModulePages();
+  renderPublishedModuleNav();
   renderBrowserSources();
   renderBrowserButtons();
   renderFieldConfig();
@@ -3412,12 +4739,16 @@ function userFormData(form) {
 function bindEvents() {
   $('#loginForm').addEventListener('submit', async (event) => {
     event.preventDefault();
+    const rememberMe = Boolean(event.currentTarget.elements.rememberMe?.checked);
     try {
       const result = await api('/api/auth/login', {
         method: 'POST',
-        body: JSON.stringify(serializeForm(event.currentTarget))
+        body: JSON.stringify({
+          ...serializeForm(event.currentTarget),
+          rememberMe
+        })
       });
-      setSession(result.token, result.user);
+      setSession(result.token, result.user, rememberMe);
       showView('customersView');
       await loadBootstrap();
       toast('Signed In.');
@@ -3452,10 +4783,30 @@ function bindEvents() {
       showView(button.dataset.view);
     });
   });
+  $('#publishedModuleNav')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-module-view]');
+    if (!button || !state.token) return;
+    openRuntimeModulePage(button.dataset.moduleView)
+      .catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  });
 
   $$('.admin-section-button').forEach((button) => {
     button.addEventListener('click', async () => {
       showAdminSection(button.dataset.adminSection);
+      if (button.dataset.adminSection === 'adminModulesSection') {
+        try {
+          await refreshAdminModules();
+        } catch (error) {
+          toast(titleCaseMessage(error.message), 'error');
+        }
+      }
+      if (button.dataset.adminSection === 'adminPagesSection') {
+        try {
+          await refreshAdminModules();
+        } catch (error) {
+          toast(titleCaseMessage(error.message), 'error');
+        }
+      }
       if (button.dataset.adminSection === 'adminBrowserButtonsSection') {
         try {
           await refreshBrowserButtons();
@@ -3463,9 +4814,195 @@ function bindEvents() {
           toast(titleCaseMessage(error.message), 'error');
         }
       }
+      if (button.dataset.adminSection === 'adminApiSection') {
+        try {
+          await refreshApiConnectors();
+        } catch (error) {
+          toast(titleCaseMessage(error.message), 'error');
+        }
+      }
     });
   });
   $('#toggleAdminMenu').addEventListener('click', toggleAdminMenu);
+  $('#addFormBuilderButton')?.addEventListener('click', openFormBuilderCreateModal);
+  $('#closeFormBuilderCreateModal')?.addEventListener('click', closeFormBuilderCreateModal);
+  $('#cancelFormBuilderCreateButton')?.addEventListener('click', closeFormBuilderCreateModal);
+  $('#formBuilderCreateModal')?.addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) closeFormBuilderCreateModal();
+  });
+  $('#formBuilderCreateForm')?.addEventListener('submit', (event) => {
+    saveFormBuilderCreate(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  });
+  $('#formBuilderCreateForm [name="formType"]')?.addEventListener('change', syncFormBuilderCreateFields);
+  $('#formBuilderCreateForm [name="name"]')?.addEventListener('input', (event) => {
+    const form = $('#formBuilderCreateForm');
+    if (form.dataset.formKeyEdited === 'true') return;
+    form.elements.formKey.value = slugFormKeyPreview(event.currentTarget.value);
+  });
+  $('#formBuilderCreateForm [name="formKey"]')?.addEventListener('input', (event) => {
+    const form = $('#formBuilderCreateForm');
+    form.dataset.formKeyEdited = 'true';
+    event.currentTarget.value = slugFormKeyPreview(event.currentTarget.value);
+  });
+  $('#newModuleButton')?.addEventListener('click', () => openModuleModal());
+  $('#closeModuleModal')?.addEventListener('click', closeModuleModal);
+  $('#cancelModuleButton')?.addEventListener('click', closeModuleModal);
+  $('#moduleForm')?.addEventListener('submit', (event) => {
+    saveModule(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  });
+  $('#moduleModal')?.addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) closeModuleModal();
+  });
+  $('#moduleForm [name="name"]')?.addEventListener('input', (event) => {
+    const form = $('#moduleForm');
+    if (form.elements.editingModuleKey.value || form.dataset.moduleKeyEdited === 'true') return;
+    form.elements.moduleKey.value = slugModuleKeyPreview(event.target.value);
+  });
+  $('#moduleForm [name="moduleKey"]')?.addEventListener('input', (event) => {
+    $('#moduleForm').dataset.moduleKeyEdited = 'true';
+    event.target.value = slugModuleKeyPreview(event.target.value);
+  });
+  $('#moduleForm [name="status"]')?.addEventListener('change', (event) => {
+    if (event.target.value !== 'published') {
+      $('#moduleForm').elements.showInMenu.checked = false;
+    }
+  });
+  $('#moduleBuilderRows')?.addEventListener('click', (event) => {
+    const fieldsButton = event.target.closest('[data-edit-module-fields]');
+    if (fieldsButton) {
+      state.activeConfigModule = fieldsButton.dataset.editModuleFields;
+      showAdminSection('adminFormsSection');
+      renderFieldConfig();
+      return;
+    }
+    const editButton = event.target.closest('[data-edit-module]');
+    if (editButton) {
+      openModuleModal(editButton.dataset.editModule);
+      return;
+    }
+    const deleteButton = event.target.closest('[data-delete-module]');
+    if (deleteButton) {
+      deleteModule(deleteButton.dataset.deleteModule)
+        .catch((error) => toast(titleCaseMessage(error.message), 'error'));
+    }
+  });
+  $('#modulePageSearch')?.addEventListener('input', (event) => {
+    state.modulePageSearch = event.currentTarget.value;
+    renderAdminModulePages();
+  });
+  $('#modulePageRows')?.addEventListener('click', (event) => {
+    const openButton = event.target.closest('[data-open-module-page]');
+    if (openButton) {
+      showView(openButton.dataset.openModulePage);
+      return;
+    }
+    const runtimeOpenButton = event.target.closest('[data-open-runtime-module]');
+    if (runtimeOpenButton) {
+      openRuntimeModulePage(runtimeOpenButton.dataset.openRuntimeModule)
+        .catch((error) => toast(titleCaseMessage(error.message), 'error'));
+      return;
+    }
+    const fieldsButton = event.target.closest('[data-edit-module-fields]');
+    if (fieldsButton) {
+      state.activeConfigModule = fieldsButton.dataset.editModuleFields;
+      showAdminSection('adminFormsSection');
+      renderFieldConfig();
+      return;
+    }
+    const editButton = event.target.closest('[data-edit-module]');
+    if (editButton) {
+      openModuleModal(editButton.dataset.editModule);
+    }
+  });
+  $('#moduleRuntimeSearchButton')?.addEventListener('click', () => {
+    state.moduleRuntimeSearch = $('#moduleRuntimeSearch').value;
+    loadModuleRuntimeRecords().catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  });
+  $('#moduleRuntimeSearch')?.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    state.moduleRuntimeSearch = event.currentTarget.value;
+    loadModuleRuntimeRecords().catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  });
+  $('#addModuleRecordButton')?.addEventListener('click', () => openModuleRecordModal());
+  $('#closeModuleRecordModal')?.addEventListener('click', closeModuleRecordModal);
+  $('#cancelModuleRecordButton')?.addEventListener('click', closeModuleRecordModal);
+  $('#moduleRecordModal')?.addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) closeModuleRecordModal();
+  });
+  $('#moduleRecordForm')?.addEventListener('submit', (event) => {
+    saveModuleRecord(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  });
+  $('#moduleRecordRows')?.addEventListener('click', (event) => {
+    const editButton = event.target.closest('[data-edit-module-record]');
+    if (editButton) {
+      openModuleRecordModal(editButton.dataset.editModuleRecord);
+      return;
+    }
+    const deleteButton = event.target.closest('[data-delete-module-record]');
+    if (deleteButton) {
+      deleteModuleRecord(deleteButton.dataset.deleteModuleRecord)
+        .catch((error) => toast(titleCaseMessage(error.message), 'error'));
+    }
+  });
+  $$('.api-tabs [data-api-tab]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.activeApiTab = button.dataset.apiTab;
+      renderApiWorkspace();
+    });
+  });
+  $('#newApiConnectorButton')?.addEventListener('click', () => {
+    state.activeApiTab = 'connectors';
+    renderApiWorkspace();
+    openApiConnectorModal();
+  });
+  $('#closeApiConnectorModal')?.addEventListener('click', closeApiConnectorModal);
+  $('#cancelApiConnectorButton')?.addEventListener('click', closeApiConnectorModal);
+  $('#apiConnectorModal')?.addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) closeApiConnectorModal();
+  });
+  $('#apiConnectorForm')?.addEventListener('submit', (event) => {
+    saveApiConnector(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  });
+  $('#apiConnectorForm [name="name"]')?.addEventListener('input', (event) => {
+    const form = event.currentTarget.form;
+    if (form.elements.editingConnectorKey.value || form.elements.connectorKey.value) return;
+    form.elements.connectorKey.value = slugApiKeyPreview(event.currentTarget.value);
+  });
+  $('#apiConnectorForm [name="connectorKey"]')?.addEventListener('input', (event) => {
+    event.currentTarget.value = slugApiKeyPreview(event.currentTarget.value);
+  });
+  $('#addApiEndpointButton')?.addEventListener('click', () => {
+    const rows = $('#apiEndpointRows');
+    const endpoints = collectApiEndpoints();
+    endpoints.push({ key: '', method: 'GET', path: '' });
+    renderApiEndpointRows(endpoints);
+    rows?.querySelector('tr:last-child input')?.focus();
+  });
+  $('#apiEndpointRows')?.addEventListener('input', (event) => {
+    if (event.target.name === 'endpointKey') {
+      event.target.value = slugApiKeyPreview(event.target.value);
+    }
+  });
+  $('#apiEndpointRows')?.addEventListener('click', (event) => {
+    const removeButton = event.target.closest('[data-remove-api-endpoint]');
+    if (!removeButton) return;
+    const row = removeButton.closest('[data-api-endpoint-row]');
+    row?.remove();
+    if (!$('#apiEndpointRows [data-api-endpoint-row]')) renderApiEndpointRows();
+  });
+  $('#apiConnectorRows')?.addEventListener('click', (event) => {
+    const editButton = event.target.closest('[data-edit-api-connector]');
+    if (editButton) {
+      openApiConnectorModal(editButton.dataset.editApiConnector);
+      return;
+    }
+    const deleteButton = event.target.closest('[data-delete-api-connector]');
+    if (deleteButton) {
+      deleteApiConnector(deleteButton.dataset.deleteApiConnector)
+        .catch((error) => toast(titleCaseMessage(error.message), 'error'));
+    }
+  });
   $('#permissionModuleSelect').addEventListener('change', async (event) => {
     try {
       await loadPermissionMatrix(event.currentTarget.value);
@@ -3591,9 +5128,14 @@ function bindEvents() {
   });
 
   $('#customerFormFields').addEventListener('change', (event) => {
+    const changedField = changedFormFieldContext(event.target, $('#customerForm'), state.customerFields);
     if (event.target.name === 'countryId') {
       updateDialCode();
       applyCustomerFormulas();
+      if (changedField) {
+        applyFieldLinkagesForTrigger(changedField.fieldKey, changedField.value, changedField)
+          .catch((error) => toast(titleCaseMessage(error.message), 'error'));
+      }
       return;
     }
 
@@ -3611,6 +5153,10 @@ function bindEvents() {
     if (detailRowCheckbox) {
       const section = detailRowCheckbox.closest('[data-detail-table-section]');
       if (section) syncDetailTableControls(section);
+    }
+    if (changedField) {
+      applyFieldLinkagesForTrigger(changedField.fieldKey, changedField.value, changedField)
+        .catch((error) => toast(titleCaseMessage(error.message), 'error'));
     }
     applyCustomerFormulas();
   });
@@ -3735,6 +5281,9 @@ function bindEvents() {
     if (!$('#browserLookupModal').hidden) {
       closeBrowserLookupModal();
     }
+    if (!$('#formBuilderCreateModal').hidden) {
+      closeFormBuilderCreateModal();
+    }
     if (!$('#fieldConfigModal').hidden) {
       closeFieldConfigModal();
     }
@@ -3752,6 +5301,9 @@ function bindEvents() {
     }
     if (!$('#formulaBuilderModal').hidden) {
       closeFormulaBuilderModal();
+    }
+    if (!$('#fieldLinkageModal')?.hidden) {
+      closeFieldLinkageModal();
     }
   });
 
@@ -3782,12 +5334,21 @@ function bindEvents() {
     renderCustomers();
   });
 
-  $('#addFieldButton').addEventListener('click', () => openFieldConfigModal());
-  $('#formulaButton').addEventListener('click', () => openFormulaBuilderModal());
-  $('#formDesignButton').addEventListener('click', openFormDesignDrawer);
-  $('#batchAddFieldsButton').addEventListener('click', openBatchFieldModal);
-  $('#fieldPropertiesButton').addEventListener('click', openFieldPropertiesModal);
-  $('#importExportMappingButton').addEventListener('click', openImportExportMappingModal);
+  $('#adminFormsSection').addEventListener('click', (event) => {
+    const actionButton = event.target.closest('button');
+    if (!actionButton) return;
+    if (actionButton.id === 'addFieldButton') openFieldConfigModal();
+    if (actionButton.id === 'formulaButton') openFormulaBuilderModal();
+    if (actionButton.id === 'formDesignButton') openFormDesignDrawer();
+    if (actionButton.id === 'fieldLinkageButton') openDefaultFieldLinkage();
+    if (actionButton.id === 'batchAddFieldsButton') openBatchFieldModal();
+    if (actionButton.id === 'fieldPropertiesButton') openFieldPropertiesModal();
+    if (actionButton.id === 'importExportMappingButton') openImportExportMappingModal();
+  });
+  $('#formDesignButton')?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    openFormDesignDrawer();
+  });
   $('#exportCustomersButton').addEventListener('click', downloadCustomerExport);
   $('#closeSuccessPrompt').addEventListener('click', closeSuccessPrompt);
   $('#successPrompt').addEventListener('click', (event) => {
@@ -4016,6 +5577,21 @@ function bindEvents() {
       moveFormDesignDetailField(moveDetailFieldButton.dataset.moveDetailField, Number(moveDetailFieldButton.dataset.direction || 0));
       return;
     }
+    const addSectionButton = event.target.closest('[data-add-form-section]');
+    if (addSectionButton) {
+      addFormDesignSection();
+      return;
+    }
+    const moveSectionButton = event.target.closest('[data-move-form-section]');
+    if (moveSectionButton) {
+      moveFormDesignSection(moveSectionButton.dataset.moveFormSection, Number(moveSectionButton.dataset.direction || 0));
+      return;
+    }
+    const deleteSectionButton = event.target.closest('[data-delete-form-section]');
+    if (deleteSectionButton) {
+      deleteFormDesignSection(deleteSectionButton.dataset.deleteFormSection);
+      return;
+    }
     const fieldCard = event.target.closest('[data-design-field]');
     if (fieldCard) {
       selectFormDesignField(fieldCard.dataset.designField);
@@ -4039,6 +5615,9 @@ function bindEvents() {
       openFormulaBuilderModal(field.fieldKey);
       return;
     }
+    if (actionButton.dataset.designAction === 'field-linkage') {
+      openFieldLinkageModal(field.fieldKey);
+    }
   });
   $('#formDesignCanvas').addEventListener('keydown', (event) => {
     const input = event.target.closest('[data-detail-table-name-input]');
@@ -4053,12 +5632,34 @@ function bindEvents() {
   });
   $('#formDesignCanvas').addEventListener('change', (event) => {
     const input = event.target.closest('[data-detail-table-name-input]');
-    if (!input) return;
+    if (!input) {
+      const sectionColumns = event.target.closest('[data-form-section-columns]');
+      if (sectionColumns) {
+        setFormDesignSectionColumns(sectionColumns.dataset.formSectionColumns, sectionColumns.value);
+        return;
+      }
+      const selectedSection = event.target.closest('[data-selected-field-section]');
+      if (selectedSection) {
+        moveFormDesignSelectedFieldToSection(selectedSection.value);
+        return;
+      }
+      const selectedSpan = event.target.closest('[data-selected-field-span]');
+      if (selectedSpan) {
+        setFormDesignSelectedFieldSpan(selectedSpan.value);
+      }
+      return;
+    }
     const oldTableName = input.dataset.detailTableNameInput;
     const nextTableName = normalizeDetailTableNamePreview(input.value);
     input.value = nextTableName || oldTableName;
     renameFormDesignDetailTable(oldTableName, input.value);
   });
+  $('#formDesignCanvas').addEventListener('blur', (event) => {
+    const sectionTitle = event.target.closest('[data-form-section-title]');
+    if (sectionTitle) {
+      renameFormDesignSection(sectionTitle.dataset.formSectionTitle, sectionTitle.value);
+    }
+  }, true);
   $('#formDesignCanvas').addEventListener('contextmenu', (event) => {
     const fieldCard = event.target.closest('[data-design-field]');
     if (!fieldCard) return;
@@ -4179,6 +5780,50 @@ function bindEvents() {
     updateFormDesignSelectionUI();
     openFormulaBuilderModal(fieldCard.dataset.designField);
   });
+  $('#closeFieldLinkageModal')?.addEventListener('click', closeFieldLinkageModal);
+  $('#cancelFieldLinkageButton')?.addEventListener('click', closeFieldLinkageModal);
+  $('#fieldLinkageModal')?.addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) {
+      closeFieldLinkageModal();
+    }
+  });
+  $('#fieldLinkageForm')?.addEventListener('click', (event) => {
+    const addButton = event.target.closest('[data-add-linkage-row]');
+    if (addButton) {
+      addFieldLinkageRow(addButton.dataset.addLinkageRow);
+      return;
+    }
+    const removeButton = event.target.closest('[data-remove-linkage-row]');
+    if (removeButton) {
+      removeButton.closest('tr')?.remove();
+    }
+  });
+  $('#fieldLinkageForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const fieldKey = form.elements.fieldKey.value;
+    const field = findConfigField(fieldKey);
+    if (!field) return;
+    const submitButton = $('#saveFieldLinkageButton');
+    submitButton.disabled = true;
+    submitButton.textContent = 'Saving...';
+    try {
+      const config = await api(`/api/sysadmin/modules/${state.activeConfigModule}/fields/${fieldKey}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          lookupConfig: collectFieldLinkageConfig(form)
+        })
+      });
+      setModuleConfig(state.activeConfigModule, config.fields, config.formLayouts);
+      closeFieldLinkageModal();
+      toast('Field Linkage Saved.');
+    } catch (error) {
+      toast(titleCaseMessage(error.message), 'error');
+    } finally {
+      submitButton.disabled = false;
+      submitButton.textContent = 'Save Linkage';
+    }
+  });
   $('#closeFormulaBuilderModal').addEventListener('click', closeFormulaBuilderModal);
   $('#cancelFormulaButton').addEventListener('click', closeFormulaBuilderModal);
   $('#clearFormulaButton').addEventListener('click', () => {
@@ -4293,9 +5938,10 @@ function bindEvents() {
     }
     delete data.dataKeyPreview;
     delete data.databaseFieldName;
+    const existingLookupConfig = findConfigField(fieldKey)?.lookupConfig || {};
     data.lookupConfig = data.type === 'browser_button'
-      ? { browserButtonKey: form.elements.browserButtonKey.value }
-      : {};
+      ? { ...existingLookupConfig, browserButtonKey: form.elements.browserButtonKey.value }
+      : { ...existingLookupConfig, browserButtonKey: existingLookupConfig.browserButtonKey || '' };
     delete data.browserButtonKey;
     data.required = form.elements.required.checked;
     data.showInTable = form.elements.showInTable.checked;
@@ -4324,6 +5970,11 @@ function bindEvents() {
   });
 
   $('#fieldConfigRows').addEventListener('click', async (event) => {
+    const linkageButton = event.target.closest('[data-open-field-linkage]');
+    if (linkageButton) {
+      openFieldLinkageModal(linkageButton.dataset.openFieldLinkage);
+      return;
+    }
     const button = event.target.closest('[data-edit-field]');
     if (!button) return;
     const field = findConfigField(button.dataset.editField);

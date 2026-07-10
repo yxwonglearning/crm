@@ -34,7 +34,10 @@ customerRoutes.get('/', asyncHandler(async (req, res) => {
   await permissions.assertModuleActionAllowed('customers', req.user, 'view');
   const filters = {
     search: req.query.search || '',
-    status: req.query.status || ''
+    status: req.query.status || '',
+    filterField: req.query.filterField || '',
+    filterOperator: req.query.filterOperator || '',
+    filterValue: req.query.filterValue || ''
   };
   res.json({ customers: await service.listCustomers(filters, req.user) });
 }));

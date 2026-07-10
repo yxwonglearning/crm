@@ -103,12 +103,10 @@ Tailscale:
 http://100.89.44.29:3000
 ```
 
-Default seeded admin login, unless changed in `.env`:
-
-```text
-Email: admin@example.com
-Password: ChangeMe123!
-```
+Admin login credentials are created from your local `.env` values when you run `npm.cmd run db:seed`.
+Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` before seeding; the app does not publish or prefill default login credentials.
+admin@gmail.com
+admin@123!
 
 ## Architecture
 
@@ -197,13 +195,24 @@ Admins should have a dedicated portal for configuring the CRM:
    - Custom module pages now support Excel template download, Excel import, and Excel export for main-table and detail-table fields.
    - Detail-table import/export uses separate Excel sheets linked to main records by `Record Ref`.
    - Generated-page smoke test passed for custom module creation, permissions, layouts, record CRUD, quick search, advanced filter, detail view data, Excel template, detail-table import/export, and cleanup.
-5. Phase 5: Action Flow - planned
-   - Admin Portal has a placeholder `Action Flow` section.
-   - Automation runtime is not implemented yet.
-   - Start with simple triggers such as record created, record updated, and status changed.
-   - Add conditions such as field equals value or number greater than value.
-   - Add actions such as update field, create task, assign owner, send notification, and call webhook.
-   - Later add scheduling, cross-module orchestration, external integrations, and execution logs.
+5. Phase 5: Action Flow - first management, builder, and runtime slice complete
+   - Admin Portal has an `Action Flow` management page with All, Enable, Disable, and Draft filters.
+   - Existing action flows can be previewed in a right-side drawer before opening the full builder.
+   - New and existing flows open in a full-screen low-code builder with a dotted canvas, categorized action palette, node configuration panel, Save, and Check controls.
+   - Action categories include Record, Task/Notification, Logic, RESTful API, and Data Mapping.
+   - Record actions include add record, update record, delete record, assign owner, and change status.
+   - RESTful API connector configuration is available as a dedicated Admin Portal API Connectors module with default headers and saved endpoints for future API integrations.
+   - Backend storage, validation, connector save/delete, and automated smoke coverage are available.
+   - Action Flow configuration now has placeholder fields for form operation type, application/form selection, field mapping, basis value, classification, sync mode, permission checks, REST request/response mapping, data-source merge mode, and join conditions.
+   - First runtime slice is implemented for published custom module record triggers (`record_created`, `record_updated`, `record_deleted`, and `status_changed`) and local record actions such as add, update, delete, assign owner, and change status.
+   - Runtime executions are recorded in `crm_action_flow_executions`, admins can read recent execution/instance logs through the Action Flow API, and the Action Flow builder has Execution/Instance log views.
+   - Execution results include step labels, categories, statuses, timestamps, durations, skip reasons, trigger metadata, and raw payload/result inspection.
+   - Guarded REST nodes perform outbound calls with connector endpoint selection, request mapping, auth/header support, timeouts, private-network blocking unless explicitly allowed, bounded response capture, and HTTP response logging.
+   - First visual mapping dialogs are available for record field mapping and REST request/response/error mapping while preserving the existing text mapping format.
+   - REST response/error mappings are applied at runtime: mapped values are captured in execution logs, and matching main-table form fields on the triggered record are updated automatically.
+   - Dynamic assignment picker is available for Action Flow value fields and mapping rows, with context/current-record/system/fixed-value choices and previous-node output tokens.
+   - Still pending: condition/query table builders, broader trigger/action runtime coverage, and workflow operation wiring.
+   - Later add scheduling, cross-module orchestration, external integrations, and advanced execution monitoring.
 6. Phase 6: Permissions - mostly done
    - Admin Portal has a `Permissions` section for module and field access.
    - Module permissions control view, create, edit, delete, import, export, and configuration access by role or specific user.
@@ -296,6 +305,34 @@ Dashboard widget config should map result columns into chart fields:
 }
 ```
 
+Dashboard ownership boundaries:
+
+- MySQL remains the source of truth for CRM records, module records, dashboard SQL views, guarded `SELECT` data sources, pivot-style aggregations, widget configuration, filters, permissions, and export/import configuration.
+- The Express backend owns the guarded dashboard API, permission checks, SQL validation, query execution, and JSON result shaping.
+- The frontend owns the low-code dashboard builder, widget layout, chart/table/pivot rendering, and user-facing refresh states.
+- Convex, if added later, should start as a realtime side channel for notifications, activity events, import/job status, user presence, and dashboard refresh signals. It should not initially duplicate full CRM tables or dashboard result rows.
+- Clerk, if added later, should own authentication and sessions. The local MySQL `users` table should continue to hold CRM-specific profile, role, status, permission, and module-access metadata mapped to Clerk user IDs.
+
+Recommended Convex event flow for dashboards:
+
+```text
+CRM write/import/action-flow event saved in MySQL
+  |
+  v
+Express emits lightweight event to Convex
+  |
+  v
+Convex stores notification/activity/refresh event
+  |
+  v
+Online frontend receives realtime signal
+  |
+  v
+Frontend reloads affected widget data from Express/MySQL
+```
+
+Convex event documents should stay small, for example `customer.created`, `import.finished`, `action_flow.failed`, `dashboard.widget_stale`, or `notification.created`. They should reference source module keys, record IDs, actor IDs, dashboard/widget keys, and timestamps instead of copying whole customer/module records.
+
 Build order:
 
 1. Add dashboard data source configuration.
@@ -304,6 +341,31 @@ Build order:
 4. Add frontend dashboard page and reusable widget renderer.
 5. Start with number card, ring/donut, line, bar, and table widgets.
 6. Add filters, permissions, export/import, version history, and rollback.
+7. Add Convex only after the SQL dashboard engine exists, starting with realtime notifications and refresh signals rather than moving dashboard data storage.
+
+### Clerk Authentication Direction
+
+The current app uses Express, MySQL, bcrypt password hashes, and custom JWT bearer tokens. Before public production exposure, the preferred auth direction is to migrate authentication and session management to Clerk while keeping CRM data in MySQL.
+
+Recommended Clerk migration boundaries:
+
+- Clerk owns sign-in, sign-out, password reset, MFA, session/device management, and hosted auth security.
+- Express verifies Clerk session tokens on protected API requests.
+- The MySQL `users` table keeps CRM-specific fields such as role, status, permissions, custom user fields, and admin access.
+- Add a stable `clerk_user_id` mapping to local users before removing custom password login.
+- Stop storing new application password hashes once a user is migrated to Clerk.
+- Add Clerk webhooks later to sync user created/updated/deleted events into local CRM user records.
+- Keep dashboard, module, customer, import, action-flow, and permission data in MySQL unless there is a deliberate future full backend migration.
+
+Suggested auth migration order:
+
+1. Add Clerk project keys and backend token verification in a feature branch.
+2. Add `clerk_user_id` to local users and map the current admin user.
+3. Replace the login page with Clerk sign-in/sign-out UI.
+4. Update `requireAuth` to verify Clerk identity and load the matching local active CRM user.
+5. Keep role and permission checks based on the local MySQL user record.
+6. Add Clerk webhook handling for user lifecycle sync.
+7. Disable the custom `/api/auth/login` password flow after successful migration and testing.
 
 ### Form Builder Conventions
 
@@ -540,8 +602,8 @@ JSON endpoints use `Content-Type: application/json` unless noted otherwise. Vali
 
   ```json
   {
-    "email": "admin@example.com",
-    "password": "ChangeMe123!"
+    "email": "your-admin-email@example.com",
+    "password": "your-admin-password"
   }
   ```
 
@@ -553,7 +615,7 @@ JSON endpoints use `Content-Type: application/json` unless noted otherwise. Vali
     "user": {
       "id": 1,
       "name": "Admin",
-      "email": "admin@example.com",
+      "email": "your-admin-email@example.com",
       "role": "admin",
       "status": "active"
     }
@@ -569,7 +631,7 @@ JSON endpoints use `Content-Type: application/json` unless noted otherwise. Vali
     "user": {
       "id": 1,
       "name": "Admin",
-      "email": "admin@example.com",
+      "email": "your-admin-email@example.com",
       "role": "admin",
       "status": "active"
     }
@@ -836,7 +898,7 @@ JSON endpoints use `Content-Type: application/json` unless noted otherwise. Vali
       {
         "id": 1,
         "name": "Admin",
-        "email": "admin@example.com",
+        "email": "your-admin-email@example.com",
         "role": "admin",
         "status": "active"
       }
@@ -852,7 +914,7 @@ JSON endpoints use `Content-Type: application/json` unless noted otherwise. Vali
   {
     "name": "Jane Tan",
     "email": "jane@example.com",
-    "password": "ChangeMe123!",
+    "password": "replace-with-a-strong-password",
     "role": "user",
     "status": "active"
   }
@@ -1295,7 +1357,7 @@ The backend smoke test starts the Express app in-process and uses the configured
 Immediate testing:
 1. Start app with npm.cmd run dev.
 2. Open http://localhost:3000.
-3. Login with admin@example.com / ChangeMe123!.
+3. Login with the admin credentials from your `.env`.
 4. Test Add Customer.
 5. Test Edit Customer.
 6. Test customer detail-table row Add.
@@ -1324,8 +1386,9 @@ Security cleanup:
 1. Create your real admin user.
 2. Change or disable the seeded admin account.
 3. Replace JWT_SECRET in .env with a strong random value.
-4. Create a dedicated MySQL user for this CRM instead of using sa/root-style access.
-5. Give the CRM MySQL user access only to the CRM database.
+4. Tune `JWT_EXPIRES_IN` and `JWT_REMEMBER_EXPIRES_IN` for your deployment policy.
+5. Create a dedicated MySQL user for this CRM instead of using sa/root-style access.
+6. Give the CRM MySQL user access only to the CRM database.
 
 Reliability:
 1. Add database backup plan.
@@ -1334,26 +1397,28 @@ Reliability:
 4. Add UI smoke tests for login, customer CRUD, import, and user CRUD.
 
 Recommended feature order:
-1. Customer activity timeline for calls, meetings, follow-ups, and internal notes.
-2. Tasks and reminders.
-3. Deals/opportunities pipeline.
-4. Import preview and duplicate detection.
-5. Audit logs for customer/user changes.
-6. Low-code dashboard builder with SQL view/query data sources and chart widgets.
-7. File attachments.
-8. Email integration.
-9. Production HTTPS setup if exposing beyond Tailscale.
+1. Clerk authentication migration for managed sessions, password reset, and MFA.
+2. Customer activity timeline for calls, meetings, follow-ups, and internal notes.
+3. Tasks and reminders.
+4. Deals/opportunities pipeline.
+5. Import preview and duplicate detection.
+6. Audit logs for customer/user changes.
+7. Low-code dashboard builder with SQL view/query data sources and chart widgets.
+8. File attachments.
+9. Email integration.
+10. Production HTTPS setup if exposing beyond Tailscale.
 ```
 
 ## Missing Before Production
 
 - Strong `JWT_SECRET`.
-- Changed or disabled default admin account.
+- Admin credentials supplied through `.env`, with no public default login.
+- Production session lifetime policy.
+- Clerk or equivalent managed auth migration if exposing beyond trusted private access.
 - Dedicated MySQL user.
 - Backup and restore process.
 - Audit logs.
 - Automated tests.
-- Login rate limiting or account lockout.
 - More granular permissions.
 - Production HTTPS if exposed outside Tailscale.
 - Structured logging and monitoring.

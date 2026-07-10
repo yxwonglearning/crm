@@ -15,4 +15,8 @@ browserButtonRoutes.get('/:browserKey/search', asyncHandler(async (req, res) => 
   res.json(await service.searchBrowserButton(req.params.browserKey, req.query.q || ''));
 }));
 
+browserButtonRoutes.post('/field-linkage/resolve', asyncHandler(async (req, res) => {
+  res.json(await service.resolveFieldLinkage(req.body || {}));
+}));
+
 module.exports = { browserButtonRoutes };

@@ -5,6 +5,8 @@ const permissions = require('../permissions/permissions.service');
 const repository = require('./customers.repository');
 const { normalizePhone } = require('./phone');
 const { validateFieldValue } = require('../../shared/field-validation');
+const { orderedFormulaFields } = require('../../shared/formula-dependencies');
+const vm = require('vm');
 
 const systemFieldKeys = new Set([
   'companyName',
@@ -98,20 +100,46 @@ function coerceFormulaValue(value) {
   return Number.isFinite(number) && String(value).trim() !== '' ? number : value;
 }
 
+const customFormulaForbiddenPattern = /\b(?:constructor|eval|Function|global|globalThis|process|require|module|exports|import|this|prototype|__proto__|while|for|setTimeout|setInterval|Promise|fetch|XMLHttpRequest|document|window|localStorage|sessionStorage)\b/;
+
+function assertCustomFormulaBodySafe(body) {
+  if (customFormulaForbiddenPattern.test(String(body || ''))) {
+    throw new AppError('Custom formula function contains unsupported code', 422);
+  }
+}
+
+function runCustomFormulaBody(body, value) {
+  assertCustomFormulaBodySafe(body);
+  const context = vm.createContext({
+    value,
+    Math,
+    Number,
+    String,
+    Boolean,
+    parseFloat,
+    parseInt,
+    isFinite,
+    isNaN
+  }, {
+    codeGeneration: {
+      strings: false,
+      wasm: false
+    }
+  });
+  return vm.runInContext(`"use strict"; (() => { ${body} })()`, context, { timeout: 50 });
+}
+
 function buildCustomFormulaFunctions(source = '', name = '', body = '') {
   const functions = {};
   try {
     if (String(source || '').trim()) {
-      const sourceFunctions = Function(`"use strict"; ${source}`)();
-      if (!sourceFunctions || typeof sourceFunctions !== 'object' || Array.isArray(sourceFunctions)) {
-        throw new AppError('Custom formula code must return functions', 422);
-      }
-      Object.assign(functions, sourceFunctions);
+      throw new AppError('Custom formula source code is no longer supported. Use Function Name and Function Body.', 422);
     }
     const functionName = String(name || '').trim().toUpperCase();
     const functionBody = String(body || '').trim();
     if (functionName && functionBody) {
-      functions[functionName] = Function('value', `"use strict"; ${functionBody}`);
+      assertCustomFormulaBodySafe(functionBody);
+      functions[functionName] = (value) => runCustomFormulaBody(functionBody, value);
     }
   } catch (error) {
     if (error instanceof AppError) throw error;
@@ -170,8 +198,8 @@ function evaluateFormulaExpression(expression, values, customFunctionSource = ''
 
 function applyFormulaFields(input, fields) {
   const values = { ...input };
-  fields
-    .filter((field) => field.tableType !== 'detail' && field.formulaEnabled && field.formulaExpression)
+  orderedFormulaFields(fields)
+    .filter((field) => field.tableType !== 'detail')
     .forEach((field) => {
       values[field.fieldKey] = evaluateFormulaExpression(field.formulaExpression, values, field.formulaJs, field.formulaFunctionName, field.formulaFunctionBody, fields);
     });
@@ -320,7 +348,11 @@ async function hydrateCustomerInput(input, user, options = {}) {
 async function listCustomers(filters, user) {
   const config = await baseCustomerFieldConfig();
   const permissionMap = await permissions.userFieldPermissions('customers', user, config.fields);
-  const customers = await repository.listCustomers(filters);
+  const filterableFields = config.fields.map((field) => ({
+    ...field,
+    permissions: permissionMap.get(field.fieldKey) || {}
+  }));
+  const customers = await repository.listCustomers(filters, filterableFields);
   const hydrated = await Promise.all(customers.map(async (customer) => hydrateDetailValues(normalizeCustomer(customer))));
   return hydrated.map((customer) => sanitizeCustomerForUser(customer, config.fields, permissionMap));
 }

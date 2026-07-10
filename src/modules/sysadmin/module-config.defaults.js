@@ -61,7 +61,22 @@ const customerFields = [
     fieldKey: 'countryId',
     dataKey: 'country_name',
     label: 'Country',
-    type: 'country',
+    type: 'browser_button',
+    lookupConfig: {
+      browserButtonKey: 'countries',
+      triggerCondition: 'on_select',
+      sourceModule: 'countries',
+      sourceTable: 'countries',
+      sourceTables: [
+        { moduleKey: 'countries', tableName: 'countries', alias: 'a' }
+      ],
+      primaryKeyField: 'id',
+      sourceWhere: '',
+      fieldMappings: [
+        { sourceField: 'name', targetField: '__lookupDisplay' },
+        { sourceField: 'dial_code', targetField: '__dialCodeDisplay' }
+      ]
+    },
     required: true,
     showInTable: true,
     showInForm: true,

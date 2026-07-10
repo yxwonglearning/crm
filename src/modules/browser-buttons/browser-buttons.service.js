@@ -30,6 +30,46 @@ function assertConfigKey(value, label) {
   }
 }
 
+function assertQualifiedField(value, label) {
+  if (!/^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)?$/.test(String(value || ''))) {
+    throw new AppError(`${label} must use field or alias.field format`, 422);
+  }
+}
+
+function normalizeLinkageConfig(input = {}) {
+  const sourceTable = String(input.sourceTable || '').trim();
+  const primaryKeyField = String(input.primaryKeyField || '').trim();
+  const sourceWhere = String(input.sourceWhere || '').trim();
+  const sourceFields = Array.isArray(input.sourceFields) ? input.sourceFields.map(String).filter(Boolean) : [];
+  const sourceTables = Array.isArray(input.sourceTables)
+    ? input.sourceTables.map((source, index) => ({
+      tableName: String(source?.tableName || '').trim(),
+      alias: String(source?.alias || String.fromCharCode(97 + index)).trim()
+    })).filter((source) => source.tableName && source.alias)
+    : [];
+  const sourceJoins = Array.isArray(input.sourceJoins)
+    ? input.sourceJoins.map((join) => ({
+      leftField: String(join?.leftField || '').trim(),
+      operator: ['=', '<>', '>', '>=', '<', '<='].includes(join?.operator) ? join.operator : '=',
+      rightField: String(join?.rightField || '').trim()
+    })).filter((join) => join.leftField && join.rightField)
+    : [];
+  const tables = sourceTables.length ? sourceTables : [{ tableName: sourceTable, alias: '' }];
+  if (!tables[0]?.tableName || !primaryKeyField || !sourceFields.length) {
+    throw new AppError('Field linkage source table, primary key, and mapped fields are required', 422);
+  }
+  tables.forEach((source) => {
+    assertConfigKey(source.tableName, 'Field linkage source table');
+    if (source.alias) assertConfigKey(source.alias, 'Field linkage variable');
+  });
+  [primaryKeyField, ...sourceFields, ...sourceJoins.flatMap((join) => [join.leftField, join.rightField])]
+    .forEach((value) => assertQualifiedField(value, 'Field linkage field'));
+  if (sourceWhere && (/[;]/.test(sourceWhere) || /--|\/\*/.test(sourceWhere))) {
+    throw new AppError('Field linkage SQL WHERE cannot include statement separators or comments', 422);
+  }
+  return { sourceTable: tables[0].tableName, sourceTables: tables, sourceJoins, primaryKeyField, sourceWhere, sourceFields };
+}
+
 function normalizeBrowser(row) {
   if (!row) return null;
   const browser = {
@@ -90,7 +130,10 @@ async function searchBrowserButton(browserKey, query = '') {
       columns: browser.returnFields.reduce((columns, field) => ({
         ...columns,
         [field]: row[field]
-      }), {})
+      }), {
+        [browser.valueField]: row[browser.valueField],
+        [browser.displayField]: row[browser.displayField]
+      })
     }))
   };
 }
@@ -111,4 +154,23 @@ async function listBrowserButtons() {
   }));
 }
 
-module.exports = { listBrowserButtons, searchBrowserButton };
+async function resolveFieldLinkage(input = {}) {
+  const config = normalizeLinkageConfig(input);
+  const value = input.value;
+  if (value === undefined || value === null || String(value).trim() === '') {
+    return { columns: {}, rows: [] };
+  }
+  const columns = Array.from(new Set([config.primaryKeyField, ...config.sourceFields]));
+  const rows = await repository.findLinkedRows(config, columns, value);
+  const firstRow = rows[0] || null;
+  return {
+    columns: firstRow
+      ? columns.reduce((result, field) => ({ ...result, [field]: firstRow[field] }), {})
+      : {},
+    rows: rows.map((row) => ({
+      columns: columns.reduce((result, field) => ({ ...result, [field]: row[field] }), {})
+    }))
+  };
+}
+
+module.exports = { listBrowserButtons, searchBrowserButton, resolveFieldLinkage };

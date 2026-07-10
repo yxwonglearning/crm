@@ -12,6 +12,31 @@
   --ink: #0e1418;
   --ink-2: #172126;
   --gold: #d7a13a;
+  --body-size: clamp(14px, 1.12vh, 16px);
+  --control-height: clamp(34px, 2.78vh, 40px);
+  --control-pad-x: clamp(12px, 1.12vh, 16px);
+  --field-pad-y: clamp(8px, 0.7vh, 10px);
+  --field-pad-x: clamp(9px, 0.76vh, 11px);
+  --workspace-pad: clamp(18px, 2.08vh, 30px);
+  --panel-pad: clamp(14px, 1.39vh, 20px);
+  --section-pad: clamp(12px, 1.12vh, 16px);
+  --section-heading-pad: clamp(14px, 1.25vh, 18px);
+  --table-pad-y: clamp(9px, 0.9vh, 13px);
+  --table-pad-x: clamp(10px, 0.97vh, 14px);
+  --app-sidebar-w: clamp(224px, 18vh, 260px);
+  --admin-sidebar-w: clamp(216px, 17.22vh, 248px);
+  --builder-sidebar-w: clamp(220px, 18vh, 260px);
+  --split-sidebar-w: clamp(330px, 27.08vh, 390px);
+  --table-min-w: clamp(860px, 68.06vh, 980px);
+  --config-table-min-w: clamp(680px, 52.78vh, 760px);
+  --wide-table-min-w: clamp(1020px, 80.56vh, 1160px);
+  --permission-table-min-w: clamp(860px, 68.06vh, 980px);
+  --field-permission-table-min-w: clamp(1360px, 116.67vh, 1680px);
+  --dialog-table-min-w: clamp(640px, 50vh, 720px);
+  --content-gap: clamp(14px, 1.39vh, 20px);
+  --compact-gap: clamp(8px, 0.7vh, 10px);
+  --h1-size: clamp(24px, 1.95vh, 28px);
+  --h2-size: clamp(18px, 1.39vh, 20px);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -28,6 +53,7 @@ body {
   min-height: 100vh;
   background: var(--bg);
   color: var(--text);
+  font-size: var(--body-size);
 }
 
 body.modal-open {
@@ -43,10 +69,10 @@ textarea {
 
 button,
 .button-link {
-  min-height: 40px;
+  min-height: var(--control-height);
   border: 0;
   border-radius: 4px;
-  padding: 0 16px;
+  padding: 0 var(--control-pad-x);
   background: var(--primary);
   color: white;
   cursor: pointer;
@@ -93,7 +119,7 @@ button:disabled,
 
 .app-shell {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-columns: var(--app-sidebar-w) minmax(0, 1fr);
   min-height: 100vh;
 }
 
@@ -112,10 +138,10 @@ button:disabled,
 .sidebar {
   background: var(--ink);
   color: white;
-  padding: 22px 18px;
+  padding: clamp(16px, 1.53vh, 22px) clamp(14px, 1.25vh, 18px);
   display: flex;
   flex-direction: column;
-  gap: 26px;
+  gap: clamp(18px, 1.8vh, 26px);
   border-right: 1px solid #263138;
 }
 
@@ -160,12 +186,22 @@ button:disabled,
   gap: 4px;
 }
 
+#publishedModuleNav {
+  display: grid;
+  gap: 4px;
+}
+
 .nav-button {
   justify-content: flex-start;
   background: transparent;
   color: #dce3e7;
   border-left: 3px solid transparent;
   border-radius: 0;
+  padding-left: 13px;
+  width: 100%;
+}
+
+.module-nav-button {
   padding-left: 13px;
 }
 
@@ -176,13 +212,13 @@ button:disabled,
 }
 
 .workspace {
-  padding: 30px;
+  padding: var(--workspace-pad);
   min-width: 0;
 }
 
 .view {
   display: grid;
-  gap: 20px;
+  gap: var(--content-gap);
 }
 
 .auth-panel {
@@ -238,6 +274,28 @@ button:disabled,
   width: min(100% - 44px, 440px);
 }
 
+.login-option {
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  color: var(--text);
+}
+
+.login-option input {
+  margin-top: 2px;
+}
+
+.login-option span,
+.login-option small {
+  display: block;
+}
+
+.login-option small {
+  color: var(--muted);
+  font-weight: 500;
+  margin-top: 2px;
+}
+
 .toolbar {
   display: flex;
   justify-content: space-between;
@@ -252,12 +310,12 @@ p {
 }
 
 h1 {
-  font-size: 28px;
+  font-size: var(--h1-size);
   margin-bottom: 6px;
 }
 
 h2 {
-  font-size: 20px;
+  font-size: var(--h2-size);
   margin-bottom: 0;
 }
 
@@ -272,7 +330,7 @@ p,
 
 .toolbar-actions {
   display: flex;
-  gap: 10px;
+  gap: var(--compact-gap);
   align-items: center;
 }
 
@@ -287,7 +345,7 @@ p,
 .table-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: var(--compact-gap);
   justify-content: flex-start;
   align-items: center;
 }
@@ -295,7 +353,7 @@ p,
 .inline-import {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: var(--compact-gap);
   align-items: center;
 }
 
@@ -322,8 +380,8 @@ p,
 
 .split-layout {
   display: grid;
-  grid-template-columns: minmax(280px, 390px) minmax(0, 1fr);
-  gap: 20px;
+  grid-template-columns: minmax(280px, var(--split-sidebar-w)) minmax(0, 1fr);
+  gap: var(--content-gap);
   align-items: start;
 }
 
@@ -331,9 +389,9 @@ p,
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 4px;
-  padding: 20px;
+  padding: var(--panel-pad);
   display: grid;
-  gap: 14px;
+  gap: clamp(10px, 0.97vh, 14px);
   box-shadow: 0 12px 32px rgba(17, 24, 39, 0.06);
 }
 
@@ -361,7 +419,7 @@ textarea {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 4px;
-  padding: 10px 11px;
+  padding: var(--field-pad-y) var(--field-pad-x);
   background: white;
   color: var(--text);
 }
@@ -431,7 +489,7 @@ button:focus {
 
 .form-actions {
   display: flex;
-  gap: 10px;
+  gap: var(--compact-gap);
 }
 
 .table-wrap {
@@ -447,13 +505,13 @@ button:focus {
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 980px;
+  min-width: var(--table-min-w);
   table-layout: auto;
 }
 
 th,
 td {
-  padding: 13px 14px;
+  padding: var(--table-pad-y) var(--table-pad-x);
   text-align: left;
   border-bottom: 1px solid var(--line);
   vertical-align: middle;
@@ -471,7 +529,7 @@ td {
 
 .customers-table .company-column {
   width: 30%;
-  min-width: 260px;
+  min-width: clamp(220px, 18.06vh, 260px);
 }
 
 .customers-table th,
@@ -488,22 +546,22 @@ td {
 
 .customers-table .email-column {
   width: 17%;
-  min-width: 210px;
+  min-width: clamp(180px, 14.58vh, 210px);
 }
 
 .customers-table .contact-column {
   width: 14%;
-  min-width: 150px;
+  min-width: clamp(128px, 10.42vh, 150px);
 }
 
 .customers-table .phone-column {
   width: 13%;
-  min-width: 145px;
+  min-width: clamp(128px, 10.07vh, 145px);
 }
 
 .customers-table .country-column {
   width: 11%;
-  min-width: 130px;
+  min-width: clamp(112px, 9.03vh, 130px);
 }
 
 .customers-table .status-column {
@@ -513,7 +571,7 @@ td {
 
 .customers-table .owner-column {
   width: 12%;
-  min-width: 130px;
+  min-width: clamp(112px, 9.03vh, 130px);
 }
 
 .customers-table .action-column {
@@ -546,7 +604,7 @@ td.company-cell {
 }
 
 .config-table {
-  min-width: 760px;
+  min-width: var(--config-table-min-w);
 }
 
 .config-table th,
@@ -581,10 +639,10 @@ td.company-cell {
 
 .admin-layout {
   display: grid;
-  grid-template-columns: 248px minmax(0, 1fr);
+  grid-template-columns: var(--admin-sidebar-w) minmax(0, 1fr);
   gap: 0;
   align-items: stretch;
-  min-height: calc(100vh - 118px);
+  min-height: calc(100vh - (var(--workspace-pad) * 2 + 58px));
   overflow: visible;
   background: var(--surface);
   border: 1px solid var(--line);
@@ -601,14 +659,14 @@ td.company-cell {
   align-content: start;
   gap: 4px;
   position: relative;
-  padding: 14px 12px;
+  padding: clamp(10px, 0.97vh, 14px) clamp(8px, 0.83vh, 12px);
   background: #f8fafc;
   border-right: 1px solid var(--line);
 }
 
 .admin-collapse-button {
   position: absolute;
-  top: 58px;
+  top: clamp(46px, 4.03vh, 58px);
   right: -13px;
   z-index: 2;
   width: 24px;
@@ -630,11 +688,11 @@ td.company-cell {
 }
 
 .admin-section-button {
-  min-height: 54px;
+  min-height: clamp(44px, 3.75vh, 54px);
   display: grid;
   justify-content: stretch;
   gap: 3px;
-  padding: 10px 12px;
+  padding: clamp(8px, 0.7vh, 10px) clamp(9px, 0.83vh, 12px);
   text-align: left;
   background: transparent;
   color: var(--text);
@@ -675,17 +733,17 @@ td.company-cell {
 
 .admin-section {
   display: grid;
-  gap: 16px;
+  gap: clamp(12px, 1.12vh, 16px);
   min-width: 0;
   align-content: start;
-  padding: 16px;
+  padding: var(--section-pad);
 }
 
 .section-heading {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 4px;
-  padding: 18px;
+  padding: var(--section-heading-pad);
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -703,6 +761,10 @@ td.company-cell {
 .section-heading p,
 .empty-state p {
   margin-bottom: 0;
+}
+
+.inline-search {
+  width: min(280px, 100%);
 }
 
 .status-pill {
@@ -727,7 +789,7 @@ td.company-cell {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 4px;
-  padding: 18px;
+  padding: var(--section-heading-pad);
 }
 
 .summary-tile {
@@ -746,8 +808,8 @@ td.company-cell {
 
 .builder-layout {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: var(--builder-sidebar-w) minmax(0, 1fr);
+  gap: clamp(10px, 0.83vh, 12px);
   min-width: 0;
   align-items: stretch;
 }
@@ -756,10 +818,93 @@ td.company-cell {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 4px;
-  padding: 12px;
+  padding: clamp(10px, 0.83vh, 12px);
   display: grid;
   align-content: start;
-  gap: 12px;
+  gap: clamp(10px, 0.83vh, 12px);
+}
+
+.builder-list > button,
+.builder-list select,
+.builder-list input {
+  width: 100%;
+}
+
+.builder-list .admin-summary-grid {
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.builder-list .summary-tile,
+.builder-list .empty-state {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.builder-list .empty-state h3 {
+  font-size: 14px;
+}
+
+.builder-list .status-pill {
+  justify-self: start;
+}
+
+.builder-list .api-tabs {
+  display: grid;
+  gap: 4px;
+  border-bottom: 0;
+}
+
+.builder-list .tab-item {
+  display: block;
+  border-bottom: 0;
+}
+
+.builder-list .tab-button {
+  width: 100%;
+  justify-content: flex-start;
+  border-left: 3px solid transparent;
+  border-radius: 4px;
+  color: var(--text);
+}
+
+.builder-list .tab-button:hover,
+.builder-list .tab-button.is-active {
+  background: #eef7ff;
+  border-left-color: var(--primary);
+}
+
+.builder-main {
+  display: grid;
+  align-content: start;
+  gap: clamp(10px, 0.83vh, 12px);
+  min-width: 0;
+}
+
+.builder-main > .section-heading {
+  padding: 4px 0 14px;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+}
+
+.form-builder-context-actions {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.form-builder-context-actions > div:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.form-builder-context-actions small {
+  color: var(--muted);
+  font-weight: 700;
 }
 
 .compact-label {
@@ -780,7 +925,7 @@ td.company-cell {
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  padding: 12px;
+  padding: clamp(9px, 0.83vh, 12px) clamp(10px, 0.83vh, 12px);
   background: #f8fafc;
   color: var(--text);
   border: 1px solid #d9e0e7;
@@ -957,6 +1102,28 @@ td {
   white-space: nowrap;
 }
 
+.runtime-form-section {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.runtime-form-section-heading {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.runtime-form-section-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.runtime-form-field {
+  min-width: 0;
+}
+
 .browser-lookup-search {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) auto;
@@ -970,6 +1137,38 @@ td {
 
 .narrow-modal {
   width: min(100%, 460px);
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.checkbox-label input {
+  width: auto;
+}
+
+.table-action-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.status-draft {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.status-published {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.status-archived {
+  background: #e5e7eb;
+  color: #374151;
 }
 
 .field-config-modal-card {
@@ -1121,6 +1320,30 @@ td {
   gap: 8px;
 }
 
+.form-layout-toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(180px, 1fr) minmax(140px, 180px);
+  align-items: end;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+}
+
+.form-layout-toolbar label,
+.form-layout-section-header label {
+  display: grid;
+  gap: 4px;
+}
+
+.form-layout-toolbar label span,
+.form-layout-section-header label span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
 .form-design-section {
   display: grid;
   gap: 12px;
@@ -1164,6 +1387,35 @@ td {
   display: grid;
   grid-template-columns: 1fr;
   gap: 10px;
+}
+
+.form-layout-section {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.form-layout-section-header {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) 110px auto auto auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.form-layout-section-header input,
+.form-layout-section-header select,
+.form-layout-toolbar select {
+  min-height: 34px;
+  padding: 6px 8px;
+}
+
+.form-layout-empty {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 10px;
 }
 
 .form-design-preview-card {
@@ -1495,7 +1747,7 @@ td {
 }
 
 .form-design-detail-preview table {
-  min-width: 720px;
+  min-width: var(--dialog-table-min-w);
 }
 
 .form-design-detail-preview th,
@@ -1697,13 +1949,6 @@ td {
   display: flex;
 }
 
-.browser-button-workspace {
-  display: grid;
-  grid-template-columns: minmax(210px, 280px) minmax(0, 1fr);
-  gap: 14px;
-  align-items: start;
-}
-
 .browser-source-panel {
   display: grid;
   gap: 12px;
@@ -1778,6 +2023,7 @@ td {
   display: grid;
   gap: 14px;
   min-width: 0;
+  align-content: start;
 }
 
 .browser-button-toolbar {
@@ -1866,7 +2112,7 @@ td {
 }
 
 .batch-field-table {
-  min-width: 1160px;
+  min-width: var(--wide-table-min-w);
 }
 
 .batch-field-table th,
@@ -1904,7 +2150,7 @@ td {
 }
 
 .field-properties-table {
-  min-width: 720px;
+  min-width: var(--dialog-table-min-w);
 }
 
 .field-properties-table th,
@@ -1922,7 +2168,7 @@ td {
 }
 
 .import-export-mapping-table {
-  min-width: 920px;
+  min-width: clamp(820px, 63.89vh, 920px);
 }
 
 .import-export-mapping-table th,
@@ -1978,7 +2224,7 @@ td {
 }
 
 .permissions-table {
-  min-width: 980px;
+  min-width: var(--permission-table-min-w);
 }
 
 .permissions-table th,
@@ -1991,7 +2237,7 @@ td {
 }
 
 .field-permissions-table {
-  min-width: 1680px;
+  min-width: var(--field-permission-table-min-w);
 }
 
 .field-permissions-table td:first-child {
@@ -2034,6 +2280,58 @@ td {
 
 .field-permission-cell .permission-check-list {
   max-height: 110px;
+}
+
+.api-workspace {
+  display: grid;
+  gap: 14px;
+}
+
+.api-table-actions {
+  justify-content: flex-end;
+}
+
+.api-tabs {
+  border-bottom: 1px solid var(--line);
+}
+
+.api-tab-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.api-connector-modal-card {
+  width: min(100%, 920px);
+}
+
+.api-connector-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.api-wide-field,
+.api-endpoint-editor {
+  grid-column: 1 / -1;
+}
+
+.api-enabled-field {
+  align-self: end;
+  min-height: 42px;
+}
+
+.api-connector-grid textarea {
+  min-height: 96px;
+  font-family: Consolas, "Courier New", monospace;
+}
+
+.api-endpoint-table {
+  min-width: var(--dialog-table-min-w);
+}
+
+.api-endpoint-table input,
+.api-endpoint-table select {
+  width: 100%;
 }
 
 .permission-picker {
@@ -2156,6 +2454,53 @@ td {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 250px;
   gap: 10px;
+}
+
+.field-linkage-modal-card {
+  width: min(100%, 1040px);
+}
+
+.field-linkage-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.field-linkage-grid label,
+.field-linkage-editor label {
+  display: grid;
+  gap: 6px;
+}
+
+.field-linkage-check {
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  align-self: end;
+}
+
+.field-linkage-editor {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.field-linkage-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.field-linkage-table {
+  min-width: 760px;
+}
+
+.field-linkage-table input,
+.field-linkage-table select {
+  width: 100%;
 }
 
 .formula-tab-pane {
@@ -2332,7 +2677,7 @@ td {
 }
 
 .detail-entry-table {
-  min-width: 720px;
+  min-width: var(--dialog-table-min-w);
 }
 
 .detail-entry-table th,

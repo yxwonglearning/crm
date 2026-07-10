@@ -56,6 +56,9 @@ CREATE TABLE IF NOT EXISTS crm_modules (
   module_key VARCHAR(80) NOT NULL,
   name VARCHAR(120) NOT NULL,
   description VARCHAR(255) NULL,
+  module_status ENUM('draft', 'published', 'archived') NOT NULL DEFAULT 'draft',
+  show_in_menu TINYINT(1) NOT NULL DEFAULT 0,
+  is_system TINYINT(1) NOT NULL DEFAULT 0,
   is_enabled TINYINT(1) NOT NULL DEFAULT 1,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -135,6 +138,62 @@ CREATE TABLE IF NOT EXISTS crm_module_form_layouts (
   CONSTRAINT crm_module_form_layouts_module_id_fk FOREIGN KEY (module_id) REFERENCES crm_modules(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS crm_forms (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  form_key VARCHAR(80) NOT NULL,
+  name VARCHAR(120) NOT NULL,
+  description VARCHAR(255) NULL,
+  fields_json JSON NULL,
+  created_by BIGINT UNSIGNED NULL,
+  updated_by BIGINT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY crm_forms_key_unique (form_key),
+  KEY crm_forms_created_by_fk (created_by),
+  KEY crm_forms_updated_by_fk (updated_by),
+  CONSTRAINT crm_forms_created_by_fk FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT crm_forms_updated_by_fk FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS crm_module_config_versions (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  module_id BIGINT UNSIGNED NOT NULL,
+  version_number INT NOT NULL,
+  action VARCHAR(80) NOT NULL,
+  summary VARCHAR(255) NULL,
+  snapshot_json JSON NOT NULL,
+  created_by BIGINT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY crm_module_config_versions_number_unique (module_id, version_number),
+  KEY crm_module_config_versions_module_id_idx (module_id),
+  KEY crm_module_config_versions_created_by_fk (created_by),
+  CONSTRAINT crm_module_config_versions_module_id_fk FOREIGN KEY (module_id) REFERENCES crm_modules(id) ON DELETE CASCADE,
+  CONSTRAINT crm_module_config_versions_created_by_fk FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS crm_module_config_audit_logs (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  module_id BIGINT UNSIGNED NOT NULL,
+  version_id BIGINT UNSIGNED NULL,
+  action VARCHAR(80) NOT NULL,
+  target_type VARCHAR(80) NOT NULL,
+  target_key VARCHAR(120) NULL,
+  summary VARCHAR(255) NULL,
+  before_json JSON NULL,
+  after_json JSON NULL,
+  changed_by BIGINT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY crm_module_config_audit_logs_module_id_idx (module_id),
+  KEY crm_module_config_audit_logs_version_id_idx (version_id),
+  KEY crm_module_config_audit_logs_changed_by_fk (changed_by),
+  CONSTRAINT crm_module_config_audit_logs_module_id_fk FOREIGN KEY (module_id) REFERENCES crm_modules(id) ON DELETE CASCADE,
+  CONSTRAINT crm_module_config_audit_logs_version_id_fk FOREIGN KEY (version_id) REFERENCES crm_module_config_versions(id) ON DELETE SET NULL,
+  CONSTRAINT crm_module_config_audit_logs_changed_by_fk FOREIGN KEY (changed_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS crm_field_permissions (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   module_id BIGINT UNSIGNED NOT NULL,
@@ -172,4 +231,66 @@ CREATE TABLE IF NOT EXISTS crm_module_permissions (
   UNIQUE KEY crm_module_permissions_subject_unique (module_id, subject_type, subject_key),
   KEY crm_module_permissions_module_id_fk (module_id),
   CONSTRAINT crm_module_permissions_module_id_fk FOREIGN KEY (module_id) REFERENCES crm_modules(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS crm_api_connectors (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  connector_key VARCHAR(80) NOT NULL,
+  name VARCHAR(120) NOT NULL,
+  base_url VARCHAR(500) NOT NULL,
+  auth_type ENUM('none', 'api_key', 'bearer', 'basic', 'oauth') NOT NULL DEFAULT 'none',
+  auth_config_json JSON NULL,
+  default_headers_json JSON NULL,
+  endpoints_json JSON NULL,
+  is_enabled TINYINT(1) NOT NULL DEFAULT 1,
+  created_by BIGINT UNSIGNED NULL,
+  updated_by BIGINT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY crm_api_connectors_key_unique (connector_key),
+  KEY crm_api_connectors_created_by_fk (created_by),
+  KEY crm_api_connectors_updated_by_fk (updated_by),
+  CONSTRAINT crm_api_connectors_created_by_fk FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT crm_api_connectors_updated_by_fk FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS crm_action_flows (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  flow_key VARCHAR(80) NOT NULL,
+  name VARCHAR(160) NOT NULL,
+  description VARCHAR(255) NULL,
+  flow_status ENUM('draft', 'enabled', 'disabled') NOT NULL DEFAULT 'draft',
+  current_version INT NOT NULL DEFAULT 1,
+  trigger_category VARCHAR(80) NOT NULL DEFAULT 'record',
+  trigger_type VARCHAR(80) NOT NULL DEFAULT 'record_created',
+  trigger_module VARCHAR(80) NULL,
+  flow_json JSON NULL,
+  created_by BIGINT UNSIGNED NULL,
+  updated_by BIGINT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY crm_action_flows_key_unique (flow_key),
+  KEY crm_action_flows_status_idx (flow_status),
+  KEY crm_action_flows_trigger_module_idx (trigger_module),
+  KEY crm_action_flows_created_by_fk (created_by),
+  KEY crm_action_flows_updated_by_fk (updated_by),
+  CONSTRAINT crm_action_flows_created_by_fk FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT crm_action_flows_updated_by_fk FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS crm_action_flow_executions (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  flow_id BIGINT UNSIGNED NOT NULL,
+  flow_version INT NOT NULL,
+  execution_status ENUM('queued', 'running', 'success', 'failed', 'skipped') NOT NULL DEFAULT 'queued',
+  trigger_payload_json JSON NULL,
+  result_json JSON NULL,
+  started_at TIMESTAMP NULL,
+  finished_at TIMESTAMP NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY crm_action_flow_executions_flow_id_idx (flow_id),
+  CONSTRAINT crm_action_flow_executions_flow_id_fk FOREIGN KEY (flow_id) REFERENCES crm_action_flows(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
