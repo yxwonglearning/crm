@@ -144,10 +144,44 @@ async function replaceModulePermissions(moduleId, permissions) {
   }
 }
 
+async function listModuleDepartmentPermissions(moduleKey) {
+  const [rows] = await pool.execute(
+    `SELECT p.department_node_id
+     FROM crm_module_department_permissions p
+     INNER JOIN crm_modules m ON m.id = p.module_id
+     WHERE m.module_key = ? AND p.can_view = 1
+     ORDER BY p.department_node_id ASC`,
+    [moduleKey]
+  );
+  return rows.map((row) => Number(row.department_node_id));
+}
+
+async function replaceModuleDepartmentPermissions(moduleId, departmentIds = []) {
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.execute('DELETE FROM crm_module_department_permissions WHERE module_id = ?', [moduleId]);
+    for (const departmentId of departmentIds) {
+      await connection.execute(
+        'INSERT INTO crm_module_department_permissions (module_id, department_node_id, can_view) VALUES (?, ?, 1)',
+        [moduleId, departmentId]
+      );
+    }
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
 module.exports = {
   listFieldPermissions,
   permissionCount,
   replaceFieldPermissions,
   listModulePermissions,
-  replaceModulePermissions
+  replaceModulePermissions,
+  listModuleDepartmentPermissions,
+  replaceModuleDepartmentPermissions
 };

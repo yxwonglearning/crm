@@ -327,6 +327,34 @@ async function main() {
       CONSTRAINT crm_department_nodes_updated_by_fk FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
   );
+  await ensureColumn(connection, 'users', 'organization_node_id', '`organization_node_id` BIGINT UNSIGNED NULL AFTER `status`');
+  await ensureIndex(connection, 'users', 'users_organization_node_idx', 'INDEX `users_organization_node_idx` (`organization_node_id`)');
+  await connection.execute(
+    `INSERT INTO crm_department_nodes (node_key, name, node_type, parent_id, description, is_enabled)
+     VALUES ('organization', 'Organization', 'organization', NULL, 'Default organization root.', 1)
+     ON DUPLICATE KEY UPDATE is_enabled = 1`
+  );
+  await connection.execute(
+    `UPDATE users
+     SET organization_node_id = (
+       SELECT id FROM crm_department_nodes WHERE node_type = 'organization' ORDER BY id ASC LIMIT 1
+     )
+     WHERE organization_node_id IS NULL`
+  );
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_module_department_permissions (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      module_id BIGINT UNSIGNED NOT NULL,
+      department_node_id BIGINT UNSIGNED NOT NULL,
+      can_view TINYINT(1) NOT NULL DEFAULT 1,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY crm_module_department_permissions_unique (module_id, department_node_id),
+      CONSTRAINT crm_module_department_permissions_module_fk FOREIGN KEY (module_id) REFERENCES crm_modules(id) ON DELETE CASCADE,
+      CONSTRAINT crm_module_department_permissions_node_fk FOREIGN KEY (department_node_id) REFERENCES crm_department_nodes(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
   await connection.query(
     `CREATE TABLE IF NOT EXISTS crm_action_flows (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

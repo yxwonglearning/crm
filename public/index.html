@@ -607,21 +607,23 @@
                     <option value="users">Users</option>
                   </select>
                   </label>
-                  <button type="button" id="savePermissionsButton">Save Permissions</button>
                 </aside>
 
                 <div class="builder-main">
                   <div class="section-heading">
                     <div>
                       <h2>Permissions</h2>
-                      <p>Control who can view, create, edit, delete, import, export, and configure each module.</p>
+                      <p>Control module configuration and field-level access. Page actions are managed from Pages.</p>
+                    </div>
+                    <div class="section-heading-actions">
+                      <button type="button" id="savePermissionsButton">Save Permissions</button>
                     </div>
                   </div>
                   <div class="permissions-workspace">
-                    <div class="permissions-panel">
+                    <div class="permissions-panel module-configuration-panel">
                       <div class="permissions-panel-heading">
-                        <strong>Module Actions</strong>
-                        <small>Applies to the whole module.</small>
+                        <strong>Module Configuration</strong>
+                        <small>Controls who can change this module's setup.</small>
                       </div>
                       <div class="table-wrap permissions-table-wrap">
                         <table class="config-table permissions-table">

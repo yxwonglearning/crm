@@ -13,6 +13,7 @@ const createdCustomerIds = [];
 const createdRecordIds = [];
 let createdModuleKey = '';
 let createdUserEmail = '';
+let createdUserId = 0;
 let baseUrl = '';
 let token = '';
 let server;
@@ -242,6 +243,7 @@ async function main() {
     });
     expectStatus(create, 201, 'create user');
     assert.ok(create.body.user.id);
+    createdUserId = create.body.user.id;
 
     const list = await request('GET', `/api/users?search=${encodeURIComponent(createdUserEmail)}`);
     expectStatus(list, 200, 'list users');
@@ -249,10 +251,6 @@ async function main() {
     assert.ok(createdUser);
     assert.match(createdUser.staff_id, /^STF-[A-Z0-9]+-[A-Z0-9]{4}$/);
 
-    const update = await request('PATCH', `/api/users/${create.body.user.id}`, {
-      json: { status: 'inactive' }
-    });
-    expectStatus(update, 204, 'update user');
   });
 
   await smoke('department hierarchy CRUD and Excel import smoke', async () => {
@@ -386,8 +384,16 @@ async function main() {
   });
 
   await smoke('Phase 6 permissions smoke', async () => {
+    const hierarchy = await request('GET', '/api/departments');
+    const organization = hierarchy.body.nodes.find((node) => node.type === 'organization');
+    const permissionDepartment = await request('POST', '/api/departments', { json: { name: `${runId} Permission Department`, type: 'department', parentId: organization.id, enabled: true } });
+    expectStatus(permissionDepartment, 201, 'create permission department');
+    const permissionGroup = await request('POST', '/api/departments', { json: { name: `${runId} Permission Group`, type: 'group', parentId: permissionDepartment.body.node.id, enabled: true } });
+    expectStatus(permissionGroup, 201, 'create nested permission group');
+    const assignMembership = await request('PATCH', `/api/users/${createdUserId}`, { json: { organizationNodeId: permissionGroup.body.node.id } });
+    expectStatus(assignMembership, 204, 'assign user organization membership');
     const permissions = {
-      view: { roles: ['admin'], users: [] },
+      view: { roles: ['admin'], users: [], departments: [permissionDepartment.body.node.id] },
       create: { roles: ['admin'], users: [] },
       edit: { roles: ['admin'], users: [] },
       delete: { roles: ['admin'], users: [] },
@@ -399,6 +405,16 @@ async function main() {
       json: { permissions }
     });
     expectStatus(saveModulePermissions, 200, 'save module permissions');
+    assert.deepEqual(saveModulePermissions.body.permissions.view.departments, [String(permissionDepartment.body.node.id)]);
+
+    const adminToken = token;
+    const userLogin = await request('POST', '/api/auth/login', { auth: false, json: { email: createdUserEmail, password: 'SmokePass123!' } });
+    expectStatus(userLogin, 200, 'login department member');
+    token = userLogin.body.token;
+    const memberMenu = await request('GET', '/api/modules');
+    expectStatus(memberMenu, 200, 'department member module menu');
+    assert.ok(memberMenu.body.modules.some((entry) => entry.module.moduleKey === createdModuleKey), 'ancestor department View grant should include nested group member');
+    token = adminToken;
 
     const fieldPermissions = await request('GET', `/api/sysadmin/modules/${createdModuleKey}/field-permissions`);
     expectStatus(fieldPermissions, 200, 'field permissions');
@@ -416,6 +432,9 @@ async function main() {
       json: { fields }
     });
     expectStatus(saveFieldPermissions, 200, 'save field permissions');
+    await request('PATCH', `/api/users/${createdUserId}`, { json: { organizationNodeId: null, status: 'inactive' } });
+    await request('DELETE', `/api/departments/${permissionGroup.body.node.id}`);
+    await request('DELETE', `/api/departments/${permissionDepartment.body.node.id}`);
   });
 
   await smoke('Phase 4 generated module page, record CRUD, filters, detail rows, and import/export smoke', async () => {

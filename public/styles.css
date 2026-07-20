@@ -2262,6 +2262,10 @@ td {
   min-height: 420px;
 }
 
+.module-configuration-panel .permissions-table-wrap {
+  min-height: 0;
+}
+
 .permissions-workspace {
   display: grid;
   gap: 16px;
@@ -3296,6 +3300,13 @@ td {
   justify-self: start;
 }
 
+.permission-inheritance-note {
+  display: block;
+  margin-top: 7px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
 .page-other-actions-heading {
   padding-top: 4px;
   border-top: 1px solid var(--line);
@@ -3360,6 +3371,72 @@ td {
   padding-top: 14px;
   border-top: 1px solid var(--line);
   background: #fff;
+}
+
+.permission-department-tree {
+  gap: 0;
+  padding: 5px;
+}
+
+.permission-department-node {
+  position: relative;
+  grid-template-columns: 14px 18px minmax(0, 1fr);
+  min-height: 39px;
+  margin-left: calc(var(--permission-tree-depth, 0) * 19px);
+  padding: 7px 6px;
+  border-radius: 5px;
+}
+
+.permission-department-node:hover {
+  background: var(--primary-soft);
+}
+
+.permission-department-node::before {
+  content: '';
+  position: absolute;
+  left: -11px;
+  top: 0;
+  bottom: 50%;
+  width: 10px;
+  border-left: 1px solid #cbd7e2;
+  border-bottom: 1px solid #cbd7e2;
+}
+
+.permission-department-node[style*="depth:0"]::before {
+  display: none;
+}
+
+.permission-tree-branch {
+  color: #6f8192;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+
+.permission-department-node > span:last-child {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.permission-department-node strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.permission-unit-badge {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  border: 1px solid #cfdae4;
+  border-radius: 999px;
+  background: #f3f7fa;
+  color: #66798a;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  line-height: 1.1;
 }
 
 @media (max-width: 760px) {

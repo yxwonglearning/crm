@@ -28,6 +28,11 @@ async function findById(id) {
   return rows[0] ? publicNode(rows[0]) : null;
 }
 
+async function findOrganization() {
+  const [rows] = await pool.execute("SELECT * FROM crm_department_nodes WHERE node_type = 'organization' ORDER BY id ASC LIMIT 1");
+  return rows[0] ? publicNode(rows[0]) : null;
+}
+
 async function findByNameAndParent(name, type, parentId) {
   const [rows] = await pool.execute(
     'SELECT * FROM crm_department_nodes WHERE node_type = ? AND name = ? AND parent_id <=> ? LIMIT 1',
@@ -64,4 +69,16 @@ async function deleteNode(id) {
   return result.affectedRows;
 }
 
-module.exports = { listNodes, findById, findByNameAndParent, saveNode, updateNode, childCount, deleteNode };
+async function ancestorIds(id) {
+  const ids = [];
+  let current = await findById(id);
+  const visited = new Set();
+  while (current && !visited.has(current.id)) {
+    visited.add(current.id);
+    ids.push(current.id);
+    current = current.parentId ? await findById(current.parentId) : null;
+  }
+  return ids;
+}
+
+module.exports = { listNodes, findById, findOrganization, findByNameAndParent, saveNode, updateNode, childCount, deleteNode, ancestorIds };

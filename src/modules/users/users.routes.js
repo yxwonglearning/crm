@@ -16,7 +16,8 @@ const createUserSchema = z.object({
   email: z.string().trim().email().max(190),
   password: z.string().trim().min(8).max(72),
   role: roleSchema.default('user'),
-  status: statusSchema.default('active')
+  status: statusSchema.default('active'),
+  organizationNodeId: z.coerce.number().int().positive().nullable().optional()
 }).passthrough();
 
 const updateUserSchema = z.object({
@@ -25,7 +26,8 @@ const updateUserSchema = z.object({
   email: z.string().trim().email().max(190).optional(),
   password: z.string().trim().min(8).max(72).optional(),
   role: roleSchema.optional(),
-  status: statusSchema.optional()
+  status: statusSchema.optional(),
+  organizationNodeId: z.coerce.number().int().positive().nullable().optional()
 }).passthrough();
 
 usersRoutes.use(requireAuth, requireRole('admin'));

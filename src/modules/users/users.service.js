@@ -2,9 +2,21 @@ const bcrypt = require('bcryptjs');
 const { AppError } = require('../../shared/errors');
 const moduleConfig = require('../sysadmin/module-config.service');
 const repository = require('./users.repository');
+const departmentRepository = require('../departments/departments.repository');
 const { validateFieldValue } = require('../../shared/field-validation');
 
-const systemFieldKeys = new Set(['name', 'staffId', 'email', 'password', 'role', 'status']);
+const systemFieldKeys = new Set(['name', 'staffId', 'email', 'password', 'role', 'status', 'organizationNodeId']);
+
+async function validateOrganizationNode(id) {
+  if (!id) {
+    const organization = await departmentRepository.findOrganization();
+    if (!organization) throw new AppError('Default Organization is not configured', 500);
+    return organization.id;
+  }
+  const node = await departmentRepository.findById(Number(id));
+  if (!node || !node.enabled) throw new AppError('Choose an enabled organization unit', 422);
+  return node.id;
+}
 
 function parseCustomFields(value) {
   if (!value) return {};
@@ -104,6 +116,7 @@ async function createUser(input) {
       passwordHash,
       role: normalizedInput.role,
       status: normalizedInput.status,
+      organizationNodeId: await validateOrganizationNode(normalizedInput.organizationNodeId),
       customFields: await customFieldsFromInput(normalizedInput, fieldConfig.fields)
     });
     const created = await repository.findUserCredentialsById(id);
@@ -138,6 +151,7 @@ async function updateUser(id, input) {
   if (input.email) updates.email = input.email.toLowerCase();
   if (input.role) updates.role = input.role;
   if (input.status) updates.status = input.status;
+  if (input.organizationNodeId !== undefined) updates.organization_node_id = await validateOrganizationNode(input.organizationNodeId);
   if (input.password) {
     const password = String(input.password).trim();
     updates.password_hash = await bcrypt.hash(password, 12);

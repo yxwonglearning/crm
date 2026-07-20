@@ -85,6 +85,7 @@ The sections below serve as the detailed project log, implementation notes, feat
 - Formula workspace with formula expressions, reusable custom helper functions, and SQL capture storage.
 - Backend-backed Form Design drawer for per-form-type visual field ordering with draft/publish controls; newly created fields are reconciled into each form design automatically.
 - Page-level Permissions drawer for configuring role and specific-user access without leaving Module Pages.
+- Page View permissions support Organization, Department, and Group access with inheritance to users assigned to descendant units.
 - All pop-out modals include a fullscreen/enlarge button.
 - Customer detail-table data entry inside the Add/Edit Customer modal.
 - Detail-table row controls:
@@ -163,7 +164,9 @@ Admins should have a dedicated portal for configuring the CRM:
    - Admins can create, edit, enable, disable, and delete Departments and Groups beneath the Organization or any other unit.
    - The backend supports both flat and deeply nested organization structures and prevents deletion of the Organization or nodes that still contain children.
    - Admins can download an Excel template and batch-import arbitrary hierarchy levels using Parent Path, Name, Type, and Description columns.
-   - User membership assignment and Department-based Page View permission enforcement are the next integration slice.
+   - User forms include Organization Unit membership assignment.
+   - Page View permissions can target any Organization, Department, or Group; access inherits to users assigned to the selected unit or any descendant unit.
+   - Organization-unit assignment and inherited Page View access were verified by the complete backend smoke suite on 2026-07-21.
 
 1. Phase 1: Dedicated Admin Portal - mostly done
    - Converted the old sysadmin area into `Admin Portal`.
@@ -235,10 +238,12 @@ Admins should have a dedicated portal for configuring the CRM:
    - Admin Portal has a `Permissions` section for module and field access.
    - Module permissions control view, create, edit, delete, import, export, and configuration access by role or specific user.
    - Module Pages provides a page-specific `Permissions` action that opens a right-side configuration drawer instead of navigating away from the page list.
-   - `View` access uses Departments, Roles, and Specific Users. Department access is displayed first as a planned control until the backend Department module and membership data are implemented.
+   - `View` access uses Organization Units, Roles, and Specific Users. Organization-unit choices follow the Organization, Department, and Group hierarchy.
    - Create, Edit, Delete, Import, and Export use Roles and Specific Users only; Configure remains in the main Permissions workspace.
    - Action sections open expanded by default, the drawer body scrolls independently from its fixed header and footer, and role/user pickers show a compact set of entries with internal scrolling for additional options.
-   - Department-level page visibility is planned for the `View` action. Department records and user membership will be sourced from a future backend Department module before this control becomes editable.
+   - Page View access selected at an Organization, Department, or Group includes users assigned directly to that unit or any descendant unit.
+   - User create/edit forms require an Organization Unit; existing or unspecified users default to the Organization root.
+   - The organization-membership and inherited Page View integration passed the complete backend smoke suite on 2026-07-21.
    - Field permissions control view, create, edit, import, and export by role or specific user.
    - Customer list/config/import/save paths enforce the configured permissions.
 7. Phase 7: Dashboard Builder - planned

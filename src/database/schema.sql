@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash VARCHAR(255) NULL,
   role ENUM('admin', 'manager', 'user') NOT NULL DEFAULT 'user',
   status ENUM('active', 'inactive') NOT NULL DEFAULT 'active',
+  organization_node_id BIGINT UNSIGNED NULL,
   custom_fields JSON NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -292,6 +293,19 @@ CREATE TABLE IF NOT EXISTS crm_department_nodes (
   CONSTRAINT crm_department_nodes_parent_fk FOREIGN KEY (parent_id) REFERENCES crm_department_nodes(id) ON DELETE RESTRICT,
   CONSTRAINT crm_department_nodes_created_by_fk FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
   CONSTRAINT crm_department_nodes_updated_by_fk FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS crm_module_department_permissions (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  module_id BIGINT UNSIGNED NOT NULL,
+  department_node_id BIGINT UNSIGNED NOT NULL,
+  can_view TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY crm_module_department_permissions_unique (module_id, department_node_id),
+  CONSTRAINT crm_module_department_permissions_module_fk FOREIGN KEY (module_id) REFERENCES crm_modules(id) ON DELETE CASCADE,
+  CONSTRAINT crm_module_department_permissions_node_fk FOREIGN KEY (department_node_id) REFERENCES crm_department_nodes(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS crm_action_flows (

@@ -1826,6 +1826,7 @@ function selectedOptionValues(select) {
 }
 
 const permissionActions = ['view', 'create', 'edit', 'delete', 'import', 'export', 'configure'];
+const workspacePermissionActions = ['configure'];
 const fieldPermissionActions = ['view', 'create', 'edit', 'import', 'export'];
 
 function browserFieldValue(field) {
@@ -3342,10 +3343,10 @@ function renderGenericFieldInput(field, value = '', editing = false) {
 function renderUserFormFields(user = null) {
   const editing = Boolean(user);
   const layout = publishedFormLayout('users', state.activeUserFormType);
-  $('#userFormFields').innerHTML = renderPublishedMainSections(userFormFields(), layout, (field) => {
+  const configuredFields = renderPublishedMainSections(userFormFields(), layout, (field) => {
     const input = `
       <label>
-        ${labelTextWithRequired(field)}
+        ${formLabelText(field)}
         ${renderGenericFieldInput(field, valueForUserForm(user, field), editing)}
       </label>
     `;
@@ -3355,11 +3356,26 @@ function renderUserFormFields(user = null) {
     const required = editing ? '' : 'required';
     return `${input}
       <label>
-        Confirm Password
+        <span class="field-label-text">Confirm Password${editing ? '' : ' <span class="required-text">*</span>'}</span>
         <input name="confirmPassword" type="password" minlength="8" ${required} autocomplete="new-password">
       </label>
     `;
   });
+  const defaultOrganizationId = state.departmentNodes.find((node) => node.type === 'organization')?.id || 0;
+  const selectedOrganizationId = Number(user?.organization_node_id || defaultOrganizationId);
+  const organizationOptions = permissionDepartmentItems().map((item) => {
+    const branch = item.depth > 0 ? `${'\u00a0\u00a0\u00a0'.repeat(item.depth - 1)}└─ ` : '';
+    const type = item.type === 'organization' ? 'ORG' : item.type === 'department' ? 'DEPT' : 'GROUP';
+    return `<option value="${escapeHtml(item.value)}" ${selectedOrganizationId === Number(item.value) ? 'selected' : ''}>${escapeHtml(`${branch}${item.label} [${type}]`)}</option>`;
+  }).join('');
+  $('#userFormFields').innerHTML = `${configuredFields}
+    <section class="runtime-form-section">
+      <div class="runtime-form-section-grid">
+        <div class="runtime-form-field">
+          <label><span class="field-label-text">Organization Unit <span class="required-text">*</span></span><select name="organizationNodeId" required>${organizationOptions}</select></label>
+        </div>
+      </div>
+    </section>`;
 }
 
 function renderFieldConfig() {
@@ -3446,13 +3462,14 @@ function renderPermissionPicker(kind, action, items, selectedValues = []) {
         <input type="search" data-permission-search placeholder="Search ${kind}" aria-label="Search ${kind} for ${escapeHtml(permissionActionLabel(action))}">
         <span>${selectedCount}/${items.length}</span>
       </div>
-      <div class="permission-check-list">
+      <div class="permission-check-list ${kind === 'departments' ? 'permission-department-tree' : ''}">
         ${items.map((item) => `
-          <label class="permission-check" data-permission-option data-search="${escapeHtml(item.search || item.label)}">
+          <label class="permission-check ${kind === 'departments' ? 'permission-department-node' : ''}" data-permission-option data-search="${escapeHtml(item.search || item.label)}" ${kind === 'departments' ? `style="--permission-tree-depth:${Number(item.depth || 0)}"` : ''}>
+            ${kind === 'departments' ? `<span class="permission-tree-branch" aria-hidden="true">${item.hasChildren ? '▾' : ''}</span>` : ''}
             <input type="checkbox" value="${escapeHtml(item.value)}" ${selected.has(String(item.value)) ? 'checked' : ''}>
             <span>
-              <strong>${escapeHtml(item.label)}</strong>
-              ${item.meta ? `<small>${escapeHtml(item.meta)}</small>` : ''}
+              <strong>${escapeHtml(item.label)}</strong>${kind === 'departments' ? `<small class="permission-unit-badge">${escapeHtml(item.type === 'organization' ? 'ORG' : item.type === 'department' ? 'DEPT' : 'GROUP')}</small>` : ''}
+              ${item.meta && kind !== 'departments' ? `<small>${escapeHtml(item.meta)}</small>` : ''}
             </span>
           </label>
         `).join('') || '<p class="muted permission-empty">No options found.</p>'}
@@ -3478,7 +3495,7 @@ function renderPermissions() {
   if (selector) selector.value = state.activePermissionModule;
   const permissions = state.permissionMatrix?.permissions || {};
 
-  body.innerHTML = permissionActions.map((action) => `
+  body.innerHTML = workspacePermissionActions.map((action) => `
     <tr data-permission-action-row="${escapeHtml(action)}">
       <td>
         <strong>${escapeHtml(permissionActionLabel(action))}</strong>
@@ -3520,12 +3537,20 @@ function filterPermissionPicker(picker) {
 }
 
 function collectPermissionMatrix() {
-  const permissions = {};
+  const permissions = Object.fromEntries(permissionActions.map((action) => {
+    const existing = state.permissionMatrix?.permissions?.[action] || {};
+    return [action, {
+      roles: [...(existing.roles || [])],
+      users: [...(existing.users || [])],
+      departments: action === 'view' ? [...(existing.departments || [])] : []
+    }];
+  }));
   $$('#permissionRows [data-permission-action-row]').forEach((row) => {
     const action = row.dataset.permissionActionRow;
     permissions[action] = {
       roles: checkedValues(row.querySelector('[data-permission-picker="roles"]')),
-      users: checkedValues(row.querySelector('[data-permission-picker="users"]'))
+      users: checkedValues(row.querySelector('[data-permission-picker="users"]')),
+      departments: action === 'view' ? (state.permissionMatrix?.permissions?.view?.departments || []) : []
     };
   });
   return permissions;
@@ -3595,6 +3620,26 @@ async function savePermissionMatrix() {
   }
 }
 
+function permissionDepartmentItems() {
+  const items = [];
+  const root = state.departmentNodes.find((node) => node.type === 'organization');
+  function append(node, depth = 0, path = '') {
+    const nodePath = path ? `${path} / ${node.name}` : node.name;
+    items.push({
+      value: String(node.id),
+      label: node.name,
+      meta: node.type === 'organization' ? 'All organization units' : nodePath,
+      search: `${node.name} ${node.type} ${nodePath}`,
+      depth,
+      type: node.type,
+      hasChildren: departmentChildren(node.id).length > 0
+    });
+    departmentChildren(node.id).forEach((child) => append(child, depth + 1, nodePath));
+  }
+  if (root) append(root);
+  return items;
+}
+
 function closePageViewPermissionModal() {
   const modal = $('#pageViewPermissionModal');
   if (!modal) return;
@@ -3633,11 +3678,8 @@ function renderPageViewPermissionModal() {
       <div class="page-view-access-grid">
         <section class="page-permission-access-column">
           <strong>Departments</strong>
-          <div class="page-department-planned" aria-disabled="true">
-            <span class="status-pill status-draft">Planned</span>
-            <strong>Department Access</strong>
-            <small>Will use backend department membership when the Department module is implemented.</small>
-          </div>
+          ${renderPermissionPicker('departments', 'view', permissionDepartmentItems(), viewPermission.departments)}
+          <small class="permission-inheritance-note">Selecting a unit includes users assigned to that unit and its descendants.</small>
         </section>
         <section class="page-permission-access-column">
           <strong>Roles</strong>
@@ -3719,7 +3761,8 @@ async function savePageViewPermission(event) {
       const action = row.dataset.pagePermissionAction;
       permissions[action] = {
         roles: checkedValues(row.querySelector('[data-permission-picker="roles"]')),
-        users: checkedValues(row.querySelector('[data-permission-picker="users"]'))
+        users: checkedValues(row.querySelector('[data-permission-picker="users"]')),
+        departments: action === 'view' ? checkedValues(row.querySelector('[data-permission-picker="departments"]')) : []
       };
     });
     const saved = await api(`/api/sysadmin/modules/${moduleKey}/permissions`, {
@@ -5405,7 +5448,7 @@ function formatImportResult(result, refreshFailed = false) {
 }
 
 async function loadBootstrap() {
-  const [countries, users, customerConfig, userConfig, browserButtons, adminModules, publishedModules] = await Promise.all([
+  const [countries, users, customerConfig, userConfig, browserButtons, adminModules, publishedModules, departments] = await Promise.all([
     api('/api/countries'),
     api('/api/users').catch((error) => {
       if (state.user?.role === 'admin') throw error;
@@ -5418,7 +5461,8 @@ async function loadBootstrap() {
     }),
     api(state.user?.role === 'admin' ? '/api/sysadmin/browser-buttons' : '/api/browser-buttons'),
     state.user?.role === 'admin' ? api('/api/sysadmin/modules') : Promise.resolve({ modules: [] }),
-    api('/api/modules').catch(() => ({ modules: [] }))
+    api('/api/modules').catch(() => ({ modules: [] })),
+    state.user?.role === 'admin' ? api('/api/departments') : Promise.resolve({ nodes: [] })
   ]);
 
   state.countries = countries.countries;
@@ -5426,6 +5470,7 @@ async function loadBootstrap() {
   state.browserButtons = browserButtons.browserButtons || [];
   state.adminModules = adminModules.modules || [];
   state.publishedModules = publishedModules.modules || [];
+  state.departmentNodes = departments.nodes || [];
   syncConfigModuleCatalog();
   state.customerFields = customerConfig.fields;
   state.customerPermissions = customerConfig.permissions || {};
@@ -5637,6 +5682,7 @@ function customerFormData(form) {
 
 function userFormData(form) {
   const data = serializeForm(form);
+  data.organizationNodeId = data.organizationNodeId ? Number(data.organizationNodeId) : null;
   if (data.password) {
     data.password = data.password.trim();
   }

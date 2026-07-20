@@ -2,7 +2,7 @@ const { pool } = require('../../database/pool');
 
 async function findUserByEmail(email) {
   const [rows] = await pool.execute(
-    `SELECT id, staff_id, name, email, password_hash, role, status
+    `SELECT id, staff_id, name, email, password_hash, role, status, organization_node_id
      FROM users
      WHERE email = ?
      LIMIT 1`,
@@ -13,7 +13,7 @@ async function findUserByEmail(email) {
 
 async function findUserById(id) {
   const [rows] = await pool.execute(
-    `SELECT id, staff_id, name, email, role, status
+    `SELECT id, staff_id, name, email, role, status, organization_node_id
      FROM users
      WHERE id = ?
      LIMIT 1`,

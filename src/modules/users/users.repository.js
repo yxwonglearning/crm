@@ -84,7 +84,7 @@ async function listUsers(filters = {}, fields = []) {
   addFieldFilter(where, values, fields, filters);
 
   const [rows] = await pool.execute(
-    `SELECT id, staff_id, name, email, role, status, custom_fields, created_at, updated_at
+    `SELECT id, staff_id, name, email, role, status, organization_node_id, custom_fields, created_at, updated_at
      FROM users
      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
      ORDER BY name ASC`,
@@ -95,7 +95,7 @@ async function listUsers(filters = {}, fields = []) {
 
 async function findUserById(id) {
   const [rows] = await pool.execute(
-    `SELECT id, staff_id, name, email, role, status, custom_fields, created_at, updated_at
+    `SELECT id, staff_id, name, email, role, status, organization_node_id, custom_fields, created_at, updated_at
      FROM users
      WHERE id = ?
      LIMIT 1`,
@@ -117,9 +117,9 @@ async function findUserCredentialsById(id) {
 
 async function createUser(user) {
   const [result] = await pool.execute(
-    `INSERT INTO users (staff_id, name, email, password_hash, role, status, custom_fields)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [user.staffId || null, user.name, user.email.toLowerCase(), user.passwordHash, user.role, user.status, JSON.stringify(user.customFields || {})]
+    `INSERT INTO users (staff_id, name, email, password_hash, role, status, organization_node_id, custom_fields)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [user.staffId || null, user.name, user.email.toLowerCase(), user.passwordHash, user.role, user.status, user.organizationNodeId || null, JSON.stringify(user.customFields || {})]
   );
   return result.insertId;
 }

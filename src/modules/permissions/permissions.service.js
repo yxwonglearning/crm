@@ -2,6 +2,7 @@ const { AppError } = require('../../shared/errors');
 const moduleConfig = require('../sysadmin/module-config.service');
 const moduleRepository = require('../sysadmin/module-config.repository');
 const repository = require('./permissions.repository');
+const departmentRepository = require('../departments/departments.repository');
 
 const roles = ['admin', 'manager', 'user'];
 const actions = ['view', 'create', 'edit', 'import', 'export'];
@@ -182,21 +183,41 @@ async function saveFieldPermissionMatrix(moduleKey, matrix) {
 
 async function listModulePermissionMatrix(moduleKey) {
   const config = await moduleConfig.getModuleConfig(moduleKey);
-  const rows = await repository.listModulePermissions(moduleKey);
+  const [rows, departmentIds] = await Promise.all([
+    repository.listModulePermissions(moduleKey),
+    repository.listModuleDepartmentPermissions(moduleKey)
+  ]);
   const defaultSubjects = config.module?.system ? defaultSubjectsForModule() : blankActionSubjects(moduleActions);
+  const permissions = subjectsFromRows(moduleActions, rows, rows.length > 0 || departmentIds.length > 0, defaultSubjects);
+  permissions.view.departments = departmentIds.map(String);
   return {
     module: config.module,
     roles,
     actions: moduleActions,
-    permissions: subjectsFromRows(moduleActions, rows, rows.length > 0, defaultSubjects)
+    permissions
   };
 }
 
 async function saveModulePermissionMatrix(moduleKey, permissions) {
   const module = await moduleRepository.findModuleByKey(moduleKey);
   if (!module) throw new AppError('Module not found', 404);
+  const departmentIds = [...new Set((permissions.view?.departments || []).map(Number).filter((id) => Number.isInteger(id) && id > 0))];
+  for (const id of departmentIds) {
+    if (!await departmentRepository.findById(id)) throw new AppError('Organization unit not found', 422);
+  }
   await repository.replaceModulePermissions(module.id, flattenActionSubjects(permissions, moduleActions));
+  await repository.replaceModuleDepartmentPermissions(module.id, departmentIds);
   return listModulePermissionMatrix(moduleKey);
+}
+
+async function departmentViewAllowed(moduleKey, user) {
+  if (!user?.organization_node_id) return false;
+  const [allowedIds, membershipIds] = await Promise.all([
+    repository.listModuleDepartmentPermissions(moduleKey),
+    departmentRepository.ancestorIds(Number(user.organization_node_id))
+  ]);
+  const allowed = new Set(allowedIds);
+  return membershipIds.some((id) => allowed.has(id));
 }
 
 async function userModulePermissions(moduleKey, user) {
@@ -213,10 +234,12 @@ async function userModulePermissions(moduleKey, user) {
     || (row.subject_type === 'user' && row.subject_key === userId)
   ));
 
-  return moduleActions.reduce((result, action) => ({
+  const result = moduleActions.reduce((result, action) => ({
     ...result,
     [action]: matchingRows.some((row) => rowAllows(row, action))
   }), {});
+  if (!result.view) result.view = await departmentViewAllowed(moduleKey, user);
+  return result;
 }
 
 async function userModulePageAccessAllowed(moduleKey, user) {
@@ -228,7 +251,8 @@ async function userModulePagePermissions(moduleKey, user) {
   const empty = moduleActions.reduce((result, action) => ({ ...result, [action]: false }), {});
   if (!user) return empty;
   const rows = await repository.listModulePermissions(moduleKey);
-  if (!rows.length) return empty;
+  const hasDepartmentView = await departmentViewAllowed(moduleKey, user);
+  if (!rows.length && !hasDepartmentView) return empty;
 
   const userId = String(user.id);
   const role = String(user.role);
@@ -239,7 +263,7 @@ async function userModulePagePermissions(moduleKey, user) {
 
   return moduleActions.reduce((result, action) => ({
     ...result,
-    [action]: matchingRows.some((row) => rowAllows(row, action))
+    [action]: action === 'view' ? hasDepartmentView || matchingRows.some((row) => rowAllows(row, action)) : matchingRows.some((row) => rowAllows(row, action))
   }), {});
 }
 

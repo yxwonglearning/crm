@@ -123,7 +123,8 @@ const browserButtonSchema = z.object({
 const updateBrowserButtonSchema = browserButtonSchema.partial();
 const permissionSubjectSchema = z.object({
   roles: z.array(z.enum(['admin', 'manager', 'user'])).optional(),
-  users: z.array(z.coerce.number().int().positive()).optional()
+  users: z.array(z.coerce.number().int().positive()).optional(),
+  departments: z.array(z.coerce.number().int().positive()).optional()
 });
 const fieldPermissionSchema = z.object({
   fieldKey: z.string().trim().min(1).max(80),

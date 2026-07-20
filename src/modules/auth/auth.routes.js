@@ -1,6 +1,6 @@
 const express = require('express');
 const { z } = require('zod');
-const { asyncHandler } = require('../../shared/errors');
+const { AppError, asyncHandler } = require('../../shared/errors');
 const { validate } = require('../../shared/validation');
 const { login } = require('./auth.service');
 const { requireAuth } = require('./auth.middleware');
