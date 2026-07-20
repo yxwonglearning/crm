@@ -71,7 +71,8 @@ The sections below serve as the detailed project log, implementation notes, feat
 - Modal forms for adding/editing customers and users.
 - Customer import modal with template download, file upload, and import result display.
 - Customer export download with admin-configured export columns.
-- Admin Portal with sections for Modules, Form Builder, Browser Buttons, Module Pages, Action Flow, and Permissions.
+- Admin Portal with sections for Modules, Departments, Form Builder, Browser Buttons, Module Pages, Action Flow, and Permissions.
+- Flexible Department hierarchy management with one Organization root, Departments and Groups at any depth, manual maintenance, and Excel template/import support.
 - Form Builder for customer and user field configuration.
 - Module-first Browser Buttons workspace for reusable master-data lookup definitions shared across modules.
 - Browser Button definitions are grouped by module, can still target main or detail tables inside that module, and support guarded SQL `WHERE` conditions plus checkbox-based Search Fields and Display Columns.
@@ -128,6 +129,7 @@ Backend modules live in `src/modules/*`:
 - `auth`
 - `countries`
 - `customers`
+- `departments`
 - `imports`
 - `sysadmin`
 - `users`
@@ -154,6 +156,14 @@ Admins should have a dedicated portal for configuring the CRM:
 - `Permissions`: control who can view, create, edit, delete, import, export, and configure each module.
 
 ### Recommended Build Phases And Progress
+
+0. Platform foundation: Department hierarchy - management slice complete
+   - Admin Portal has a dedicated `Departments` workspace using the same three-panel design language as the other builders.
+   - A single default `Organization` root is created automatically.
+   - Admins can create, edit, enable, disable, and delete Departments and Groups beneath the Organization or any other unit.
+   - The backend supports both flat and deeply nested organization structures and prevents deletion of the Organization or nodes that still contain children.
+   - Admins can download an Excel template and batch-import arbitrary hierarchy levels using Parent Path, Name, Type, and Description columns.
+   - User membership assignment and Department-based Page View permission enforcement are the next integration slice.
 
 1. Phase 1: Dedicated Admin Portal - mostly done
    - Converted the old sysadmin area into `Admin Portal`.

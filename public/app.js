@@ -45,6 +45,8 @@ const state = {
   browserButtons: [],
   apiConnectors: [],
   apiConnectorCategories: [],
+  departmentNodes: [],
+  activeDepartmentNodeId: 0,
   activeApiTab: 'connectors',
   activeApiCategory: 'all',
   apiCategorySearch: '',
@@ -2330,6 +2332,7 @@ function showView(id) {
   closeModuleRecordModal();
   closeApiConnectorModal();
   closeApiInterfaceModal();
+  closeDepartmentNodeModal();
   closeFormBuilderCreateModal();
   closeFieldConfigModal();
   closeFormDesignDrawer();
@@ -4427,6 +4430,119 @@ async function deleteApiCategory(categoryKey) {
   toast('Category Deleted.');
 }
 
+function departmentNode(id) {
+  return state.departmentNodes.find((node) => node.id === Number(id));
+}
+
+function departmentChildren(parentId) {
+  return state.departmentNodes.filter((node) => Number(node.parentId || 0) === Number(parentId || 0));
+}
+
+function renderDepartmentWorkspace() {
+  const tree = $('#departmentTree');
+  const rows = $('#departmentRows');
+  if (!tree || !rows) return;
+  const organization = state.departmentNodes.find((node) => node.type === 'organization');
+  if (!state.activeDepartmentNodeId && organization) state.activeDepartmentNodeId = organization.id;
+  const treeRows = [];
+  function appendTree(node, depth = 0) {
+    treeRows.push({ node, depth });
+    departmentChildren(node.id).forEach((child) => appendTree(child, depth + 1));
+  }
+  if (organization) appendTree(organization);
+  tree.innerHTML = treeRows.map(({ node, depth }) => `
+    <button type="button" class="department-tree-item ${node.id === state.activeDepartmentNodeId ? 'is-active' : ''}" data-department-node="${node.id}" style="--tree-depth:${depth}">
+      <span>${departmentChildren(node.id).length ? '▾ ' : ''}${escapeHtml(node.name)}</span>
+      <small>${departmentChildren(node.id).length}</small>
+    </button>`).join('') || '<p class="muted">Loading organization...</p>';
+  const active = departmentNode(state.activeDepartmentNodeId) || organization;
+  const visible = departmentChildren(active?.id);
+  rows.innerHTML = visible.map((node) => `
+    <tr><td><strong>${escapeHtml(node.name)}</strong></td><td>${escapeHtml(titleCaseMessage(node.type))}</td><td>${escapeHtml(node.parentName || '—')}</td><td>${escapeHtml(node.description || '—')}</td><td><span class="status-pill ${node.enabled ? 'status-live' : 'status-draft'}">${node.enabled ? 'Enabled' : 'Disabled'}</span></td><td><button type="button" class="link-button" data-edit-department-node="${node.id}">Edit</button> <button type="button" class="link-button" data-delete-department-node="${node.id}">Delete</button></td></tr>`).join('') || '<tr><td colspan="6" class="muted">No child units yet.</td></tr>';
+  $('#newDepartmentNodeButton').disabled = active?.enabled === false;
+  $('#newGroupNodeButton').disabled = active?.enabled === false;
+}
+
+async function loadDepartmentHierarchy() {
+  const result = await api('/api/departments');
+  state.departmentNodes = result.nodes || [];
+  if (!departmentNode(state.activeDepartmentNodeId)) state.activeDepartmentNodeId = state.departmentNodes.find((node) => node.type === 'organization')?.id || 0;
+  renderDepartmentWorkspace();
+}
+
+function closeDepartmentNodeModal() {
+  $('#departmentNodeModal').hidden = true;
+  if ($$('.modal-backdrop').every((item) => item.hidden)) document.body.classList.remove('modal-open');
+}
+
+function openDepartmentNodeModal(nodeId = 0, requestedType = 'department') {
+  const form = $('#departmentNodeForm');
+  const node = departmentNode(nodeId);
+  const active = departmentNode(state.activeDepartmentNodeId) || state.departmentNodes.find((item) => item.type === 'organization');
+  const type = node?.type || requestedType;
+  const parents = state.departmentNodes.filter((item) => item.enabled && item.id !== node?.id);
+  form.reset();
+  form.elements.id.value = node?.id || '';
+  form.elements.type.value = type;
+  form.elements.type.disabled = Boolean(node);
+  form.elements.parentId.innerHTML = parents.map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join('');
+  form.elements.parentId.value = String(node?.parentId || (parents.some((item) => item.id === active?.id) ? active.id : parents[0]?.id || ''));
+  form.elements.parentId.disabled = Boolean(node);
+  form.elements.name.value = node?.name || '';
+  form.elements.description.value = node?.description || '';
+  form.elements.enabled.checked = node?.enabled !== false;
+  $('#departmentNodeFormTitle').textContent = node ? `Edit ${titleCaseMessage(type)}` : `New ${titleCaseMessage(type)}`;
+  $('#departmentNodeModal').hidden = false;
+  document.body.classList.add('modal-open');
+  form.elements.name.focus();
+}
+
+async function saveDepartmentNode(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const existing = departmentNode(form.elements.id.value);
+  await api('/api/departments', { method: 'POST', body: JSON.stringify({
+    id: existing?.id,
+    type: existing?.type || form.elements.type.value,
+    parentId: existing?.parentId || Number(form.elements.parentId.value),
+    name: form.elements.name.value.trim(),
+    description: form.elements.description.value.trim(),
+    enabled: form.elements.enabled.checked
+  }) });
+  closeDepartmentNodeModal();
+  await loadDepartmentHierarchy();
+  toast(existing ? 'Department Item Saved.' : 'Department Item Created.');
+}
+
+async function deleteDepartmentNode(id) {
+  const node = departmentNode(id);
+  if (!node) return;
+  const confirmed = await showConfirmationModal({ title: `Delete ${titleCaseMessage(node.type)}`, message: `Delete ${node.name}? This cannot be undone.`, confirmLabel: `Delete ${titleCaseMessage(node.type)}` });
+  if (!confirmed) return;
+  await api(`/api/departments/${id}`, { method: 'DELETE' });
+  state.activeDepartmentNodeId = node.parentId || 0;
+  await loadDepartmentHierarchy();
+  toast(`${titleCaseMessage(node.type)} Deleted.`);
+}
+
+async function importDepartments(file) {
+  const body = new FormData();
+  body.append('file', file);
+  const result = await api('/api/departments/import', { method: 'POST', body });
+  await loadDepartmentHierarchy();
+  toast(`Imported ${result.departmentsCreated} Department${result.departmentsCreated === 1 ? '' : 's'} And ${result.groupsCreated} Group${result.groupsCreated === 1 ? '' : 's'}.`);
+}
+
+async function downloadDepartmentTemplate() {
+  const response = await fetch('/api/departments/import/template', { headers: { Authorization: `Bearer ${await currentAuthToken()}` } });
+  if (!response.ok) throw new Error('Unable to download department template');
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(await response.blob());
+  link.download = 'department-hierarchy-import-template.xlsx';
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
 function interfaceConnectorOptions(selected = '') {
   return `<option value="">Select a connector</option>${state.apiConnectors.map((connector) => (
     `<option value="${escapeHtml(connector.connectorKey)}" ${connector.connectorKey === selected ? 'selected' : ''}>${escapeHtml(connector.name)}</option>`
@@ -5633,7 +5749,45 @@ function bindEvents() {
           toast(titleCaseMessage(error.message), 'error');
         }
       }
+      if (button.dataset.adminSection === 'adminDepartmentsSection') {
+        try {
+          await loadDepartmentHierarchy();
+        } catch (error) {
+          toast(titleCaseMessage(error.message), 'error');
+        }
+      }
     });
+  });
+  $('#departmentTree')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-department-node]');
+    if (!button) return;
+    state.activeDepartmentNodeId = Number(button.dataset.departmentNode);
+    renderDepartmentWorkspace();
+  });
+  $('#departmentRows')?.addEventListener('click', (event) => {
+    const edit = event.target.closest('[data-edit-department-node]');
+    const remove = event.target.closest('[data-delete-department-node]');
+    if (edit) openDepartmentNodeModal(Number(edit.dataset.editDepartmentNode));
+    if (remove) deleteDepartmentNode(Number(remove.dataset.deleteDepartmentNode)).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  });
+  $('#newDepartmentNodeButton')?.addEventListener('click', () => openDepartmentNodeModal(0, 'department'));
+  $('#newGroupNodeButton')?.addEventListener('click', () => openDepartmentNodeModal(0, 'group'));
+  $('#closeDepartmentNodeModal')?.addEventListener('click', closeDepartmentNodeModal);
+  $('#cancelDepartmentNodeModal')?.addEventListener('click', closeDepartmentNodeModal);
+  $('#departmentNodeModal')?.addEventListener('click', (event) => { if (event.target === event.currentTarget) closeDepartmentNodeModal(); });
+  $('#departmentNodeForm')?.addEventListener('submit', (event) => saveDepartmentNode(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  $('#departmentNodeForm select[name="type"]')?.addEventListener('change', (event) => {
+    if (!$('#departmentNodeForm').elements.id.value) $('#departmentNodeFormTitle').textContent = `New ${titleCaseMessage(event.target.value)}`;
+  });
+  $('#importDepartmentsButton')?.addEventListener('click', () => $('#departmentImportFile').click());
+  $('#departmentImportFile')?.addEventListener('change', (event) => {
+    const file = event.currentTarget.files?.[0];
+    if (file) importDepartments(file).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+    event.currentTarget.value = '';
+  });
+  $('#downloadDepartmentTemplate')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    downloadDepartmentTemplate().catch((error) => toast(titleCaseMessage(error.message), 'error'));
   });
   $('#toggleAdminMenu').addEventListener('click', toggleAdminMenu);
   $('#addFormBuilderButton')?.addEventListener('click', openFormBuilderCreateModal);
@@ -6218,6 +6372,10 @@ function bindEvents() {
     if (event.key !== 'Escape') return;
     if (!$('#confirmationModal').hidden) {
       closeConfirmationModal(false);
+      return;
+    }
+    if (!$('#departmentNodeModal').hidden) {
+      closeDepartmentNodeModal();
       return;
     }
     if (!$('#customerModal').hidden) {

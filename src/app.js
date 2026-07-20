@@ -13,6 +13,7 @@ const { sysadminRoutes } = require('./modules/sysadmin/module-config.routes');
 const { browserButtonRoutes } = require('./modules/browser-buttons/browser-buttons.routes');
 const { moduleRecordRoutes } = require('./modules/module-records/module-records.routes');
 const { actionFlowRoutes } = require('./modules/action-flows/action-flows.routes');
+const { departmentRoutes } = require('./modules/departments/departments.routes');
 
 function createApp() {
   const app = express();
@@ -36,6 +37,7 @@ function createApp() {
   app.use('/api/browser-buttons', browserButtonRoutes);
   app.use('/api/modules', moduleRecordRoutes);
   app.use('/api/action-flows', actionFlowRoutes);
+  app.use('/api/departments', departmentRoutes);
   app.use('/api/sysadmin', sysadminRoutes);
   app.use('/api', notFoundHandler);
 

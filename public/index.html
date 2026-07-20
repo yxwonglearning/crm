@@ -258,6 +258,10 @@
                 <span>Modules</span>
                 <small>CRM objects and publish state</small>
               </button>
+              <button type="button" class="admin-section-button" data-admin-section="adminDepartmentsSection" data-short="D">
+                <span>Departments</span>
+                <small>Organization hierarchy</small>
+              </button>
               <button type="button" class="admin-section-button" data-admin-section="adminFormsSection" data-short="F">
                 <span>Form Builder</span>
                 <small>Fields, forms, table columns</small>
@@ -312,6 +316,30 @@
                       </thead>
                       <tbody id="moduleBuilderRows"></tbody>
                     </table>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section id="adminDepartmentsSection" class="admin-section" hidden>
+              <div class="builder-layout department-builder-layout">
+                <aside class="builder-list department-tree-panel">
+                  <div class="builder-list-heading"><strong>Organization Structure</strong></div>
+                  <div id="departmentTree" class="department-tree"></div>
+                </aside>
+                <div class="builder-main">
+                  <div class="section-heading">
+                    <div><h2>Departments</h2><p>Build a flexible organization tree with Departments and Groups at any depth.</p></div>
+                    <div class="section-heading-actions">
+                      <a class="secondary button-link" href="/api/departments/import/template" id="downloadDepartmentTemplate">Download Template</a>
+                      <button type="button" class="secondary" id="importDepartmentsButton">Import</button>
+                      <button type="button" class="secondary" id="newGroupNodeButton">New Group</button>
+                      <button type="button" id="newDepartmentNodeButton">New Department</button>
+                    </div>
+                  </div>
+                  <input id="departmentImportFile" type="file" accept=".xlsx,.xls" hidden>
+                  <div class="table-wrap">
+                    <table><thead><tr><th>Name</th><th>Level</th><th>Parent</th><th>Description</th><th>Status</th><th>Actions</th></tr></thead><tbody id="departmentRows"></tbody></table>
                   </div>
                 </div>
               </div>
@@ -1422,6 +1450,19 @@
           <button type="button" class="secondary" id="cancelConfirmationModal">Cancel</button>
         </div>
       </div>
+    </div>
+
+    <div id="departmentNodeModal" class="modal-backdrop" hidden>
+      <form id="departmentNodeForm" class="panel modal-card narrow-modal">
+        <div class="modal-header"><h2 id="departmentNodeFormTitle">New Department</h2><div class="modal-title-actions"><button type="button" class="icon-button" id="closeDepartmentNodeModal" aria-label="Close">x</button></div></div>
+        <input name="id" type="hidden">
+        <label>Level<select name="type"><option value="department">Department</option><option value="group">Group</option></select></label>
+        <label>Parent<select name="parentId" required></select></label>
+        <label>Name<input name="name" maxlength="120" required></label>
+        <label>Description<textarea name="description" rows="4" maxlength="255"></textarea></label>
+        <label class="checkbox-label"><input name="enabled" type="checkbox" checked> Enabled</label>
+        <div class="form-actions end-actions"><button type="submit">Save</button><button type="button" class="secondary" id="cancelDepartmentNodeModal">Cancel</button></div>
+      </form>
     </div>
     <script src="/app.js"></script>
   </body>

@@ -306,6 +306,28 @@ async function main() {
   await ensureColumn(connection, 'crm_api_connectors', 'category_key', '`category_key` VARCHAR(80) NULL AFTER `base_url`');
   await connection.execute("ALTER TABLE crm_api_connectors MODIFY COLUMN auth_type ENUM('none', 'api_key', 'bearer', 'basic', 'oauth', 'oauth1', 'oauth2') NOT NULL DEFAULT 'none'");
   await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_department_nodes (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      node_key VARCHAR(80) NOT NULL,
+      name VARCHAR(120) NOT NULL,
+      node_type ENUM('organization', 'department', 'group') NOT NULL,
+      parent_id BIGINT UNSIGNED NULL,
+      description VARCHAR(255) NULL,
+      is_enabled TINYINT(1) NOT NULL DEFAULT 1,
+      created_by BIGINT UNSIGNED NULL,
+      updated_by BIGINT UNSIGNED NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY crm_department_nodes_key_unique (node_key),
+      UNIQUE KEY crm_department_nodes_parent_name_unique (parent_id, node_type, name),
+      KEY crm_department_nodes_parent_fk (parent_id),
+      CONSTRAINT crm_department_nodes_parent_fk FOREIGN KEY (parent_id) REFERENCES crm_department_nodes(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_department_nodes_created_by_fk FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+      CONSTRAINT crm_department_nodes_updated_by_fk FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await connection.query(
     `CREATE TABLE IF NOT EXISTS crm_action_flows (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
       flow_key VARCHAR(80) NOT NULL,

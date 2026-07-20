@@ -255,6 +255,41 @@ async function main() {
     expectStatus(update, 204, 'update user');
   });
 
+  await smoke('department hierarchy CRUD and Excel import smoke', async () => {
+    const initial = await request('GET', '/api/departments');
+    expectStatus(initial, 200, 'list department hierarchy');
+    const organization = initial.body.nodes.find((node) => node.type === 'organization');
+    assert.ok(organization, 'default Organization root should exist');
+
+    const department = await request('POST', '/api/departments', { json: { name: `${runId} Finance`, type: 'department', parentId: organization.id, description: 'Smoke department', enabled: true } });
+    expectStatus(department, 201, 'create department');
+    const group = await request('POST', '/api/departments', { json: { name: `${runId} Accounts`, type: 'group', parentId: department.body.node.id, description: 'Smoke group', enabled: true } });
+    expectStatus(group, 201, 'create department group');
+    const rootGroup = await request('POST', '/api/departments', { json: { name: `${runId} Shared Services`, type: 'group', parentId: organization.id, description: 'Direct organization group', enabled: true } });
+    expectStatus(rootGroup, 201, 'create group directly under organization');
+    const nestedDepartment = await request('POST', '/api/departments', { json: { name: `${runId} Billing`, type: 'department', parentId: group.body.node.id, description: 'Department nested below group', enabled: true } });
+    expectStatus(nestedDepartment, 201, 'create department below group');
+
+    const template = await request('GET', '/api/departments/import/template');
+    expectStatus(template, 200, 'download department import template');
+    assert.ok(template.buffer.length > 1000);
+    const importResult = await uploadWorkbook('/api/departments/import', workbookBuffer([
+      { 'Parent Path': `Organization/${runId} Operations`, Name: `${runId} Support`, Type: 'Group', Description: 'Imported nested group' },
+      { 'Parent Path': 'Organization', Name: `${runId} Operations`, Type: 'Department', Description: 'Imported department' }
+    ], 'Departments'), 'departments.xlsx');
+    expectStatus(importResult, 201, 'import department hierarchy');
+    assert.equal(importResult.body.departmentsCreated, 1);
+    assert.equal(importResult.body.groupsCreated, 1);
+
+    const importedNodes = importResult.body.hierarchy.nodes;
+    const importedGroup = importedNodes.find((node) => node.name === `${runId} Support`);
+    const importedDepartment = importedNodes.find((node) => node.name === `${runId} Operations`);
+    for (const node of [nestedDepartment.body.node, group.body.node, department.body.node, rootGroup.body.node, importedGroup, importedDepartment]) {
+      const deleted = await request('DELETE', `/api/departments/${node.id}`);
+      expectStatus(deleted, 200, `delete ${node.type}`);
+    }
+  });
+
   await smoke('Phase 2 module builder smoke', async () => {
     createdModuleKey = runId;
     const create = await request('POST', '/api/sysadmin/modules', {
