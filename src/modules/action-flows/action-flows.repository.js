@@ -33,6 +33,7 @@ function normalizeConnector(row) {
     connectorKey: row.connector_key,
     name: row.name,
     baseUrl: row.base_url,
+    categoryKey: row.category_key || '',
     authType: row.auth_type,
     authConfig: parseJson(row.auth_config_json, {}),
     defaultHeaders: parseJson(row.default_headers_json, {}),
@@ -165,6 +166,40 @@ async function listConnectors() {
   return rows.map(normalizeConnector);
 }
 
+function normalizeConnectorCategory(row) {
+  return { id: row.id, categoryKey: row.category_key, name: row.name, description: row.description || '', updatedAt: row.updated_at, createdAt: row.created_at };
+}
+
+async function listConnectorCategories() {
+  const [rows] = await pool.execute('SELECT * FROM crm_api_connector_categories ORDER BY name ASC');
+  return rows.map(normalizeConnectorCategory);
+}
+
+async function findConnectorCategoryByKey(categoryKey) {
+  const [rows] = await pool.execute('SELECT * FROM crm_api_connector_categories WHERE category_key = ? LIMIT 1', [categoryKey]);
+  return rows[0] ? normalizeConnectorCategory(rows[0]) : null;
+}
+
+async function saveConnectorCategory(category, userId) {
+  await pool.execute(
+    `INSERT INTO crm_api_connector_categories (category_key, name, description, created_by, updated_by)
+     VALUES (?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE name = VALUES(name), description = VALUES(description), updated_by = VALUES(updated_by)`,
+    [category.categoryKey, category.name, category.description || null, userId || null, userId || null]
+  );
+  return findConnectorCategoryByKey(category.categoryKey);
+}
+
+async function countConnectorsByCategory(categoryKey) {
+  const [rows] = await pool.execute('SELECT COUNT(*) AS count FROM crm_api_connectors WHERE category_key = ?', [categoryKey]);
+  return Number(rows[0]?.count || 0);
+}
+
+async function deleteConnectorCategory(categoryKey) {
+  const [result] = await pool.execute('DELETE FROM crm_api_connector_categories WHERE category_key = ?', [categoryKey]);
+  return result.affectedRows;
+}
+
 async function findConnectorByKey(connectorKey) {
   const [rows] = await pool.execute(
     'SELECT * FROM crm_api_connectors WHERE connector_key = ? LIMIT 1',
@@ -176,11 +211,12 @@ async function findConnectorByKey(connectorKey) {
 async function saveConnector(connector, userId) {
   await pool.execute(
     `INSERT INTO crm_api_connectors
-     (connector_key, name, base_url, auth_type, auth_config_json, default_headers_json, endpoints_json, is_enabled, created_by, updated_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     (connector_key, name, base_url, category_key, auth_type, auth_config_json, default_headers_json, endpoints_json, is_enabled, created_by, updated_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
        name = VALUES(name),
        base_url = VALUES(base_url),
+       category_key = VALUES(category_key),
        auth_type = VALUES(auth_type),
        auth_config_json = VALUES(auth_config_json),
        default_headers_json = VALUES(default_headers_json),
@@ -191,6 +227,7 @@ async function saveConnector(connector, userId) {
       connector.connectorKey,
       connector.name,
       connector.baseUrl,
+      connector.categoryKey || null,
       connector.authType,
       JSON.stringify(connector.authConfig || {}),
       JSON.stringify(connector.defaultHeaders || {}),
@@ -259,6 +296,10 @@ module.exports = {
   updateFlow,
   deleteFlow,
   listConnectors,
+  listConnectorCategories,
+  saveConnectorCategory,
+  countConnectorsByCategory,
+  deleteConnectorCategory,
   findConnectorByKey,
   saveConnector,
   deleteConnector,

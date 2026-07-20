@@ -1,5 +1,6 @@
 const dns = require('dns').promises;
 const net = require('net');
+const crypto = require('crypto');
 const { AppError } = require('../../shared/errors');
 const moduleConfig = require('../sysadmin/module-config.service');
 const moduleRecords = require('../module-records/module-records.repository');
@@ -7,6 +8,7 @@ const repository = require('./action-flows.repository');
 
 const REST_TIMEOUT_MS = 15000;
 const REST_MAX_RESPONSE_BYTES = 1024 * 1024;
+const oauth2TokenCache = new Map();
 
 function recordValues(record = {}) {
   return {
@@ -215,6 +217,121 @@ function applyApiKeyQuery(url, connector) {
   if (value) url.searchParams.set(name, value);
 }
 
+function connectorAuthType(connector) {
+  const config = connector.authConfig || {};
+  const type = connector.authType || config.authType || config.connection?.authMethod || 'none';
+  return type === 'oauth' ? 'oauth2' : type;
+}
+
+function oauthEncode(value) {
+  return encodeURIComponent(String(value ?? '')).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
+function oauth1Authorization(connector, method, url, body, headers) {
+  const config = connector.authConfig || {};
+  if (!config.consumerKey || !config.consumerSecret) throw new AppError('OAuth 1.0 requires a Consumer Key and Consumer Secret', 422);
+  const signatureMethod = config.signatureMethod === 'HMAC-SHA256' ? 'HMAC-SHA256' : 'HMAC-SHA1';
+  const oauth = {
+    oauth_consumer_key: config.consumerKey,
+    oauth_nonce: crypto.randomBytes(18).toString('hex'),
+    oauth_signature_method: signatureMethod,
+    oauth_timestamp: Math.floor(Date.now() / 1000),
+    oauth_version: '1.0'
+  };
+  if (config.accessToken) oauth.oauth_token = config.accessToken;
+  const parameters = [...url.searchParams.entries(), ...Object.entries(oauth)];
+  const contentType = String(headers['Content-Type'] || headers['content-type'] || '').toLowerCase();
+  if (contentType.includes('application/x-www-form-urlencoded') && typeof body === 'string') {
+    parameters.push(...new URLSearchParams(body).entries());
+  }
+  const normalized = parameters
+    .map(([key, value]) => [oauthEncode(key), oauthEncode(value)])
+    .sort(([leftKey, leftValue], [rightKey, rightValue]) => leftKey.localeCompare(rightKey) || leftValue.localeCompare(rightValue))
+    .map(([key, value]) => `${key}=${value}`)
+    .join('&');
+  const baseUrl = `${url.protocol}//${url.host}${url.pathname}`;
+  const signatureBase = [method.toUpperCase(), oauthEncode(baseUrl), oauthEncode(normalized)].join('&');
+  const signingKey = `${oauthEncode(config.consumerSecret)}&${oauthEncode(config.tokenSecret || '')}`;
+  oauth.oauth_signature = crypto
+    .createHmac(signatureMethod === 'HMAC-SHA256' ? 'sha256' : 'sha1', signingKey)
+    .update(signatureBase)
+    .digest('base64');
+  const values = Object.entries(oauth).map(([key, value]) => `${oauthEncode(key)}="${oauthEncode(value)}"`);
+  if (config.realm) values.unshift(`realm="${oauthEncode(config.realm)}"`);
+  return `OAuth ${values.join(', ')}`;
+}
+
+async function oauth2AccessToken(connector, allowPrivateNetwork) {
+  const config = connector.authConfig || {};
+  if (config.accessToken) return config.accessToken;
+  if ((config.grantType || 'client_credentials') !== 'client_credentials') {
+    throw new AppError('OAuth 2.0 Debug currently supports Client Credentials. Authorization Code, Password, and Refresh Token require their additional grant values.', 422);
+  }
+  if (!config.accessTokenUrl || !config.clientId || !config.clientSecret) {
+    throw new AppError('OAuth 2.0 requires an Access Token URL, Client ID, and Client Secret', 422);
+  }
+  const cacheIdentity = crypto.createHash('sha256').update(JSON.stringify({
+    accessTokenUrl: config.accessTokenUrl,
+    clientId: config.clientId,
+    clientSecret: config.clientSecret,
+    scope: config.scope || '',
+    clientAuthentication: config.clientAuthentication || 'basic'
+  })).digest('hex');
+  const cacheKey = `${connector.connectorKey}:${cacheIdentity}`;
+  const cached = oauth2TokenCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now() + 30000) return cached.token;
+  const tokenUrl = new URL(config.accessTokenUrl);
+  await assertRestUrlAllowed(tokenUrl, allowPrivateNetwork);
+  const tokenBody = new URLSearchParams({ grant_type: 'client_credentials' });
+  if (config.scope) tokenBody.set('scope', config.scope);
+  const tokenHeaders = { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' };
+  if (config.clientAuthentication === 'body') {
+    tokenBody.set('client_id', config.clientId);
+    tokenBody.set('client_secret', config.clientSecret);
+  } else {
+    tokenHeaders.Authorization = `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString('base64')}`;
+  }
+  let response;
+  try {
+    response = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: tokenHeaders,
+      body: tokenBody.toString(),
+      signal: AbortSignal.timeout(connectorTimeout(connector, {}))
+    });
+  } catch (error) {
+    throw new AppError(`OAuth 2.0 token request failed: ${error.message}`, 502);
+  }
+  const text = await response.text();
+  let payload;
+  try { payload = JSON.parse(text); } catch (_error) { payload = {}; }
+  if (!response.ok || !payload.access_token) {
+    const detail = payload.error_description || payload.error || text || `HTTP ${response.status}`;
+    throw new AppError(`OAuth 2.0 token request was rejected: ${String(detail).slice(0, 300)}`, 502);
+  }
+  const token = String(payload.access_token);
+  const expiresIn = Math.max(Number(payload.expires_in || 3600), 60);
+  oauth2TokenCache.set(cacheKey, { token, expiresAt: Date.now() + expiresIn * 1000 });
+  return token;
+}
+
+async function applyConnectorAuthentication(connector, method, url, headers, body, allowPrivateNetwork) {
+  const type = connectorAuthType(connector);
+  if (type === 'api_key') {
+    applyApiKeyQuery(url, connector);
+    Object.assign(headers, authHeaders(connector));
+  } else if (type === 'basic' || type === 'bearer') {
+    Object.assign(headers, authHeaders(connector));
+  } else if (type === 'oauth1') {
+    headers.Authorization = oauth1Authorization(connector, method, url, body, headers);
+  } else if (type === 'oauth2') {
+    const config = connector.authConfig || {};
+    const token = await oauth2AccessToken(connector, allowPrivateNetwork);
+    if (config.authorizationLocation === 'query') url.searchParams.set(config.tokenName || 'access_token', token);
+    else headers.Authorization = `${config.headerPrefix || 'Bearer'} ${token}`.trim();
+  }
+}
+
 function parseRestBody(endpoint, nodeConfig, context) {
   const mapping = parseMappingText(nodeConfig.requestMapping, context);
   if (Object.keys(mapping).length) return mapping;
@@ -240,6 +357,129 @@ function parseResponseBody(text, contentType) {
     }
   }
   return text;
+}
+
+function xmlEscape(value) {
+  return String(value ?? '').replace(/[<>&'"]/g, (character) => ({
+    '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;'
+  }[character]));
+}
+
+function objectToXml(value, rootName = 'request') {
+  const render = (name, item) => {
+    if (Array.isArray(item)) return item.map((entry) => render(name, entry)).join('');
+    if (item && typeof item === 'object') {
+      return `<${name}>${Object.entries(item).map(([key, entry]) => render(key, entry)).join('')}</${name}>`;
+    }
+    return `<${name}>${xmlEscape(item)}</${name}>`;
+  };
+  return render(rootName, value || {});
+}
+
+function debugRequestBody(request = {}, headers = {}) {
+  const values = request.body || {};
+  if (!Object.keys(values).length) return null;
+  const format = String(request.bodyFormat || 'application/json').toLowerCase();
+  if (format === 'none') return null;
+  if (format.includes('json')) {
+    if (!headers['Content-Type'] && !headers['content-type']) headers['Content-Type'] = 'application/json';
+    return JSON.stringify(values);
+  }
+  if (format.includes('xml')) {
+    if (!headers['Content-Type'] && !headers['content-type']) headers['Content-Type'] = 'application/xml';
+    return objectToXml(values);
+  }
+  if (format.includes('x-www-form-urlencoded')) {
+    if (!headers['Content-Type'] && !headers['content-type']) headers['Content-Type'] = 'application/x-www-form-urlencoded';
+    return new URLSearchParams(Object.entries(values).map(([key, value]) => [key, String(value ?? '')])).toString();
+  }
+  if (format.includes('multipart/form-data')) {
+    const form = new FormData();
+    Object.entries(values).forEach(([key, value]) => form.append(key, typeof value === 'object' ? JSON.stringify(value) : String(value ?? '')));
+    return form;
+  }
+  const text = Object.keys(values).length === 1 ? Object.values(values)[0] : JSON.stringify(values);
+  if (!headers['Content-Type'] && !headers['content-type']) headers['Content-Type'] = format;
+  return format.includes('octet-stream') ? Buffer.from(String(text ?? '')) : String(text ?? '');
+}
+
+function statusMatchesRule(status, rule) {
+  const source = String(rule || '200-299').trim();
+  return source.split(',').some((part) => {
+    const value = part.trim();
+    const range = value.match(/^(\d{3})\s*-\s*(\d{3})$/);
+    if (range) return status >= Number(range[1]) && status <= Number(range[2]);
+    return /^\d{3}$/.test(value) && status === Number(value);
+  });
+}
+
+function redactedHeaders(headers = {}) {
+  return Object.entries(headers).reduce((result, [key, value]) => {
+    result[key] = /authorization|api[-_]?key|token|secret/i.test(key) ? '[redacted]' : value;
+    return result;
+  }, {});
+}
+
+function redactedRequestUrl(url, connector) {
+  const safeUrl = new URL(url.toString());
+  const config = connector.authConfig || {};
+  if (connectorAuthType(connector) === 'api_key' && config.apiKeyLocation === 'query') {
+    safeUrl.searchParams.set(config.apiKeyName || 'api_key', '[redacted]');
+  }
+  if (connectorAuthType(connector) === 'oauth2' && config.authorizationLocation === 'query') {
+    safeUrl.searchParams.set(config.tokenName || 'access_token', '[redacted]');
+  }
+  return safeUrl.toString();
+}
+
+async function debugConnectorRequest(connector, endpoint = {}) {
+  if (!connector || !connector.enabled) throw new AppError('API connector is missing or disabled', 422);
+  const method = String(endpoint.method || 'GET').toUpperCase();
+  const request = endpoint.interfaceConfig?.request || {};
+  const outcome = endpoint.interfaceConfig?.outcome || {};
+  const url = joinUrl(connector.baseUrl, endpoint.path);
+  await assertRestUrlAllowed(url, Boolean(connector.authConfig?.runtime?.allowPrivateNetwork));
+  Object.entries(request.params || {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
+  });
+  const headers = { ...(connector.defaultHeaders || {}), ...(request.headers || {}) };
+  let body = null;
+  if (!['GET', 'HEAD'].includes(method)) {
+    body = debugRequestBody(request, headers);
+  }
+  await applyConnectorAuthentication(connector, method, url, headers, body, Boolean(connector.authConfig?.runtime?.allowPrivateNetwork));
+  const options = { method, headers, signal: AbortSignal.timeout(connectorTimeout(connector, {})) };
+  if (body !== null) options.body = body;
+  const startedAt = Date.now();
+  let response;
+  try {
+    response = await fetch(url, options);
+  } catch (error) {
+    const timedOut = error.name === 'TimeoutError' || error.name === 'AbortError';
+    throw new AppError(timedOut ? (outcome.timeoutMessage || 'The request timed out.') : (outcome.exceptionMessage || error.message || 'The request could not be completed.'), timedOut ? 504 : 502);
+  }
+  const contentLength = Number(response.headers.get('content-length') || 0);
+  if (contentLength > REST_MAX_RESPONSE_BYTES) throw new AppError('API response exceeded the 1 MB test limit', 502);
+  const { text, truncated } = await readResponseTextLimited(response);
+  const responseHeaders = Object.fromEntries(response.headers.entries());
+  return {
+    request: { method, url: redactedRequestUrl(url, connector), headers: redactedHeaders(headers), bodyFormat: request.bodyFormat || 'application/json' },
+    response: {
+      status: response.status,
+      statusText: response.statusText,
+      headers: responseHeaders,
+      body: parseResponseBody(text, response.headers.get('content-type') || ''),
+      contentType: response.headers.get('content-type') || '',
+      sizeBytes: Buffer.byteLength(text),
+      truncated,
+      durationMs: Date.now() - startedAt
+    },
+    outcome: {
+      success: statusMatchesRule(response.status, outcome.successStatuses),
+      rule: outcome.successStatuses || '200-299',
+      message: statusMatchesRule(response.status, outcome.successStatuses) ? '' : (outcome.failureMessage || 'The response did not meet the success condition.')
+    }
+  };
 }
 
 async function readResponseTextLimited(response) {
@@ -370,7 +610,6 @@ async function executeRestAction(node, context) {
   const requestValues = parseRestBody(endpoint, nodeConfig, context);
   const allowPrivateNetwork = Boolean(nodeConfig.allowPrivateNetwork || connector.authConfig?.runtime?.allowPrivateNetwork);
   await assertRestUrlAllowed(url, allowPrivateNetwork);
-  applyApiKeyQuery(url, connector);
 
   if (['GET', 'DELETE'].includes(method) && requestValues && typeof requestValues === 'object' && !Array.isArray(requestValues)) {
     Object.entries(requestValues).forEach(([key, value]) => {
@@ -380,20 +619,22 @@ async function executeRestAction(node, context) {
 
   const headers = {
     ...(connector.defaultHeaders || {}),
-    ...authHeaders(connector),
     ...parseHeaderText(nodeConfig.requestHeadersText, context)
   };
+  let requestBody = null;
+  if (!['GET', 'HEAD', 'DELETE'].includes(method) && requestValues !== null) {
+    if (!headers['Content-Type'] && !headers['content-type'] && typeof requestValues === 'object') {
+      headers['Content-Type'] = 'application/json';
+    }
+    requestBody = typeof requestValues === 'string' ? requestValues : JSON.stringify(requestValues);
+  }
+  await applyConnectorAuthentication(connector, method, url, headers, requestBody, allowPrivateNetwork);
   const fetchOptions = {
     method,
     headers,
     signal: AbortSignal.timeout(connectorTimeout(connector, nodeConfig))
   };
-  if (!['GET', 'HEAD', 'DELETE'].includes(method) && requestValues !== null) {
-    if (!headers['Content-Type'] && !headers['content-type'] && typeof requestValues === 'object') {
-      headers['Content-Type'] = 'application/json';
-    }
-    fetchOptions.body = typeof requestValues === 'string' ? requestValues : JSON.stringify(requestValues);
-  }
+  if (requestBody !== null) fetchOptions.body = requestBody;
 
   const startedAt = Date.now();
   let response;
@@ -659,5 +900,6 @@ async function runRecordTrigger(triggerType, payload) {
 }
 
 module.exports = {
-  runRecordTrigger
+  runRecordTrigger,
+  debugConnectorRequest
 };

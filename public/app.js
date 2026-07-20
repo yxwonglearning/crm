@@ -44,7 +44,16 @@ const state = {
   moduleRuntimeSearch: '',
   browserButtons: [],
   apiConnectors: [],
-  activeApiTab: 'interfaces',
+  apiConnectorCategories: [],
+  activeApiTab: 'connectors',
+  activeApiCategory: 'all',
+  apiCategorySearch: '',
+  apiTreeExpanded: { connectors: true, interfaces: true },
+  activeApiInterfaceStep: 0,
+  apiInterfaceDefinitions: { request: { params: [], headers: [], body: [] }, response: { params: [], headers: [], body: [] } },
+  activeApiDefinitionTabs: { request: 'params', response: 'params' },
+  apiInterfaceBodyFormats: { request: 'application/json', response: 'application/json' },
+  apiDefinitionBatchTarget: null,
   permissionMatrix: null,
   fieldPermissionMatrix: null,
   activePermissionModule: 'customers',
@@ -1680,7 +1689,7 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
 function setModalFullscreen(modal, enabled) {
-  const card = modal?.querySelector('.modal-card, .form-design-drawer, .page-permission-drawer');
+  const card = modal?.querySelector('.modal-card, .form-design-drawer, .page-permission-drawer, .api-connector-drawer, .api-interface-drawer');
   const button = card?.querySelector('[data-modal-fullscreen]');
   if (!card || !button) return;
   modal.classList.toggle('is-fullscreen', enabled);
@@ -1696,7 +1705,7 @@ function resetModalFullscreen(modal) {
 
 function toggleModalFullscreen(button) {
   const modal = button.closest('.modal-backdrop');
-  const card = button.closest('.modal-card, .form-design-drawer, .page-permission-drawer');
+  const card = button.closest('.modal-card, .form-design-drawer, .page-permission-drawer, .api-connector-drawer, .api-interface-drawer');
   if (!modal || !card) return;
   setModalFullscreen(modal, !card.classList.contains('is-fullscreen'));
 }
@@ -1748,6 +1757,31 @@ async function api(path, options = {}) {
     return null;
   }
   return response.json();
+}
+
+let confirmationResolver = null;
+
+function closeConfirmationModal(confirmed = false) {
+  const modal = $('#confirmationModal');
+  if (!modal || modal.hidden) return;
+  modal.hidden = true;
+  const resolve = confirmationResolver;
+  confirmationResolver = null;
+  if ($$('.modal-backdrop').every((item) => item.hidden)) document.body.classList.remove('modal-open');
+  resolve?.(confirmed);
+}
+
+function showConfirmationModal({ title = 'Confirm action', message = '', confirmLabel = 'Confirm' } = {}) {
+  if (confirmationResolver) closeConfirmationModal(false);
+  $('#confirmationModalTitle').textContent = title;
+  $('#confirmationModalMessage').textContent = message;
+  $('#confirmModalAction').textContent = confirmLabel;
+  $('#confirmationModal').hidden = false;
+  document.body.classList.add('modal-open');
+  return new Promise((resolve) => {
+    confirmationResolver = resolve;
+    requestAnimationFrame(() => $('#cancelConfirmationModal').focus());
+  });
 }
 
 async function currentAuthToken() {
@@ -2291,10 +2325,11 @@ function fieldValidationRulesFromForm(form) {
 function showView(id) {
   closeCustomerModal();
   closeImportModal();
-  closeDeleteCustomerModal();
+  closeConfirmationModal(false);
   closeUserModal();
   closeModuleRecordModal();
   closeApiConnectorModal();
+  closeApiInterfaceModal();
   closeFormBuilderCreateModal();
   closeFieldConfigModal();
   closeFormDesignDrawer();
@@ -3148,7 +3183,13 @@ async function saveModuleRecord(event) {
 
 async function deleteModuleRecord(recordId) {
   const moduleKey = state.activeRuntimeModuleKey;
-  if (!recordId || !confirm('Delete this record?')) return;
+  if (!recordId) return;
+  const confirmed = await showConfirmationModal({
+    title: 'Delete Record',
+    message: 'Delete this record? This cannot be undone.',
+    confirmLabel: 'Delete Record'
+  });
+  if (!confirmed) return;
   await api(`/api/modules/${encodeURIComponent(moduleKey)}/records`, {
     method: 'DELETE',
     body: JSON.stringify({ ids: [Number(recordId)] })
@@ -4006,7 +4047,12 @@ async function saveModule(event) {
 async function deleteModule(moduleKey) {
   const module = moduleByKey(moduleKey);
   if (!module || module.system) return;
-  if (!confirm(`Delete ${module.name}? This cannot be undone.`)) return;
+  const confirmed = await showConfirmationModal({
+    title: 'Delete Module',
+    message: `Delete ${module.name}? This cannot be undone.`,
+    confirmLabel: 'Delete Module'
+  });
+  if (!confirmed) return;
   await api(`/api/sysadmin/modules/${encodeURIComponent(moduleKey)}`, { method: 'DELETE' });
   await refreshAdminModules();
   toast('Module Deleted.');
@@ -4040,23 +4086,62 @@ function connectorEndpoints(connector) {
 }
 
 function renderApiTabs() {
-  $$('.api-tabs [data-api-tab]').forEach((button) => {
+  $$('.builder-list [data-api-tab]').forEach((button) => {
     const active = button.dataset.apiTab === state.activeApiTab;
     button.classList.toggle('is-active', active);
     button.closest('.tab-item')?.classList.toggle('is-active', active);
   });
   $('#apiInterfacesTab').hidden = state.activeApiTab !== 'interfaces';
   $('#apiConnectorsTab').hidden = state.activeApiTab !== 'connectors';
+  $('#apiCategoriesTab').hidden = state.activeApiTab !== 'categories';
+  const content = {
+    categories: ['Connector Categories', 'Create categories used to organize connectors and their inherited interfaces.'],
+    connectors: ['API Connectors', 'Configure reusable connections, network settings, timeouts, and authentication.'],
+    interfaces: ['API Interfaces', 'Define connector endpoints, request and response data, success rules, and test requests.']
+  }[state.activeApiTab] || [];
+  $('#apiWorkspaceTitle').textContent = content[0] || 'API';
+  $('#apiWorkspaceDescription').textContent = content[1] || '';
+}
+
+function categoryName(categoryKey) {
+  return state.apiConnectorCategories.find((item) => item.categoryKey === categoryKey)?.name || 'Uncategorized';
+}
+
+function renderApiCategoryNavigation() {
+  const container = $('#apiHierarchyNav');
+  if (!container) return;
+  const query = state.apiCategorySearch.trim().toLowerCase();
+  const categories = [...state.apiConnectorCategories, { categoryKey: '', name: 'Uncategorized', description: '' }]
+    .filter((category) => !query || category.name.toLowerCase().includes(query) || category.description?.toLowerCase().includes(query));
+  const groupHtml = (scope, label) => {
+    const connectors = scope === 'connectors' ? state.apiConnectors : state.apiConnectors.filter((connector) => connectorEndpoints(connector).length);
+    const total = scope === 'connectors' ? connectors.length : connectors.reduce((count, connector) => count + connectorEndpoints(connector).length, 0);
+    const expanded = state.apiTreeExpanded[scope] || Boolean(query);
+    const children = categories.map((category) => {
+      const categoryConnectors = state.apiConnectors.filter((connector) => (connector.categoryKey || '') === category.categoryKey);
+      const count = scope === 'connectors' ? categoryConnectors.length : categoryConnectors.reduce((sum, connector) => sum + connectorEndpoints(connector).length, 0);
+      return `<button type="button" class="api-tree-node api-tree-child ${state.activeApiTab === scope && state.activeApiCategory === category.categoryKey ? 'is-selected' : ''}" data-api-category="${escapeHtml(category.categoryKey)}" data-api-category-scope="${scope}" title="${escapeHtml(category.description || category.name)}"><span class="api-tree-label">${escapeHtml(category.name)}</span><small class="api-tree-count">${count}</small></button>`;
+    }).join('');
+    return `<section class="api-tree-group ${expanded ? 'is-expanded' : ''}">
+      <div class="api-tree-root-row"><button type="button" class="api-tree-toggle" data-api-tree-toggle="${scope}" aria-expanded="${expanded}" aria-label="${expanded ? 'Collapse' : 'Expand'} ${label}">${expanded ? '⌄' : '›'}</button><button type="button" class="api-tree-node api-tree-root ${state.activeApiTab === scope && state.activeApiCategory === 'all' ? 'is-selected' : ''}" data-api-tab="${scope}" data-api-category="all"><span class="api-tree-label">${label}</span><small class="api-tree-count">${total}</small></button></div>
+      <div class="api-tree-children" ${expanded ? '' : 'hidden'}>${children || '<p class="api-tree-empty">No matching categories</p>'}</div>
+    </section>`;
+  };
+  container.innerHTML = `${groupHtml('connectors', 'Connectors')}${groupHtml('interfaces', 'Interfaces')}`;
+}
+
+function connectorMatchesActiveCategory(connector) {
+  return state.activeApiCategory === 'all' || (connector.categoryKey || '') === state.activeApiCategory;
 }
 
 function renderApiInterfaces() {
   const rows = $('#apiInterfaceRows');
   if (!rows) return;
-  const interfaces = state.apiConnectors.flatMap((connector) => (
+  const interfaces = state.apiConnectors.filter(connectorMatchesActiveCategory).flatMap((connector) => (
     connectorEndpoints(connector).map((endpoint) => ({ connector, endpoint }))
   ));
   rows.innerHTML = interfaces.map(({ connector, endpoint }) => `
-    <tr>
+    <tr data-api-interface="${escapeHtml(endpoint.key || '')}" data-api-interface-connector="${escapeHtml(connector.connectorKey)}">
       <td>
         <strong>${escapeHtml(endpoint.name || endpoint.key || endpoint.path || 'Endpoint')}</strong>
         <div class="muted">${escapeHtml(endpoint.key || '')}</div>
@@ -4065,23 +4150,26 @@ function renderApiInterfaces() {
         <strong>${escapeHtml(connector.name)}</strong>
         <div class="muted">${escapeHtml(connector.connectorKey)}</div>
       </td>
+      <td>${escapeHtml(categoryName(connector.categoryKey))}</td>
       <td>${escapeHtml(endpoint.method || 'GET')}</td>
       <td>${escapeHtml(endpoint.path || '/')}</td>
-      <td><span class="status-pill ${connector.enabled === false ? 'status-draft' : 'status-published'}">${connector.enabled === false ? 'Disabled' : 'Active'}</span></td>
+      <td><span class="status-pill ${connector.enabled === false || endpoint.enabled === false ? 'status-draft' : 'status-published'}">${connector.enabled === false || endpoint.enabled === false ? 'Disabled' : 'Active'}</span></td>
+      <td><button type="button" class="link-button" data-edit-api-interface="${escapeHtml(endpoint.key || '')}" data-interface-connector="${escapeHtml(connector.connectorKey)}">Edit</button></td>
     </tr>
-  `).join('') || '<tr><td colspan="5">No API interfaces configured yet. Add endpoints in the Connectors tab.</td></tr>';
+  `).join('') || '<tr><td colspan="7">No API interfaces configured yet. Create an interface to get started.</td></tr>';
 }
 
 function renderApiConnectors() {
   const rows = $('#apiConnectorRows');
   if (!rows) return;
-  rows.innerHTML = state.apiConnectors.map((connector) => `
+  rows.innerHTML = state.apiConnectors.filter(connectorMatchesActiveCategory).map((connector) => `
     <tr data-api-connector="${escapeHtml(connector.connectorKey)}">
       <td>
         <strong>${escapeHtml(connector.name)}</strong>
         <div class="muted">${escapeHtml(connector.connectorKey)}</div>
       </td>
       <td>${escapeHtml(connector.baseUrl)}</td>
+      <td>${escapeHtml(categoryName(connector.categoryKey))}</td>
       <td>${escapeHtml(titleCaseMessage(connector.authType || 'none'))}</td>
       <td>${connectorEndpoints(connector).length}</td>
       <td><span class="status-pill ${connector.enabled === false ? 'status-draft' : 'status-published'}">${connector.enabled === false ? 'Disabled' : 'Enabled'}</span></td>
@@ -4092,39 +4180,39 @@ function renderApiConnectors() {
         </div>
       </td>
     </tr>
-  `).join('') || '<tr><td colspan="6">No API connectors configured yet.</td></tr>';
+  `).join('') || '<tr><td colspan="7">No API connectors configured yet.</td></tr>';
+}
+
+function renderApiCategories() {
+  const rows = $('#apiCategoryRows');
+  if (!rows) return;
+  rows.innerHTML = state.apiConnectorCategories.map((category) => {
+    const connectors = state.apiConnectors.filter((connector) => connector.categoryKey === category.categoryKey);
+    const interfaces = connectors.reduce((total, connector) => total + connectorEndpoints(connector).length, 0);
+    return `<tr><td><strong>${escapeHtml(category.name)}</strong><div class="muted">${escapeHtml(category.categoryKey)}</div></td><td>${escapeHtml(category.description || '—')}</td><td>${connectors.length}</td><td>${interfaces}</td><td><div class="table-action-group"><button type="button" class="link-button" data-edit-api-category="${escapeHtml(category.categoryKey)}">Edit</button><button type="button" class="link-button danger-link" data-delete-api-category="${escapeHtml(category.categoryKey)}">Delete</button></div></td></tr>`;
+  }).join('') || '<tr><td colspan="5">No categories yet. Create one to organize your connectors.</td></tr>';
 }
 
 function renderApiWorkspace() {
   renderApiTabs();
   renderApiInterfaces();
   renderApiConnectors();
+  renderApiCategories();
+  renderApiCategoryNavigation();
 }
 
 async function refreshApiConnectors() {
-  const payload = await api('/api/action-flows/connectors');
-  state.apiConnectors = payload.connectors || [];
+  const [connectorPayload, categoryPayload] = await Promise.all([
+    api('/api/action-flows/connectors'),
+    api('/api/action-flows/connector-categories')
+  ]);
+  state.apiConnectors = connectorPayload.connectors || [];
+  state.apiConnectorCategories = categoryPayload.categories || [];
   renderApiWorkspace();
 }
 
-function renderApiEndpointRows(endpoints = []) {
-  const rows = $('#apiEndpointRows');
-  if (!rows) return;
-  const items = endpoints.length ? endpoints : [{ key: '', method: 'GET', path: '' }];
-  rows.innerHTML = items.map((endpoint) => `
-    <tr data-api-endpoint-row>
-      <td><input name="endpointKey" value="${escapeHtml(endpoint.key || '')}" placeholder="extract"></td>
-      <td>
-        <select name="endpointMethod">
-          ${['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((method) => (
-            `<option value="${method}" ${String(endpoint.method || 'GET').toUpperCase() === method ? 'selected' : ''}>${method}</option>`
-          )).join('')}
-        </select>
-      </td>
-      <td><input name="endpointPath" value="${escapeHtml(endpoint.path || '')}" placeholder="/extract"></td>
-      <td><button type="button" class="link-button danger-link" data-remove-api-endpoint>Remove</button></td>
-    </tr>
-  `).join('');
+function apiCategoryOptions(selected = '') {
+  return `<option value="">Uncategorized</option>${state.apiConnectorCategories.map((category) => `<option value="${escapeHtml(category.categoryKey)}" ${category.categoryKey === selected ? 'selected' : ''}>${escapeHtml(category.name)}</option>`).join('')}`;
 }
 
 function openApiConnectorModal(connectorKey = '') {
@@ -4136,17 +4224,98 @@ function openApiConnectorModal(connectorKey = '') {
   form.elements.editingConnectorKey.value = connector?.connectorKey || '';
   form.elements.name.value = connector?.name || '';
   form.elements.connectorKey.value = connector?.connectorKey || '';
-  form.elements.connectorKey.readOnly = Boolean(connector);
-  form.elements.baseUrl.value = connector?.baseUrl || '';
-  form.elements.authType.value = connector?.authType || 'none';
+  form.elements.connectorKey.readOnly = true;
+  const connection = connector?.authConfig?.connection || {};
+  let parsedBaseUrl = null;
+  try {
+    parsedBaseUrl = connector?.baseUrl ? new URL(connector.baseUrl) : null;
+  } catch (_error) {
+    parsedBaseUrl = null;
+  }
+  form.elements.description.value = connection.description || '';
+  form.elements.categoryKey.innerHTML = apiCategoryOptions(connector?.categoryKey || '');
+  form.elements.protocol.value = connection.protocol || parsedBaseUrl?.protocol?.replace(':', '') || 'https';
+  form.elements.protocolVersion.value = connection.protocolVersion || 'default';
+  form.elements.bypassCertificate.checked = Boolean(connection.bypassCertificate);
+  form.elements.domainAddress.value = connection.domainAddress || (parsedBaseUrl ? `${parsedBaseUrl.host}${parsedBaseUrl.pathname === '/' ? '' : parsedBaseUrl.pathname}` : '');
+  form.elements.encoding.value = connection.encoding || 'UTF-8';
+  form.elements.connectionTimeout.value = connection.connectionTimeout || 60;
+  form.elements.responseTimeout.value = connection.responseTimeout || 60;
+  form.elements.authType.value = connector?.authType === 'oauth' ? 'oauth2' : connector?.authType || 'none';
   form.elements.enabled.checked = connector?.enabled !== false;
-  form.elements.authConfig.value = connector ? JSON.stringify(connector.authConfig || {}, null, 2) : '';
-  form.elements.defaultHeaders.value = connector ? JSON.stringify(connector.defaultHeaders || {}, null, 2) : '';
-  renderApiEndpointRows(connectorEndpoints(connector));
+  const authDetails = { ...(connector?.authConfig || {}) };
+  delete authDetails.connection;
+  renderApiConnectorAuthFields(form.elements.authType.value, authDetails);
   $('#apiConnectorFormTitle').textContent = connector ? 'Edit Connector' : 'New Connector';
+  updateApiConnectorConditionalFields();
   modal.hidden = false;
   document.body.classList.add('modal-open');
   form.elements.name.focus();
+}
+
+function normalizedConnectorDomain(value) {
+  return String(value || '').trim().replace(/^https?:\/\//i, '').replace(/^\/+/, '').replace(/\/+$/, '');
+}
+
+function apiAuthInput(name, label, value = '', type = 'text', required = false) {
+  return `<label>${escapeHtml(label)}${required ? ' *' : ''}<input name="${escapeHtml(name)}" type="${escapeHtml(type)}" value="${escapeHtml(value)}" ${required ? 'required' : ''}></label>`;
+}
+
+function renderApiConnectorAuthFields(authType = 'none', values = {}) {
+  const container = $('#apiConnectorAuthFields');
+  if (!container) return;
+  const type = authType === 'oauth' ? 'oauth2' : authType;
+  const templates = {
+    api_key: `
+      ${apiAuthInput('apiKeyName', 'Key Name', values.apiKeyName || 'X-API-Key', 'text', true)}
+      ${apiAuthInput('apiKeyValue', 'Key Value', values.apiKeyValue || values.apiKey || '', 'password', true)}
+      <label>Send API Key In<select name="apiKeyLocation"><option value="header" ${values.apiKeyLocation !== 'query' ? 'selected' : ''}>Request Header</option><option value="query" ${values.apiKeyLocation === 'query' ? 'selected' : ''}>Request URL</option></select></label>`,
+    bearer: apiAuthInput('bearerToken', 'Token', values.bearerToken || values.token || values.accessToken || '', 'password', true),
+    basic: `
+      ${apiAuthInput('username', 'User Name', values.username || '', 'text', true)}
+      ${apiAuthInput('password', 'Password', values.password || '', 'password', true)}
+      ${apiAuthInput('domain', 'Domain', values.domain || '')}`,
+    oauth1: `
+      ${apiAuthInput('consumerKey', 'Consumer Key', values.consumerKey || '', 'text', true)}
+      ${apiAuthInput('consumerSecret', 'Consumer Secret', values.consumerSecret || '', 'password', true)}
+      ${apiAuthInput('accessToken', 'Access Token', values.accessToken || '', 'password')}
+      ${apiAuthInput('tokenSecret', 'Token Secret', values.tokenSecret || '', 'password')}
+      <label>Signature Method<select name="signatureMethod"><option value="HMAC-SHA1" ${values.signatureMethod !== 'HMAC-SHA256' ? 'selected' : ''}>HMAC-SHA1</option><option value="HMAC-SHA256" ${values.signatureMethod === 'HMAC-SHA256' ? 'selected' : ''}>HMAC-SHA256</option></select></label>
+      ${apiAuthInput('realm', 'Realm', values.realm || '')}`,
+    oauth2: `
+      <label>Add Authorization Data To<select name="authorizationLocation"><option value="header" ${values.authorizationLocation !== 'query' ? 'selected' : ''}>Request Headers</option><option value="query" ${values.authorizationLocation === 'query' ? 'selected' : ''}>Request URL</option></select></label>
+      ${apiAuthInput('headerPrefix', 'Header Prefix', values.headerPrefix || 'Bearer')}
+      ${apiAuthInput('tokenName', 'Token Name', values.tokenName || 'access_token')}
+      <label>Grant Type<select name="grantType"><option value="client_credentials" ${values.grantType === 'client_credentials' ? 'selected' : ''}>Client Credentials</option><option value="authorization_code" ${values.grantType === 'authorization_code' ? 'selected' : ''}>Authorization Code</option><option value="password" ${values.grantType === 'password' ? 'selected' : ''}>Password</option><option value="refresh_token" ${values.grantType === 'refresh_token' ? 'selected' : ''}>Refresh Token</option></select></label>
+      ${apiAuthInput('accessTokenUrl', 'Access Token URL', values.accessTokenUrl || '', 'url', true)}
+      ${apiAuthInput('clientId', 'Client ID', values.clientId || '', 'text', true)}
+      ${apiAuthInput('clientSecret', 'Client Secret', values.clientSecret || '', 'password', true)}
+      ${apiAuthInput('scope', 'Scope', values.scope || '')}
+      <label>Client Authentication<select name="clientAuthentication"><option value="basic" ${values.clientAuthentication !== 'body' ? 'selected' : ''}>Send as Basic Auth header</option><option value="body" ${values.clientAuthentication === 'body' ? 'selected' : ''}>Send credentials in body</option></select></label>`
+  };
+  container.innerHTML = templates[type] || '';
+  container.hidden = type === 'none';
+  container.dataset.authType = type;
+}
+
+function collectApiConnectorAuth(form, authType) {
+  const value = (name) => form.elements[name]?.value?.trim() || '';
+  if (authType === 'api_key') return { apiKeyName: value('apiKeyName'), apiKeyValue: value('apiKeyValue'), apiKeyLocation: value('apiKeyLocation') || 'header' };
+  if (authType === 'bearer') return { bearerToken: value('bearerToken') };
+  if (authType === 'basic') return { username: value('username'), password: value('password'), domain: value('domain') };
+  if (authType === 'oauth1') return { consumerKey: value('consumerKey'), consumerSecret: value('consumerSecret'), accessToken: value('accessToken'), tokenSecret: value('tokenSecret'), signatureMethod: value('signatureMethod'), realm: value('realm') };
+  if (authType === 'oauth2') return { authorizationLocation: value('authorizationLocation'), headerPrefix: value('headerPrefix'), tokenName: value('tokenName'), grantType: value('grantType'), accessTokenUrl: value('accessTokenUrl'), clientId: value('clientId'), clientSecret: value('clientSecret'), scope: value('scope'), clientAuthentication: value('clientAuthentication') };
+  return {};
+}
+
+function updateApiConnectorConditionalFields() {
+  const form = $('#apiConnectorForm');
+  if (!form) return;
+  const protocol = form.elements.protocol.value || 'https';
+  $('#apiConnectorProtocolPrefix').textContent = `${protocol}://`;
+  if ($('#apiConnectorAuthFields').dataset.authType !== form.elements.authType.value) {
+    renderApiConnectorAuthFields(form.elements.authType.value);
+  }
 }
 
 function closeApiConnectorModal() {
@@ -4157,29 +4326,37 @@ function closeApiConnectorModal() {
   document.body.classList.remove('modal-open');
 }
 
-function collectApiEndpoints() {
-  return $$('#apiEndpointRows [data-api-endpoint-row]')
-    .map((row) => ({
-      key: row.querySelector('[name="endpointKey"]').value.trim(),
-      method: row.querySelector('[name="endpointMethod"]').value,
-      path: row.querySelector('[name="endpointPath"]').value.trim()
-    }))
-    .filter((endpoint) => endpoint.key || endpoint.path);
-}
-
 async function saveApiConnector(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const data = serializeForm(form);
+  const protocol = form.elements.protocol.value || 'https';
+  const domainAddress = normalizedConnectorDomain(data.domainAddress);
+  const authDetails = collectApiConnectorAuth(form, data.authType || 'none');
+  const existingConnector = state.apiConnectors.find((item) => item.connectorKey === data.editingConnectorKey);
   const body = {
     connectorKey: data.connectorKey || slugApiKeyPreview(data.name),
     name: data.name.trim(),
-    baseUrl: data.baseUrl.trim(),
+    baseUrl: `${protocol}://${domainAddress}`,
+    categoryKey: data.categoryKey || '',
     authType: data.authType || 'none',
     enabled: form.elements.enabled.checked,
-    authConfig: parseConnectorJson(data.authConfig, 'Auth Config JSON'),
-    defaultHeaders: parseConnectorJson(data.defaultHeaders, 'Default Headers JSON'),
-    endpoints: collectApiEndpoints()
+    authConfig: {
+      ...authDetails,
+      connection: {
+        description: data.description.trim(),
+        protocol,
+        protocolVersion: data.protocolVersion || 'default',
+        bypassCertificate: form.elements.bypassCertificate.checked,
+        domainAddress,
+        encoding: data.encoding || 'UTF-8',
+        connectionTimeout: Number(data.connectionTimeout || 60),
+        responseTimeout: Number(data.responseTimeout || 60),
+        authMethod: data.authType || 'none'
+      }
+    },
+    defaultHeaders: existingConnector?.defaultHeaders || {},
+    endpoints: connectorEndpoints(existingConnector)
   };
   await api('/api/action-flows/connectors', {
     method: 'POST',
@@ -4193,10 +4370,437 @@ async function saveApiConnector(event) {
 }
 
 async function deleteApiConnector(connectorKey) {
-  if (!connectorKey || !confirm('Delete this API connector?')) return;
+  if (!connectorKey) return;
+  const connector = state.apiConnectors.find((item) => item.connectorKey === connectorKey);
+  const confirmed = await showConfirmationModal({
+    title: 'Delete Connector',
+    message: `Delete ${connector?.name || 'this connector'}? Its configured interfaces will also be removed. This cannot be undone.`,
+    confirmLabel: 'Delete Connector'
+  });
+  if (!confirmed) return;
   await api(`/api/action-flows/connectors/${encodeURIComponent(connectorKey)}`, { method: 'DELETE' });
   await refreshApiConnectors();
   toast('Connector Deleted.');
+}
+
+function openApiCategoryModal(categoryKey = '') {
+  const form = $('#apiCategoryForm');
+  const modal = $('#apiCategoryModal');
+  const category = state.apiConnectorCategories.find((item) => item.categoryKey === categoryKey) || null;
+  form.reset();
+  form.elements.editingCategoryKey.value = category?.categoryKey || '';
+  form.elements.name.value = category?.name || '';
+  form.elements.description.value = category?.description || '';
+  $('#apiCategoryFormTitle').textContent = category ? 'Edit Category' : 'New Category';
+  modal.hidden = false;
+  document.body.classList.add('modal-open');
+  form.elements.name.focus();
+}
+
+function closeApiCategoryModal() {
+  $('#apiCategoryModal').hidden = true;
+  if ($$('.modal-backdrop').every((item) => item.hidden)) document.body.classList.remove('modal-open');
+}
+
+async function saveApiCategory(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  await api('/api/action-flows/connector-categories', { method: 'POST', body: JSON.stringify({ categoryKey: form.elements.editingCategoryKey.value || undefined, name: form.elements.name.value.trim(), description: form.elements.description.value.trim() }) });
+  closeApiCategoryModal();
+  await refreshApiConnectors();
+  state.activeApiTab = 'categories';
+  renderApiWorkspace();
+  toast(form.elements.editingCategoryKey.value ? 'Category Saved.' : 'Category Created.');
+}
+
+async function deleteApiCategory(categoryKey) {
+  const category = state.apiConnectorCategories.find((item) => item.categoryKey === categoryKey);
+  const confirmed = await showConfirmationModal({
+    title: 'Delete Category',
+    message: `Delete ${category?.name || 'this category'}? This cannot be undone.`,
+    confirmLabel: 'Delete Category'
+  });
+  if (!confirmed) return;
+  await api(`/api/action-flows/connector-categories/${encodeURIComponent(categoryKey)}`, { method: 'DELETE' });
+  if (state.activeApiCategory === categoryKey) state.activeApiCategory = 'all';
+  await refreshApiConnectors();
+  toast('Category Deleted.');
+}
+
+function interfaceConnectorOptions(selected = '') {
+  return `<option value="">Select a connector</option>${state.apiConnectors.map((connector) => (
+    `<option value="${escapeHtml(connector.connectorKey)}" ${connector.connectorKey === selected ? 'selected' : ''}>${escapeHtml(connector.name)}</option>`
+  )).join('')}`;
+}
+
+function renderApiInterfaceConnectorChoices(selected = '') {
+  const container = $('#apiInterfaceConnectorChoices');
+  if (!container) return;
+  if (!state.apiConnectors.length) {
+    container.innerHTML = '<div class="api-connector-choice-empty"><strong>No connectors available</strong><p>Create a connector before adding an interface.</p></div>';
+    return;
+  }
+  container.innerHTML = state.apiConnectors.map((connector) => {
+    const active = connector.connectorKey === selected;
+    const auth = connector.authType && connector.authType !== 'none' ? titleCaseMessage(connector.authType) : 'No authentication';
+    return `<button type="button" class="api-connector-choice ${active ? 'is-selected' : ''}" data-select-interface-connector="${escapeHtml(connector.connectorKey)}" aria-pressed="${active}">
+      <span class="api-connector-choice-icon" aria-hidden="true">↗</span>
+      <span><strong>${escapeHtml(connector.name)}</strong><small>${escapeHtml(connector.baseUrl || 'No base URL')}</small></span>
+      <span class="api-connector-choice-meta">${escapeHtml(auth)}</span>
+      <span class="api-connector-choice-check" aria-hidden="true">${active ? '✓' : ''}</span>
+    </button>`;
+  }).join('');
+}
+
+function setApiInterfaceStep(step) {
+  state.activeApiInterfaceStep = Math.max(0, Math.min(5, Number(step) || 0));
+  $$('[data-interface-step]').forEach((panel) => {
+    panel.hidden = Number(panel.dataset.interfaceStep) !== state.activeApiInterfaceStep;
+  });
+  $$('[data-interface-step-button]').forEach((button) => {
+    const buttonStep = Number(button.dataset.interfaceStepButton);
+    button.classList.toggle('is-active', buttonStep === state.activeApiInterfaceStep);
+    button.classList.toggle('is-complete', buttonStep < state.activeApiInterfaceStep);
+  });
+  $('#backApiInterfaceButton').hidden = state.activeApiInterfaceStep === 0;
+  $('#nextApiInterfaceButton').hidden = state.activeApiInterfaceStep === 5;
+  $('#saveApiInterfaceButton').hidden = state.activeApiInterfaceStep !== 5;
+  if (state.activeApiInterfaceStep === 5) updateApiInterfaceTestPreview();
+}
+
+function endpointInterfaceConfig(endpoint = {}) {
+  return endpoint?.interfaceConfig || {};
+}
+
+function apiDefinitionRowsFromObject(value, prefix = '') {
+  if (!value || typeof value !== 'object') return [];
+  const rows = [];
+  Object.entries(value).forEach(([key, item]) => {
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (item && typeof item === 'object' && !Array.isArray(item) && !('type' in item) && !('value' in item)) {
+      rows.push(...apiDefinitionRowsFromObject(item, path));
+      return;
+    }
+    const descriptor = item && typeof item === 'object' && !Array.isArray(item) ? item : {};
+    const rawValue = Object.prototype.hasOwnProperty.call(descriptor, 'value') ? descriptor.value : item;
+    rows.push({
+      name: path,
+      displayName: descriptor.displayName || key,
+      description: descriptor.description || '',
+      parameterType: descriptor.parameterType || (typeof rawValue === 'string' ? 'text' : typeof rawValue) || 'text',
+      dataType: descriptor.dataType || 'property',
+      required: descriptor.required !== false,
+      array: Boolean(descriptor.array || Array.isArray(rawValue)),
+      value: rawValue === null || typeof rawValue === 'object' ? JSON.stringify(rawValue ?? '') : String(rawValue ?? '')
+    });
+  });
+  return rows;
+}
+
+function apiDefinitionRows(scope, tab) {
+  return state.apiInterfaceDefinitions[scope]?.[tab] || [];
+}
+
+function renderApiDefinitionEditor(scope) {
+  const editor = $(`[data-definition-editor="${scope}"]`);
+  if (!editor) return;
+  const tab = state.activeApiDefinitionTabs[scope] || 'params';
+  const rows = apiDefinitionRows(scope, tab);
+  editor.innerHTML = `
+    <div class="api-definition-actions"><div><strong>${escapeHtml(titleCaseMessage(tab))}</strong>${tab === 'body' ? `<label class="api-body-format">Data Format<select data-body-format="${scope}">${['none', 'application/json', 'application/xml', 'application/x-www-form-urlencoded', 'multipart/form-data', 'application/octet-stream', 'text/plain'].map((format) => `<option value="${format}" ${state.apiInterfaceBodyFormats[scope] === format ? 'selected' : ''}>${format}</option>`).join('')}</select></label>` : ''}</div><span><button type="button" class="secondary small-button" data-add-definition-row="${scope}">Add Row</button><button type="button" class="secondary small-button" data-batch-definition="${scope}">Batch Add</button></span></div>
+    <div class="table-wrap"><table class="config-table api-definition-table"><thead><tr><th>#</th><th>Parameter Name</th><th>Display Name</th><th>Description</th><th>Parameter Type</th><th>Data Type</th><th>Value</th><th>Required</th><th>Array</th><th></th></tr></thead><tbody>
+      ${rows.map((row, index) => `<tr data-definition-row="${index}"><td>${index + 1}</td><td><input name="definitionName" value="${escapeHtml(row.name)}"></td><td><input name="definitionDisplayName" value="${escapeHtml(row.displayName)}"></td><td><input name="definitionDescription" value="${escapeHtml(row.description)}"></td><td><select name="definitionParameterType">${['text', 'number', 'boolean', 'object'].map((type) => `<option value="${type}" ${row.parameterType === type ? 'selected' : ''}>${titleCaseMessage(type)}</option>`).join('')}</select></td><td><select name="definitionDataType"><option value="property" ${row.dataType === 'property' ? 'selected' : ''}>Property</option><option value="node" ${row.dataType === 'node' ? 'selected' : ''}>Node</option></select></td><td><input name="definitionValue" value="${escapeHtml(row.value)}"></td><td><input name="definitionRequired" type="checkbox" ${row.required ? 'checked' : ''}></td><td><input name="definitionArray" type="checkbox" ${row.array ? 'checked' : ''}></td><td><button type="button" class="link-button danger-link" data-remove-definition-row>Remove</button></td></tr>`).join('') || '<tr><td colspan="10" class="muted">No fields yet. Add a row or batch add JSON/XML.</td></tr>'}
+    </tbody></table></div>`;
+}
+
+function renderAllApiDefinitionEditors() {
+  renderApiDefinitionEditor('request');
+  renderApiDefinitionEditor('response');
+  $$('[data-definition-tabs]').forEach((tabs) => {
+    Array.from(tabs.querySelectorAll('[data-definition-tab]')).forEach((button) => button.classList.toggle('is-active', button.dataset.definitionTab === state.activeApiDefinitionTabs[tabs.dataset.definitionTabs]));
+  });
+}
+
+function initializeApiInterfaceDefinitions(config = {}) {
+  const savedRequest = config.request?.definitions || {};
+  const savedResponse = config.response?.definitions || {};
+  state.apiInterfaceDefinitions = {
+    request: {
+      params: savedRequest.params || apiDefinitionRowsFromObject(config.request?.params || {}),
+      headers: savedRequest.headers || apiDefinitionRowsFromObject(config.request?.headers || {}),
+      body: savedRequest.body || apiDefinitionRowsFromObject(config.request?.body || {})
+    },
+    response: {
+      params: savedResponse.params || [],
+      headers: savedResponse.headers || [],
+      body: savedResponse.body || apiDefinitionRowsFromObject(config.response?.schema || {})
+    }
+  };
+  state.activeApiDefinitionTabs = { request: 'params', response: 'params' };
+  state.apiInterfaceBodyFormats = {
+    request: config.request?.bodyFormat || 'application/json',
+    response: config.response?.format === 'xml' ? 'application/xml' : config.response?.format === 'text' ? 'text/plain' : config.response?.bodyFormat || 'application/json'
+  };
+  renderAllApiDefinitionEditors();
+}
+
+function apiRowsToObject(rows) {
+  const output = {};
+  rows.forEach((row) => {
+    if (!row.name) return;
+    const keys = row.name.split('.').filter(Boolean);
+    let target = output;
+    keys.forEach((key, index) => {
+      if (index === keys.length - 1) {
+        let value = row.value;
+        if (row.parameterType === 'number' && value !== '') value = Number(value);
+        if (row.parameterType === 'boolean') value = value === true || String(value).toLowerCase() === 'true';
+        if (row.parameterType === 'object' && typeof value === 'string' && value.trim()) {
+          try { value = JSON.parse(value); } catch (_error) { value = row.value; }
+        }
+        target[key] = value;
+      }
+      else target = target[key] ||= {};
+    });
+  });
+  return output;
+}
+
+function updateApiDefinitionRow(target) {
+  const editor = target.closest('[data-definition-editor]');
+  const rowElement = target.closest('[data-definition-row]');
+  if (!editor || !rowElement) return;
+  const scope = editor.dataset.definitionEditor;
+  const row = apiDefinitionRows(scope, state.activeApiDefinitionTabs[scope])[Number(rowElement.dataset.definitionRow)];
+  if (!row) return;
+  const propertyMap = {
+    definitionName: 'name', definitionDisplayName: 'displayName', definitionDescription: 'description',
+    definitionParameterType: 'parameterType', definitionDataType: 'dataType', definitionValue: 'value',
+    definitionRequired: 'required', definitionArray: 'array'
+  };
+  const property = propertyMap[target.name];
+  if (property) row[property] = target.type === 'checkbox' ? target.checked : target.value;
+}
+
+function xmlBatchObject(text) {
+  const documentNode = new DOMParser().parseFromString(text, 'application/xml');
+  const parseError = documentNode.querySelector('parsererror');
+  if (parseError) throw new Error('XML is not valid.');
+  const convert = (element) => {
+    const children = Array.from(element.children);
+    if (!children.length) return element.textContent || '';
+    return children.reduce((result, child) => {
+      const value = convert(child);
+      if (Object.prototype.hasOwnProperty.call(result, child.tagName)) {
+        result[child.tagName] = Array.isArray(result[child.tagName]) ? [...result[child.tagName], value] : [result[child.tagName], value];
+      } else result[child.tagName] = value;
+      return result;
+    }, {});
+  };
+  return { [documentNode.documentElement.tagName]: convert(documentNode.documentElement) };
+}
+
+function openApiDefinitionBatch(scope) {
+  state.apiDefinitionBatchTarget = { scope, tab: state.activeApiDefinitionTabs[scope] };
+  const input = $('#apiDefinitionBatchInput');
+  const bodyFormat = state.apiInterfaceBodyFormats[scope] || '';
+  input.value = '';
+  input.placeholder = state.apiDefinitionBatchTarget.tab === 'body' && bodyFormat.includes('xml')
+    ? '<customer><name>Example</name><active>true</active></customer>'
+    : '{"customer":{"name":"Example","active":true}}';
+  $('#apiDefinitionBatchPanel').hidden = false;
+  input.focus();
+}
+
+function closeApiDefinitionBatch() {
+  $('#apiDefinitionBatchPanel').hidden = true;
+  state.apiDefinitionBatchTarget = null;
+}
+
+function applyApiDefinitionBatch() {
+  const target = state.apiDefinitionBatchTarget;
+  if (!target) return;
+  const text = $('#apiDefinitionBatchInput').value.trim();
+  if (!text) throw new Error('Paste JSON or XML before adding fields.');
+  let parsed;
+  const selectedBodyFormat = target.tab === 'body' ? state.apiInterfaceBodyFormats[target.scope] : '';
+  const format = selectedBodyFormat.includes('xml') || text.startsWith('<') ? 'xml' : 'json';
+  if (format === 'xml') parsed = xmlBatchObject(text);
+  else {
+    try { parsed = JSON.parse(text); } catch (_error) { throw new Error('JSON is not valid.'); }
+  }
+  state.apiInterfaceDefinitions[target.scope][target.tab].push(...apiDefinitionRowsFromObject(parsed));
+  closeApiDefinitionBatch();
+  renderApiDefinitionEditor(target.scope);
+}
+
+function openApiInterfaceModal(connectorKey = '', interfaceKey = '') {
+  const form = $('#apiInterfaceForm');
+  const modal = $('#apiInterfaceModal');
+  if (!form || !modal) return;
+  const field = (name) => form.querySelector(`[name="${name}"]`);
+  const connector = state.apiConnectors.find((item) => item.connectorKey === connectorKey) || null;
+  const endpoint = connectorEndpoints(connector).find((item) => item.key === interfaceKey) || null;
+  const config = endpointInterfaceConfig(endpoint);
+  form.reset();
+  field('connectorKey').innerHTML = interfaceConnectorOptions(connector?.connectorKey || '');
+  renderApiInterfaceConnectorChoices(connector?.connectorKey || '');
+  field('editingConnectorKey').value = endpoint ? connector?.connectorKey || '' : '';
+  field('editingInterfaceKey').value = endpoint?.key || '';
+  field('name').value = endpoint?.name || '';
+  field('key').value = endpoint?.key || '';
+  field('key').readOnly = Boolean(endpoint);
+  field('group').value = config.group || '';
+  field('method').value = endpoint?.method || 'GET';
+  field('path').value = endpoint?.path || '';
+  field('description').value = config.description || '';
+  field('enabled').checked = endpoint?.enabled !== false;
+  initializeApiInterfaceDefinitions(config);
+  field('successStatuses').value = config.outcome?.successStatuses || '';
+  field('cacheResult').checked = Boolean(config.outcome?.cacheResult);
+  field('failureMessage').value = config.outcome?.failureMessage || '';
+  field('timeoutMessage').value = config.outcome?.timeoutMessage || '';
+  field('exceptionMessage').value = config.outcome?.exceptionMessage || '';
+  $('#apiInterfaceFormTitle').textContent = endpoint ? 'Edit Interface' : 'New Interface';
+  $('#apiInterfaceTestResult').textContent = 'The test result will appear here.';
+  setApiInterfaceStep(endpoint ? 1 : 0);
+  modal.hidden = false;
+  document.body.classList.add('modal-open');
+  if (endpoint) field('name').focus();
+  else containerFocus($('#apiInterfaceConnectorChoices'));
+}
+
+function containerFocus(container) {
+  container?.querySelector('button, input, select, textarea')?.focus();
+}
+
+function closeApiInterfaceModal() {
+  const modal = $('#apiInterfaceModal');
+  if (!modal) return;
+  resetModalFullscreen(modal);
+  closeApiDefinitionBatch();
+  modal.hidden = true;
+  if ($$('.modal-backdrop').every((item) => item.hidden)) document.body.classList.remove('modal-open');
+}
+
+function collectApiInterface(form) {
+  const data = serializeForm(form);
+  const requestDefinitions = state.apiInterfaceDefinitions.request;
+  const responseDefinitions = state.apiInterfaceDefinitions.response;
+  return {
+    key: data.key || slugApiKeyPreview(data.name),
+    name: data.name.trim(),
+    method: data.method || 'GET',
+    path: data.path.trim(),
+    enabled: form.elements.enabled.checked,
+    interfaceConfig: {
+      group: data.group.trim(),
+      description: data.description.trim(),
+      request: {
+        params: apiRowsToObject(requestDefinitions.params),
+        headers: apiRowsToObject(requestDefinitions.headers),
+        body: apiRowsToObject(requestDefinitions.body),
+        bodyFormat: state.apiInterfaceBodyFormats.request,
+        definitions: requestDefinitions
+      },
+      response: {
+        format: state.apiInterfaceBodyFormats.response.includes('xml') ? 'xml' : state.apiInterfaceBodyFormats.response.includes('text') ? 'text' : 'json',
+        bodyFormat: state.apiInterfaceBodyFormats.response,
+        array: responseDefinitions.body.some((row) => row.array),
+        schema: apiRowsToObject(responseDefinitions.body),
+        definitions: responseDefinitions
+      },
+      outcome: {
+        successStatuses: data.successStatuses.trim(),
+        cacheResult: form.elements.cacheResult.checked,
+        failureMessage: data.failureMessage.trim(),
+        timeoutMessage: data.timeoutMessage.trim(),
+        exceptionMessage: data.exceptionMessage.trim()
+      }
+    }
+  };
+}
+
+function connectorSavePayload(connector, endpoints) {
+  return {
+    connectorKey: connector.connectorKey,
+    name: connector.name,
+    baseUrl: connector.baseUrl,
+    categoryKey: connector.categoryKey || '',
+    authType: connector.authType || 'none',
+    authConfig: connector.authConfig || {},
+    defaultHeaders: connector.defaultHeaders || {},
+    enabled: connector.enabled !== false,
+    endpoints
+  };
+}
+
+async function saveApiInterface(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const endpoint = collectApiInterface(form);
+  const targetKey = form.elements.connectorKey.value;
+  const originalConnectorKey = form.elements.editingConnectorKey.value;
+  const originalKey = form.elements.editingInterfaceKey.value;
+  const targetConnector = state.apiConnectors.find((item) => item.connectorKey === targetKey);
+  if (!targetConnector) throw new Error('Select a valid Connector.');
+  if (originalConnectorKey && originalConnectorKey !== targetKey) {
+    const originalConnector = state.apiConnectors.find((item) => item.connectorKey === originalConnectorKey);
+    await api('/api/action-flows/connectors', { method: 'POST', body: JSON.stringify(connectorSavePayload(
+      originalConnector,
+      connectorEndpoints(originalConnector).filter((item) => item.key !== originalKey)
+    )) });
+  }
+  const endpoints = connectorEndpoints(targetConnector).filter((item) => item.key !== (originalKey || endpoint.key));
+  if (endpoints.some((item) => item.key === endpoint.key)) throw new Error('Interface key already exists on this Connector.');
+  endpoints.push(endpoint);
+  await api('/api/action-flows/connectors', {
+    method: 'POST',
+    body: JSON.stringify(connectorSavePayload(targetConnector, endpoints))
+  });
+  closeApiInterfaceModal();
+  await refreshApiConnectors();
+  state.activeApiTab = 'interfaces';
+  renderApiWorkspace();
+  toast(originalKey ? 'Interface Saved.' : 'Interface Created.');
+}
+
+function updateApiInterfaceTestPreview() {
+  const form = $('#apiInterfaceForm');
+  if (!form) return;
+  const connector = state.apiConnectors.find((item) => item.connectorKey === form.elements.connectorKey.value);
+  const base = String(connector?.baseUrl || '').replace(/\/$/, '');
+  const path = String(form.elements.path.value || '').replace(/^\/?/, '/');
+  $('#apiInterfaceTestMethod').textContent = form.elements.method.value || 'GET';
+  $('#apiInterfaceTestUrl').textContent = base ? `${base}${path}` : 'Select a connector and enter a path';
+}
+
+async function testApiInterface() {
+  const form = $('#apiInterfaceForm');
+  const output = $('#apiInterfaceTestResult');
+  const connectorKey = form.elements.connectorKey.value;
+  const endpoint = collectApiInterface(form);
+  if (!connectorKey) throw new Error('Select a Connector first.');
+  if (!endpoint.path) throw new Error('Enter an Interface Path first.');
+  output.textContent = 'Sending request...';
+  const result = await api(`/api/action-flows/connectors/${encodeURIComponent(connectorKey)}/debug`, {
+    method: 'POST',
+    body: JSON.stringify(endpoint)
+  });
+  const responseBody = typeof result.response.body === 'string'
+    ? result.response.body
+    : JSON.stringify(result.response.body, null, 2);
+  const responseHeaders = Object.entries(result.response.headers || {}).map(([key, value]) => `${key}: ${value}`).join('\n');
+  output.textContent = [
+    `HTTP ${result.response.status} ${result.response.statusText || ''}`.trim(),
+    `${result.response.durationMs} ms · ${result.response.sizeBytes} bytes · ${result.outcome.success ? 'Success' : 'Failed'} (${result.outcome.rule})`,
+    result.outcome.message || '',
+    '',
+    responseHeaders || '(no response headers)',
+    '',
+    responseBody || '(empty response)',
+    result.response.truncated ? '\n[Response truncated at 1 MB]' : ''
+  ].filter((line, index) => line || index >= 3).join('\n');
 }
 
 function renderFormModuleList() {
@@ -4807,24 +5411,27 @@ async function downloadCustomerExport() {
   }
 }
 
-function openDeleteCustomerModal() {
+async function openDeleteCustomerModal() {
   const ids = selectedCustomerIds();
   if (!ids.length) {
     toast('Select At Least One Customer To Delete.', 'error');
     return;
   }
 
-  $('#deleteCustomerMessage').textContent = `Delete ${ids.length} selected customer${ids.length === 1 ? '' : 's'}? This cannot be undone.`;
-  $('#deleteCustomerModal').hidden = false;
-  document.body.classList.add('modal-open');
-}
-
-function closeDeleteCustomerModal() {
-  const modal = $('#deleteCustomerModal');
-  if (!modal) return;
-  resetModalFullscreen(modal);
-  modal.hidden = true;
-  document.body.classList.remove('modal-open');
+  const confirmed = await showConfirmationModal({
+    title: `Delete Customer${ids.length === 1 ? '' : 's'}`,
+    message: `Delete ${ids.length} selected customer${ids.length === 1 ? '' : 's'}? This cannot be undone.`,
+    confirmLabel: `Delete Customer${ids.length === 1 ? '' : 's'}`
+  });
+  if (!confirmed) return;
+  try {
+    const result = await api('/api/customers', { method: 'DELETE', body: JSON.stringify({ ids }) });
+    state.selectedCustomerIds.clear();
+    await loadCustomers();
+    toast(`Deleted ${result.deletedCount} Customer${result.deletedCount === 1 ? '' : 's'}.`);
+  } catch (error) {
+    toast(titleCaseMessage(error.message), 'error');
+  }
 }
 
 function clearUserForm() {
@@ -5172,16 +5779,49 @@ function bindEvents() {
         .catch((error) => toast(titleCaseMessage(error.message), 'error'));
     }
   });
-  $$('.api-tabs [data-api-tab]').forEach((button) => {
-    button.addEventListener('click', () => {
-      state.activeApiTab = button.dataset.apiTab;
-      renderApiWorkspace();
-    });
+  $('#adminApiSection .builder-list')?.addEventListener('click', (event) => {
+    const toggleButton = event.target.closest('[data-api-tree-toggle]');
+    if (toggleButton) {
+      const scope = toggleButton.dataset.apiTreeToggle;
+      state.apiTreeExpanded[scope] = !state.apiTreeExpanded[scope];
+      renderApiCategoryNavigation();
+      return;
+    }
+    const navigationButton = event.target.closest('[data-api-tab], [data-api-category]');
+    if (!navigationButton) return;
+    const tab = navigationButton.dataset.apiCategoryScope || navigationButton.dataset.apiTab;
+    if (navigationButton.hasAttribute('data-api-category')) state.activeApiCategory = navigationButton.dataset.apiCategory;
+    state.activeApiTab = tab;
+    renderApiWorkspace();
+  });
+  $('#apiCategorySearch')?.addEventListener('input', (event) => {
+    state.apiCategorySearch = event.currentTarget.value;
+    renderApiCategoryNavigation();
+  });
+  $('#newApiCategoryButton')?.addEventListener('click', () => openApiCategoryModal());
+  $('#closeApiCategoryModal')?.addEventListener('click', closeApiCategoryModal);
+  $('#cancelApiCategoryButton')?.addEventListener('click', closeApiCategoryModal);
+  $('#apiCategoryModal')?.addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) closeApiCategoryModal();
+  });
+  $('#apiCategoryForm')?.addEventListener('submit', (event) => {
+    saveApiCategory(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  });
+  $('#apiCategoryRows')?.addEventListener('click', (event) => {
+    const editButton = event.target.closest('[data-edit-api-category]');
+    if (editButton) return openApiCategoryModal(editButton.dataset.editApiCategory);
+    const deleteButton = event.target.closest('[data-delete-api-category]');
+    if (deleteButton) deleteApiCategory(deleteButton.dataset.deleteApiCategory).catch((error) => toast(titleCaseMessage(error.message), 'error'));
   });
   $('#newApiConnectorButton')?.addEventListener('click', () => {
-    state.activeApiTab = 'connectors';
-    renderApiWorkspace();
     openApiConnectorModal();
+  });
+  $('#newApiInterfaceButton')?.addEventListener('click', () => {
+    try {
+      openApiInterfaceModal();
+    } catch (error) {
+      toast(titleCaseMessage(error.message || 'Unable to open Interface editor.'), 'error');
+    }
   });
   $('#closeApiConnectorModal')?.addEventListener('click', closeApiConnectorModal);
   $('#cancelApiConnectorButton')?.addEventListener('click', closeApiConnectorModal);
@@ -5193,30 +5833,16 @@ function bindEvents() {
   });
   $('#apiConnectorForm [name="name"]')?.addEventListener('input', (event) => {
     const form = event.currentTarget.form;
-    if (form.elements.editingConnectorKey.value || form.elements.connectorKey.value) return;
+    if (form.elements.editingConnectorKey.value) return;
     form.elements.connectorKey.value = slugApiKeyPreview(event.currentTarget.value);
   });
   $('#apiConnectorForm [name="connectorKey"]')?.addEventListener('input', (event) => {
     event.currentTarget.value = slugApiKeyPreview(event.currentTarget.value);
   });
-  $('#addApiEndpointButton')?.addEventListener('click', () => {
-    const rows = $('#apiEndpointRows');
-    const endpoints = collectApiEndpoints();
-    endpoints.push({ key: '', method: 'GET', path: '' });
-    renderApiEndpointRows(endpoints);
-    rows?.querySelector('tr:last-child input')?.focus();
-  });
-  $('#apiEndpointRows')?.addEventListener('input', (event) => {
-    if (event.target.name === 'endpointKey') {
-      event.target.value = slugApiKeyPreview(event.target.value);
+  $('#apiConnectorForm')?.addEventListener('change', (event) => {
+    if (event.target.name === 'protocol' || event.target.name === 'authType') {
+      updateApiConnectorConditionalFields();
     }
-  });
-  $('#apiEndpointRows')?.addEventListener('click', (event) => {
-    const removeButton = event.target.closest('[data-remove-api-endpoint]');
-    if (!removeButton) return;
-    const row = removeButton.closest('[data-api-endpoint-row]');
-    row?.remove();
-    if (!$('#apiEndpointRows [data-api-endpoint-row]')) renderApiEndpointRows();
   });
   $('#apiConnectorRows')?.addEventListener('click', (event) => {
     const editButton = event.target.closest('[data-edit-api-connector]');
@@ -5229,6 +5855,110 @@ function bindEvents() {
       deleteApiConnector(deleteButton.dataset.deleteApiConnector)
         .catch((error) => toast(titleCaseMessage(error.message), 'error'));
     }
+  });
+  $('#apiInterfaceRows')?.addEventListener('click', (event) => {
+    const editButton = event.target.closest('[data-edit-api-interface]');
+    if (editButton) {
+      try {
+        openApiInterfaceModal(editButton.dataset.interfaceConnector, editButton.dataset.editApiInterface);
+      } catch (error) {
+        toast(titleCaseMessage(error.message || 'Unable to open Interface editor.'), 'error');
+      }
+    }
+  });
+  $('#closeApiInterfaceModal')?.addEventListener('click', closeApiInterfaceModal);
+  $('#cancelApiInterfaceButton')?.addEventListener('click', closeApiInterfaceModal);
+  $('#apiInterfaceModal')?.addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) closeApiInterfaceModal();
+  });
+  $('#apiInterfaceForm')?.addEventListener('submit', (event) => {
+    saveApiInterface(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  });
+  $('#apiInterfaceForm')?.addEventListener('input', (event) => updateApiDefinitionRow(event.target));
+  $('#apiInterfaceForm')?.addEventListener('change', (event) => {
+    updateApiDefinitionRow(event.target);
+    if (event.target.matches('[data-body-format]')) {
+      state.apiInterfaceBodyFormats[event.target.dataset.bodyFormat] = event.target.value;
+    }
+  });
+  $('#apiInterfaceForm')?.addEventListener('click', (event) => {
+    const connectorButton = event.target.closest('[data-select-interface-connector]');
+    if (connectorButton) {
+      const form = $('#apiInterfaceForm');
+      form.elements.connectorKey.value = connectorButton.dataset.selectInterfaceConnector;
+      renderApiInterfaceConnectorChoices(form.elements.connectorKey.value);
+      return;
+    }
+    const tabButton = event.target.closest('[data-definition-tab]');
+    if (tabButton) {
+      const scope = tabButton.closest('[data-definition-tabs]').dataset.definitionTabs;
+      state.activeApiDefinitionTabs[scope] = tabButton.dataset.definitionTab;
+      renderAllApiDefinitionEditors();
+      return;
+    }
+    const addButton = event.target.closest('[data-add-definition-row]');
+    if (addButton) {
+      const scope = addButton.dataset.addDefinitionRow;
+      apiDefinitionRows(scope, state.activeApiDefinitionTabs[scope]).push({ name: '', displayName: '', description: '', parameterType: 'text', dataType: 'property', required: true, array: false, value: '' });
+      renderApiDefinitionEditor(scope);
+      return;
+    }
+    const batchButton = event.target.closest('[data-batch-definition]');
+    if (batchButton) {
+      openApiDefinitionBatch(batchButton.dataset.batchDefinition);
+      return;
+    }
+    const removeButton = event.target.closest('[data-remove-definition-row]');
+    if (removeButton) {
+      const editor = removeButton.closest('[data-definition-editor]');
+      const scope = editor.dataset.definitionEditor;
+      const index = Number(removeButton.closest('[data-definition-row]').dataset.definitionRow);
+      apiDefinitionRows(scope, state.activeApiDefinitionTabs[scope]).splice(index, 1);
+      renderApiDefinitionEditor(scope);
+    }
+  });
+  $('#applyApiDefinitionBatchButton')?.addEventListener('click', () => {
+    try { applyApiDefinitionBatch(); } catch (error) { toast(titleCaseMessage(error.message), 'error'); }
+  });
+  $('#cancelApiDefinitionBatchButton')?.addEventListener('click', closeApiDefinitionBatch);
+  $('#closeApiDefinitionBatchButton')?.addEventListener('click', closeApiDefinitionBatch);
+  $('#apiInterfaceForm [name="name"]')?.addEventListener('input', (event) => {
+    const form = event.currentTarget.form;
+    if (form.elements.editingInterfaceKey.value || form.elements.key.value) return;
+    form.elements.key.value = slugApiKeyPreview(event.currentTarget.value);
+  });
+  $('#apiInterfaceForm [name="key"]')?.addEventListener('input', (event) => {
+    event.currentTarget.value = slugApiKeyPreview(event.currentTarget.value);
+  });
+  $$('[data-interface-step-button]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const form = $('#apiInterfaceForm');
+      const nextStep = Number(button.dataset.interfaceStepButton);
+      if (nextStep > 0 && !form.elements.connectorKey.value) {
+        toast('Select a connector before continuing.', 'error');
+        setApiInterfaceStep(0);
+        return;
+      }
+      setApiInterfaceStep(nextStep);
+    });
+  });
+  $('#backApiInterfaceButton')?.addEventListener('click', () => setApiInterfaceStep(state.activeApiInterfaceStep - 1));
+  $('#nextApiInterfaceButton')?.addEventListener('click', () => {
+    const form = $('#apiInterfaceForm');
+    if (state.activeApiInterfaceStep === 0 && !form.elements.connectorKey.value) {
+      toast('Select a connector before continuing.', 'error');
+      return;
+    }
+    if (state.activeApiInterfaceStep === 1) {
+      const requiredFields = $$('[data-interface-step="1"] [required]');
+      if (requiredFields.some((field) => !field.reportValidity())) return;
+    }
+    setApiInterfaceStep(state.activeApiInterfaceStep + 1);
+  });
+  $('#testApiInterfaceButton')?.addEventListener('click', () => {
+    testApiInterface().catch((error) => {
+      $('#apiInterfaceTestResult').textContent = `Request failed: ${error.message}`;
+    });
   });
   $('#permissionModuleSelect').addEventListener('change', async (event) => {
     try {
@@ -5444,13 +6174,6 @@ function bindEvents() {
   $('#clearCustomerForm').addEventListener('click', clearCustomerForm);
   $('#openImportButton').addEventListener('click', openImportModal);
   $('#deleteCustomersButton').addEventListener('click', openDeleteCustomerModal);
-  $('#closeDeleteCustomerModal').addEventListener('click', closeDeleteCustomerModal);
-  $('#cancelDeleteCustomers').addEventListener('click', closeDeleteCustomerModal);
-  $('#deleteCustomerModal').addEventListener('click', (event) => {
-    if (event.target === event.currentTarget) {
-      closeDeleteCustomerModal();
-    }
-  });
   $('#closeImportModal').addEventListener('click', closeImportModal);
   $('#importModal').addEventListener('click', (event) => {
     if (event.target === event.currentTarget) {
@@ -5493,14 +6216,15 @@ function bindEvents() {
   });
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
+    if (!$('#confirmationModal').hidden) {
+      closeConfirmationModal(false);
+      return;
+    }
     if (!$('#customerModal').hidden) {
       closeCustomerModal();
     }
     if (!$('#importModal').hidden) {
       closeImportModal();
-    }
-    if (!$('#deleteCustomerModal').hidden) {
-      closeDeleteCustomerModal();
     }
     if (!$('#userModal').hidden) {
       closeUserModal();
@@ -5590,6 +6314,13 @@ function bindEvents() {
     if (!fieldKey) return;
     const moduleKey = state.activeConfigModule;
     try {
+      const field = activeConfigFields().find((item) => item.fieldKey === fieldKey);
+      const confirmed = await showConfirmationModal({
+        title: 'Delete Field',
+        message: `Delete ${field?.label || fieldKey}? This cannot be undone.`,
+        confirmLabel: 'Delete Field'
+      });
+      if (!confirmed) return;
       const config = await api(`/api/sysadmin/modules/${moduleKey}/fields/${fieldKey}`, {
         method: 'DELETE'
       });
@@ -5880,6 +6611,12 @@ function bindEvents() {
     const nextTableName = normalizeDetailTableNamePreview(input.value);
     input.value = nextTableName || oldTableName;
     renameFormDesignDetailTable(oldTableName, input.value);
+  });
+  $('#confirmModalAction').addEventListener('click', () => closeConfirmationModal(true));
+  $('#closeConfirmationModal').addEventListener('click', () => closeConfirmationModal(false));
+  $('#cancelConfirmationModal').addEventListener('click', () => closeConfirmationModal(false));
+  $('#confirmationModal').addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) closeConfirmationModal(false);
   });
   $('#formDesignCanvas').addEventListener('blur', (event) => {
     const sectionTitle = event.target.closest('[data-form-section-title]');
@@ -6464,32 +7201,6 @@ function bindEvents() {
       toast('Customer Saved.');
     } catch (error) {
       toast(titleCaseMessage(error.message), 'error');
-    }
-  });
-
-  $('#confirmDeleteCustomers').addEventListener('click', async (event) => {
-    const ids = selectedCustomerIds();
-    if (!ids.length) {
-      closeDeleteCustomerModal();
-      return;
-    }
-
-    event.currentTarget.disabled = true;
-      event.currentTarget.textContent = 'Deleting...';
-    try {
-      const result = await api('/api/customers', {
-        method: 'DELETE',
-        body: JSON.stringify({ ids })
-      });
-      state.selectedCustomerIds.clear();
-      closeDeleteCustomerModal();
-      await loadCustomers();
-      toast(`Deleted ${result.deletedCount} Customer${result.deletedCount === 1 ? '' : 's'}.`);
-    } catch (error) {
-      toast(titleCaseMessage(error.message), 'error');
-    } finally {
-      event.currentTarget.disabled = false;
-      event.currentTarget.textContent = 'Delete';
     }
   });
 

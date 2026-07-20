@@ -1,5 +1,6 @@
 const { AppError } = require('../../shared/errors');
 const repository = require('./action-flows.repository');
+const runtime = require('./action-flows.runtime');
 
 const actionCategories = {
   record: ['add_record', 'update_record', 'delete_record', 'assign_owner', 'change_status', 'obtain_record_data', 'restore_record', 'data_source_query'],
@@ -162,6 +163,24 @@ async function listConnectors() {
   return { connectors: await repository.listConnectors() };
 }
 
+async function listConnectorCategories() {
+  return { categories: await repository.listConnectorCategories() };
+}
+
+async function saveConnectorCategory(input, user) {
+  const categoryKey = slugKey(input.categoryKey || input.name);
+  if (!categoryKey) throw new AppError('Category key is required', 422);
+  return { category: await repository.saveConnectorCategory({ categoryKey, name: input.name, description: input.description || '' }, user?.id) };
+}
+
+async function deleteConnectorCategory(categoryKey) {
+  const usageCount = await repository.countConnectorsByCategory(categoryKey);
+  if (usageCount) throw new AppError('Move connectors out of this category before deleting it', 409);
+  const deletedCount = await repository.deleteConnectorCategory(categoryKey);
+  if (!deletedCount) throw new AppError('Connector category not found', 404);
+  return { deletedCount };
+}
+
 async function listExecutions(filters = {}) {
   return {
     executions: await repository.listExecutions(filters.flowKey || '', filters.limit || 50)
@@ -175,6 +194,7 @@ async function saveConnector(input, user) {
     connectorKey,
     name: input.name,
     baseUrl: input.baseUrl,
+    categoryKey: input.categoryKey || '',
     authType: input.authType || 'none',
     authConfig: input.authConfig || {},
     defaultHeaders: input.defaultHeaders || {},
@@ -190,6 +210,12 @@ async function deleteConnector(connectorKey) {
   return { deletedCount };
 }
 
+async function debugConnector(connectorKey, endpoint) {
+  const connector = await repository.findConnectorByKey(connectorKey);
+  if (!connector) throw new AppError('API Connector not found', 404);
+  return runtime.debugConnectorRequest(connector, endpoint);
+}
+
 module.exports = {
   actionCategories,
   listFlows,
@@ -199,7 +225,11 @@ module.exports = {
   deleteFlow,
   checkFlow,
   listConnectors,
+  listConnectorCategories,
+  saveConnectorCategory,
+  deleteConnectorCategory,
   listExecutions,
   saveConnector,
-  deleteConnector
+  deleteConnector,
+  debugConnector
 };

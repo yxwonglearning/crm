@@ -465,8 +465,39 @@ async function main() {
         body += chunk;
       });
       req.on('end', () => {
-        const parsed = body ? JSON.parse(body) : {};
-        restCalls.push({ method: req.method, url: req.url, body: parsed });
+        const contentType = String(req.headers['content-type'] || '');
+        const parsed = body
+          ? (contentType.includes('application/json') ? JSON.parse(body) : Object.fromEntries(new URLSearchParams(body)))
+          : {};
+        restCalls.push({ method: req.method, url: req.url, body: parsed, headers: req.headers });
+        if (req.url === '/oauth2/token') {
+          const expected = `Basic ${Buffer.from('smoke-client:smoke-secret').toString('base64')}`;
+          if (req.headers.authorization !== expected || parsed.grant_type !== 'client_credentials') {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'invalid_client' }));
+            return;
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ access_token: 'smoke-oauth2-token', token_type: 'Bearer', expires_in: 3600 }));
+          return;
+        }
+        if (req.url === '/oauth2/resource') {
+          const authorized = req.headers.authorization === 'Bearer smoke-oauth2-token';
+          res.writeHead(authorized ? 200 : 401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ authorized, scheme: 'oauth2' }));
+          return;
+        }
+        if (req.url === '/oauth1/resource?check=yes') {
+          const authorization = String(req.headers.authorization || '');
+          const authorized = authorization.startsWith('OAuth ')
+            && authorization.includes('oauth_consumer_key="smoke-consumer"')
+            && authorization.includes('oauth_token="smoke-access-token"')
+            && authorization.includes('oauth_signature_method="HMAC-SHA256"')
+            && authorization.includes('oauth_signature=');
+          res.writeHead(authorized ? 200 : 401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ authorized, scheme: 'oauth1' }));
+          return;
+        }
         if (req.url === '/fail') {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: { message: `Rejected ${parsed.title || 'record'}` } }));
@@ -479,10 +510,20 @@ async function main() {
     await new Promise((resolve) => restServer.listen(0, '127.0.0.1', resolve));
     const restBaseUrl = `http://127.0.0.1:${restServer.address().port}`;
 
+    const categoryKey = `${runId}_category`;
+    const category = await request('POST', '/api/action-flows/connector-categories', {
+      json: { categoryKey, name: 'Smoke API Category', description: 'Groups smoke-test connectors.' }
+    });
+    expectStatus(category, 201, 'save connector category');
+    assert.equal(category.body.category.categoryKey, categoryKey);
+
     const connectorKey = `${runId}_connector`;
+    const oauth1ConnectorKey = `${runId}_oauth1_connector`;
+    const oauth2ConnectorKey = `${runId}_oauth2_connector`;
     const connector = await request('POST', '/api/action-flows/connectors', {
       json: {
         connectorKey,
+        categoryKey,
         name: 'Smoke REST Connector',
         baseUrl: restBaseUrl,
         authType: 'none',
@@ -497,6 +538,99 @@ async function main() {
     try {
       expectStatus(connector, 201, 'save API connector');
       assert.equal(connector.body.connector.connectorKey, connectorKey);
+      assert.equal(connector.body.connector.categoryKey, categoryKey);
+
+      const categories = await request('GET', '/api/action-flows/connector-categories');
+      expectStatus(categories, 200, 'list connector categories');
+      assert.ok(categories.body.categories.some((item) => item.categoryKey === categoryKey));
+
+      const debugRequest = await request('POST', `/api/action-flows/connectors/${connectorKey}/debug`, {
+        json: {
+          key: 'extract',
+          name: 'Debug Extract',
+          method: 'POST',
+          path: '/extract',
+          interfaceConfig: {
+            request: {
+              params: { source: 'interface-test' },
+              headers: { 'X-Smoke-Test': 'debug' },
+              body: { title: `${runId} Debug Request` },
+              bodyFormat: 'application/json'
+            },
+            outcome: { successStatuses: '200-299' }
+          }
+        }
+      });
+      expectStatus(debugRequest, 200, 'debug API interface');
+      assert.equal(debugRequest.body.response.status, 200);
+      assert.equal(debugRequest.body.response.body.echoedTitle, `${runId} Debug Request`);
+      assert.equal(debugRequest.body.outcome.success, true);
+      assert.equal(debugRequest.body.request.method, 'POST');
+      assert.match(debugRequest.body.request.url, /source=interface-test/);
+
+      const oauth1Connector = await request('POST', '/api/action-flows/connectors', {
+        json: {
+          connectorKey: oauth1ConnectorKey,
+          name: 'Smoke OAuth 1 Connector',
+          baseUrl: restBaseUrl,
+          authType: 'oauth1',
+          authConfig: {
+            consumerKey: 'smoke-consumer',
+            consumerSecret: 'smoke-consumer-secret',
+            accessToken: 'smoke-access-token',
+            tokenSecret: 'smoke-token-secret',
+            signatureMethod: 'HMAC-SHA256',
+            runtime: { allowPrivateNetwork: true }
+          },
+          enabled: true
+        }
+      });
+      expectStatus(oauth1Connector, 201, 'save OAuth 1 connector');
+      const oauth1Debug = await request('POST', `/api/action-flows/connectors/${oauth1ConnectorKey}/debug`, {
+        json: {
+          method: 'GET',
+          path: '/oauth1/resource',
+          interfaceConfig: { request: { params: { check: 'yes' } }, outcome: { successStatuses: '200-299' } }
+        }
+      });
+      expectStatus(oauth1Debug, 200, 'debug OAuth 1 interface');
+      assert.equal(oauth1Debug.body.response.status, 200);
+      assert.equal(oauth1Debug.body.response.body.authorized, true);
+      assert.equal(oauth1Debug.body.request.headers.Authorization, '[redacted]');
+
+      const oauth2Connector = await request('POST', '/api/action-flows/connectors', {
+        json: {
+          connectorKey: oauth2ConnectorKey,
+          name: 'Smoke OAuth 2 Connector',
+          baseUrl: restBaseUrl,
+          authType: 'oauth2',
+          authConfig: {
+            grantType: 'client_credentials',
+            accessTokenUrl: `${restBaseUrl}/oauth2/token`,
+            clientId: 'smoke-client',
+            clientSecret: 'smoke-secret',
+            scope: 'read',
+            clientAuthentication: 'basic',
+            authorizationLocation: 'header',
+            headerPrefix: 'Bearer',
+            runtime: { allowPrivateNetwork: true }
+          },
+          enabled: true
+        }
+      });
+      expectStatus(oauth2Connector, 201, 'save OAuth 2 connector');
+      const oauth2Debug = await request('POST', `/api/action-flows/connectors/${oauth2ConnectorKey}/debug`, {
+        json: { method: 'GET', path: '/oauth2/resource', interfaceConfig: { request: {}, outcome: { successStatuses: '200-299' } } }
+      });
+      expectStatus(oauth2Debug, 200, 'debug OAuth 2 interface');
+      assert.equal(oauth2Debug.body.response.status, 200);
+      assert.equal(oauth2Debug.body.response.body.authorized, true);
+      assert.equal(oauth2Debug.body.request.headers.Authorization, '[redacted]');
+      const oauth2DebugCached = await request('POST', `/api/action-flows/connectors/${oauth2ConnectorKey}/debug`, {
+        json: { method: 'GET', path: '/oauth2/resource', interfaceConfig: { request: {}, outcome: { successStatuses: '200-299' } } }
+      });
+      expectStatus(oauth2DebugCached, 200, 'reuse cached OAuth 2 token');
+      assert.equal(restCalls.filter((call) => call.url === '/oauth2/token').length, 1);
 
       const flowKey = `${runId}_flow`;
       const createFlow = await request('POST', '/api/action-flows', {
@@ -600,11 +734,12 @@ async function main() {
       const runtimeDetail = await request('GET', `/api/modules/${createdModuleKey}/records/${runtimeRecordId}`);
       expectStatus(runtimeDetail, 200, 'get runtime-mutated generated module record');
       assert.equal(runtimeDetail.body.record.customFields.amountDouble, 321);
-      assert.equal(restCalls.length, 2);
-      assert.equal(restCalls[0].method, 'POST');
-      assert.equal(restCalls[0].url, '/extract');
-      assert.equal(restCalls[0].body.title, `${runId} Runtime Record`);
-      assert.equal(restCalls[1].url, '/fail');
+      const extractCalls = restCalls.filter((call) => call.url.startsWith('/extract'));
+      assert.equal(extractCalls.length, 2);
+      assert.equal(extractCalls[1].method, 'POST');
+      assert.equal(extractCalls[1].url, '/extract');
+      assert.equal(extractCalls[1].body.title, `${runId} Runtime Record`);
+      assert.ok(restCalls.some((call) => call.url === '/fail'));
 
       const executions = await request('GET', `/api/action-flows/executions?flowKey=${encodeURIComponent(runtimeFlowKey)}`);
       expectStatus(executions, 200, 'list action flow executions');
@@ -638,6 +773,12 @@ async function main() {
       expectStatus(deleteRestErrorFlow, 200, 'delete REST error mapping flow');
       const deleteConnector = await request('DELETE', `/api/action-flows/connectors/${connectorKey}`);
       expectStatus(deleteConnector, 200, 'delete API connector');
+      const deleteOauth1Connector = await request('DELETE', `/api/action-flows/connectors/${oauth1ConnectorKey}`);
+      expectStatus(deleteOauth1Connector, 200, 'delete OAuth 1 connector');
+      const deleteOauth2Connector = await request('DELETE', `/api/action-flows/connectors/${oauth2ConnectorKey}`);
+      expectStatus(deleteOauth2Connector, 200, 'delete OAuth 2 connector');
+      const deleteCategory = await request('DELETE', `/api/action-flows/connector-categories/${categoryKey}`);
+      expectStatus(deleteCategory, 200, 'delete connector category');
     } finally {
       await new Promise((resolve) => restServer.close(resolve));
     }

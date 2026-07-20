@@ -235,12 +235,28 @@ CREATE TABLE IF NOT EXISTS crm_module_permissions (
   CONSTRAINT crm_module_permissions_module_id_fk FOREIGN KEY (module_id) REFERENCES crm_modules(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS crm_api_connector_categories (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  category_key VARCHAR(80) NOT NULL,
+  name VARCHAR(120) NOT NULL,
+  description VARCHAR(255) NULL,
+  created_by BIGINT UNSIGNED NULL,
+  updated_by BIGINT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY crm_api_connector_categories_key_unique (category_key),
+  CONSTRAINT crm_api_connector_categories_created_by_fk FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT crm_api_connector_categories_updated_by_fk FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS crm_api_connectors (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   connector_key VARCHAR(80) NOT NULL,
   name VARCHAR(120) NOT NULL,
   base_url VARCHAR(500) NOT NULL,
-  auth_type ENUM('none', 'api_key', 'bearer', 'basic', 'oauth') NOT NULL DEFAULT 'none',
+  category_key VARCHAR(80) NULL,
+  auth_type ENUM('none', 'api_key', 'bearer', 'basic', 'oauth', 'oauth1', 'oauth2') NOT NULL DEFAULT 'none',
   auth_config_json JSON NULL,
   default_headers_json JSON NULL,
   endpoints_json JSON NULL,
