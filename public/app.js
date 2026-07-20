@@ -28,9 +28,7 @@ const state = {
   token: storedSession.token,
   user: storedSession.user,
   rememberSession: storedSession.remembered,
-  authProvider: 'local',
   authConfig: null,
-  clerkLoaded: false,
   countries: [],
   users: [],
   customers: [],
@@ -50,6 +48,8 @@ const state = {
   permissionMatrix: null,
   fieldPermissionMatrix: null,
   activePermissionModule: 'customers',
+  pageViewPermissionModule: '',
+  pageViewPermissionMatrix: null,
   activeBrowserSource: '',
   browserSourceSearch: '',
   formDesignLayouts: {},
@@ -568,6 +568,13 @@ function updateFormDesignDraftOrder(type, fields) {
 }
 
 function syncFormDesignSectionsWithOrder(layout) {
+  const currentFieldKeys = activeConfigFields().map((field) => field.fieldKey);
+  const currentFieldKeySet = new Set(currentFieldKeys);
+  const savedOrder = Array.isArray(layout.order) ? layout.order : [];
+  layout.order = [
+    ...savedOrder.filter((fieldKey, index) => currentFieldKeySet.has(fieldKey) && savedOrder.indexOf(fieldKey) === index),
+    ...currentFieldKeys.filter((fieldKey) => !savedOrder.includes(fieldKey))
+  ];
   const mainFieldKeys = (layout.order || [])
     .map((fieldKey) => findConfigField(fieldKey))
     .filter((field) => field && field.tableType !== 'detail')
@@ -1673,7 +1680,7 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
 function setModalFullscreen(modal, enabled) {
-  const card = modal?.querySelector('.modal-card, .form-design-drawer');
+  const card = modal?.querySelector('.modal-card, .form-design-drawer, .page-permission-drawer');
   const button = card?.querySelector('[data-modal-fullscreen]');
   if (!card || !button) return;
   modal.classList.toggle('is-fullscreen', enabled);
@@ -1689,7 +1696,7 @@ function resetModalFullscreen(modal) {
 
 function toggleModalFullscreen(button) {
   const modal = button.closest('.modal-backdrop');
-  const card = button.closest('.modal-card, .form-design-drawer');
+  const card = button.closest('.modal-card, .form-design-drawer, .page-permission-drawer');
   if (!modal || !card) return;
   setModalFullscreen(modal, !card.classList.contains('is-fullscreen'));
 }
@@ -1744,9 +1751,6 @@ async function api(path, options = {}) {
 }
 
 async function currentAuthToken() {
-  if (state.authProvider === 'clerk') {
-    return window.Clerk?.session ? await window.Clerk.session.getToken() : '';
-  }
   return state.token;
 }
 
@@ -1756,40 +1760,6 @@ async function loadAuthConfig() {
     throw new Error('Unable to load auth configuration');
   }
   state.authConfig = await response.json();
-  state.authProvider = state.authConfig.provider || 'local';
-}
-
-function clerkDomainFromPublishableKey(publishableKey) {
-  try {
-    return atob(String(publishableKey || '').split('_')[2] || '').slice(0, -1);
-  } catch (_error) {
-    return '';
-  }
-}
-
-function loadScriptOnce(src, attributes = {}) {
-  return new Promise((resolve, reject) => {
-    const existing = document.querySelector(`script[src="${src}"]`);
-    if (existing) {
-      existing.addEventListener('load', resolve, { once: true });
-      existing.addEventListener('error', reject, { once: true });
-      if (existing.dataset.loaded === 'true') resolve();
-      return;
-    }
-    const script = document.createElement('script');
-    script.src = src;
-    script.defer = true;
-    script.crossOrigin = 'anonymous';
-    Object.entries(attributes).forEach(([key, value]) => {
-      script.setAttribute(key, value);
-    });
-    script.addEventListener('load', () => {
-      script.dataset.loaded = 'true';
-      resolve();
-    }, { once: true });
-    script.addEventListener('error', reject, { once: true });
-    document.head.appendChild(script);
-  });
 }
 
 function serializeForm(form) {
@@ -2190,11 +2160,12 @@ function setLinkedTargetValue(target, value) {
 }
 
 function linkedTargetInput(context, targetField) {
+  const resolvedTargetField = resolveLinkedTargetFieldKey(targetField);
   if (context?.target === 'detail') {
     return Array.from(context.row?.querySelectorAll('[data-detail-field]') || [])
-      .find((item) => item.dataset.detailField === targetField) || null;
+      .find((item) => item.dataset.detailField === resolvedTargetField) || null;
   }
-  return context?.form?.elements?.[targetField] || $('#customerForm')?.elements?.[targetField] || null;
+  return context?.form?.elements?.[resolvedTargetField] || $('#customerForm')?.elements?.[resolvedTargetField] || null;
 }
 
 async function applyFieldLinkageConfig(config, triggerValue, context = {}) {
@@ -2383,9 +2354,7 @@ function setSession(token, user, rememberSession = state.rememberSession) {
   state.rememberSession = Boolean(rememberSession);
   document.body.classList.remove('is-auth');
   document.body.classList.add('is-app');
-  if (state.authProvider === 'local') {
-    writeStoredSession(token, user, state.rememberSession);
-  }
+  writeStoredSession(token, user, state.rememberSession);
   $('#sessionLabel').textContent = `${user.name} · ${user.role}`;
   $('#logoutButton').hidden = false;
   $('[data-view="usersView"]').hidden = user.role !== 'admin';
@@ -2398,9 +2367,7 @@ function clearSession() {
   state.rememberSession = false;
   document.body.classList.remove('is-app');
   document.body.classList.add('is-auth');
-  if (state.authProvider === 'local') {
-    clearStoredSession();
-  }
+  clearStoredSession();
   $('#sessionLabel').textContent = 'Not signed in';
   $('#logoutButton').hidden = true;
   $('[data-view="usersView"]').hidden = false;
@@ -3272,6 +3239,7 @@ function valueForUserForm(user, field) {
   if (!user) return '';
   const values = {
     name: user.name,
+    staffId: user.staff_id,
     email: user.email,
     password: '',
     role: user.role,
@@ -3583,6 +3551,152 @@ async function savePermissionMatrix() {
   }
 }
 
+function closePageViewPermissionModal() {
+  const modal = $('#pageViewPermissionModal');
+  if (!modal) return;
+  resetModalFullscreen(modal);
+  modal.hidden = true;
+  state.pageViewPermissionModule = '';
+  state.pageViewPermissionMatrix = null;
+  if ($$('.modal-backdrop').every((item) => item.hidden)) {
+    document.body.classList.remove('modal-open');
+  }
+}
+
+function renderPageViewPermissionModal() {
+  const matrix = state.pageViewPermissionMatrix;
+  if (!matrix) return;
+  const module = configModules.find((item) => item.key === state.pageViewPermissionModule);
+  const roleItems = (matrix.roles || ['admin', 'manager', 'user']).map((role) => ({
+    value: role,
+    label: titleCaseMessage(role),
+    search: role
+  }));
+  const permissions = matrix.permissions || {};
+  const actions = (matrix.actions || permissionActions).filter((action) => action !== 'configure');
+  const viewPermission = permissions.view || { roles: [], users: [] };
+  const otherActions = actions.filter((action) => action !== 'view');
+  $('#pageViewPermissionTitle').textContent = `Page Permissions - ${module?.name || matrix.module?.name || titleCaseMessage(state.pageViewPermissionModule)}`;
+  $('#pageModulePermissionRows').innerHTML = `
+    <section class="page-view-access-card" data-page-permission-action="view">
+      <div class="page-permission-card-header">
+        <div>
+          <span class="eyebrow">Primary access</span>
+          <h3>View Access</h3>
+        </div>
+        <small>Controls whether this page appears and can be opened.</small>
+      </div>
+      <div class="page-view-access-grid">
+        <section class="page-permission-access-column">
+          <strong>Departments</strong>
+          <div class="page-department-planned" aria-disabled="true">
+            <span class="status-pill status-draft">Planned</span>
+            <strong>Department Access</strong>
+            <small>Will use backend department membership when the Department module is implemented.</small>
+          </div>
+        </section>
+        <section class="page-permission-access-column">
+          <strong>Roles</strong>
+          ${renderPermissionPicker('roles', 'view', roleItems, viewPermission.roles)}
+        </section>
+        <section class="page-permission-access-column">
+          <strong>Specific Users</strong>
+          ${renderPermissionPicker('users', 'view', permissionUserItems(), viewPermission.users)}
+        </section>
+      </div>
+    </section>
+
+    <div class="page-other-actions-heading">
+      <div>
+        <span class="eyebrow">Other actions</span>
+        <h3>Action Permissions</h3>
+      </div>
+      <small>Expand an action to change its role and user access.</small>
+    </div>
+    <div class="page-permission-accordions">
+      ${otherActions.map((action) => {
+        const actionPermission = permissions[action] || { roles: [], users: [] };
+        const roleCount = actionPermission.roles?.length || 0;
+        const userCount = actionPermission.users?.length || 0;
+        return `
+          <details class="page-permission-action-card" data-page-permission-action="${escapeHtml(action)}" open>
+            <summary>
+              <strong>${escapeHtml(permissionActionLabel(action))}</strong>
+              <span>${roleCount} roles · ${userCount} users</span>
+            </summary>
+            <div class="page-action-permission-grid">
+              <section class="page-permission-access-column">
+                <strong>Roles</strong>
+                ${renderPermissionPicker('roles', action, roleItems, actionPermission.roles)}
+              </section>
+              <section class="page-permission-access-column">
+                <strong>Specific Users</strong>
+                ${renderPermissionPicker('users', action, permissionUserItems(), actionPermission.users)}
+              </section>
+            </div>
+          </details>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+async function openPageViewPermissionModal(moduleKey) {
+  const modal = $('#pageViewPermissionModal');
+  const saveButton = $('#savePageViewPermissionButton');
+  state.pageViewPermissionModule = moduleKey;
+  state.pageViewPermissionMatrix = null;
+  $('#pageViewPermissionTitle').textContent = `Page Permissions - ${moduleByKey(moduleKey)?.name || titleCaseMessage(moduleKey)}`;
+  $('#pageModulePermissionRows').innerHTML = '<p class="muted">Loading permissions...</p>';
+  saveButton.disabled = true;
+  modal.hidden = false;
+  document.body.classList.add('modal-open');
+  try {
+    state.pageViewPermissionMatrix = await api(`/api/sysadmin/modules/${moduleKey}/permissions`);
+    renderPageViewPermissionModal();
+    saveButton.disabled = false;
+  } catch (error) {
+    closePageViewPermissionModal();
+    throw error;
+  }
+}
+
+async function savePageViewPermission(event) {
+  event.preventDefault();
+  const matrix = state.pageViewPermissionMatrix;
+  const moduleKey = state.pageViewPermissionModule;
+  if (!matrix || !moduleKey) return;
+  const button = $('#savePageViewPermissionButton');
+  button.disabled = true;
+  button.textContent = 'Saving...';
+  try {
+    const permissions = { ...(matrix.permissions || {}) };
+    $$('#pageModulePermissionRows [data-page-permission-action]').forEach((row) => {
+      const action = row.dataset.pagePermissionAction;
+      permissions[action] = {
+        roles: checkedValues(row.querySelector('[data-permission-picker="roles"]')),
+        users: checkedValues(row.querySelector('[data-permission-picker="users"]'))
+      };
+    });
+    const saved = await api(`/api/sysadmin/modules/${moduleKey}/permissions`, {
+      method: 'PUT',
+      body: JSON.stringify({ permissions })
+    });
+    if (state.activePermissionModule === moduleKey) {
+      state.permissionMatrix = saved;
+      renderPermissions();
+    }
+    await loadPublishedModules();
+    closePageViewPermissionModal();
+    toast('Page Permissions Saved.');
+  } catch (error) {
+    toast(titleCaseMessage(error.message), 'error');
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Save Permissions';
+  }
+}
+
 function moduleFieldCount(moduleKey) {
   if (moduleKey === 'users') return state.userFields.length;
   if (moduleKey === 'customers') return state.customerFields.length;
@@ -3711,6 +3825,7 @@ function renderAdminModulePages() {
             ${systemView ? `<button type="button" class="link-button" data-open-module-page="${escapeHtml(systemView)}">Open Page</button>` : ''}
             ${runtimeModule ? `<button type="button" class="link-button" data-open-runtime-module="${escapeHtml(module.key)}">Open Page</button>` : ''}
             <button type="button" class="link-button" data-edit-module-fields="${escapeHtml(module.key)}">Edit Form Fields</button>
+            <button type="button" class="link-button" data-edit-page-permissions="${escapeHtml(module.key)}">Permissions</button>
             ${module.system ? '' : `<button type="button" class="link-button" data-edit-module="${escapeHtml(module.key)}">Publish Settings</button>`}
           </div>
         </td>
@@ -4227,6 +4342,26 @@ function renderFieldLinkageTriggerOptions(selected = '') {
   )).join('');
 }
 
+function fieldLinkageTargetLabel(field) {
+  const keys = [field.fieldKey, field.dataKey].filter(Boolean);
+  const suffix = keys.length ? ` (${keys.join(' / ')})` : '';
+  return `${field.label}${suffix}`;
+}
+
+function resolveLinkedTargetFieldKey(targetField) {
+  const field = activeConfigFields().find((item) => (
+    item.fieldKey === targetField || item.dataKey === targetField
+  ));
+  return field?.fieldKey || targetField;
+}
+
+function renderFieldLinkageTargetOptions(selected = '') {
+  return activeConfigFields().map((field) => {
+    const isSelected = field.fieldKey === selected || field.dataKey === selected;
+    return `<option value="${escapeHtml(field.fieldKey)}" ${isSelected ? 'selected' : ''}>${escapeHtml(fieldLinkageTargetLabel(field))}</option>`;
+  }).join('');
+}
+
 function renderFieldLinkageRows(rows, type) {
   if (type === 'source') {
     return rows.map((row) => `
@@ -4258,7 +4393,7 @@ function renderFieldLinkageRows(rows, type) {
       <td>
         <select name="mappingTargetField">
           <option value="">Select field</option>
-          ${activeConfigFields().map((field) => `<option value="${escapeHtml(field.fieldKey)}" ${field.fieldKey === row.targetField ? 'selected' : ''}>${escapeHtml(field.label)}</option>`).join('')}
+          ${renderFieldLinkageTargetOptions(row.targetField)}
           <option value="__lookupDisplay" ${row.targetField === '__lookupDisplay' ? 'selected' : ''}>Lookup Display</option>
           <option value="__dialCodeDisplay" ${row.targetField === '__dialCodeDisplay' ? 'selected' : ''}>Dial Code Display</option>
         </select>
@@ -4333,7 +4468,7 @@ function collectFieldLinkageConfig(form) {
   })).filter((row) => row.leftField && row.rightField);
   const fieldMappings = $$('#fieldLinkageMappingRows [data-linkage-mapping-row]').map((row) => ({
     sourceField: row.querySelector('[name="mappingSourceField"]').value.trim(),
-    targetField: row.querySelector('[name="mappingTargetField"]').value,
+    targetField: resolveLinkedTargetFieldKey(row.querySelector('[name="mappingTargetField"]').value),
     coerceType: row.querySelector('[name="mappingCoerceType"]').value
   })).filter((row) => row.sourceField && row.targetField);
   const field = findConfigField(form.elements.fieldKey.value);
@@ -4799,83 +4934,13 @@ function setAuthHelp(message = '') {
 }
 
 function configureAuthUi() {
-  const usingClerk = state.authProvider === 'clerk';
-  $('#localLoginFields').hidden = usingClerk;
-  $('#clerkSignInMount').hidden = !usingClerk;
-  setAuthHelp(usingClerk
-    ? 'Sign in with Clerk. CRM roles and permissions still come from the local MySQL user mapping.'
-    : '');
-}
-
-async function completeClerkSession() {
-  const token = await currentAuthToken();
-  if (!token) {
-    clearSession();
-    return false;
-  }
-  const me = await api('/api/auth/me');
-  setSession(token, me.user, false);
-  showView('customersView');
-  await loadBootstrap();
-  return true;
-}
-
-async function initClerkAuth() {
-  configureAuthUi();
-  if (!state.authConfig?.clerk?.configured) {
-    clearSession();
-    setAuthHelp('Clerk is selected, but publishable/verification keys are not configured in .env.');
-    return;
-  }
-
-  const publishableKey = state.authConfig.clerk.publishableKey;
-  const clerkDomain = clerkDomainFromPublishableKey(publishableKey);
-  if (!clerkDomain) {
-    clearSession();
-    setAuthHelp('Clerk publishable key is invalid.');
-    return;
-  }
-
-  await loadScriptOnce(`https://${clerkDomain}/npm/@clerk/ui@1/dist/ui.browser.js`);
-  await loadScriptOnce(`https://${clerkDomain}/npm/@clerk/clerk-js@6/dist/clerk.browser.js`, {
-    'data-clerk-publishable-key': publishableKey
-  });
-  await window.Clerk.load({
-    ui: { ClerkUI: window.__internal_ClerkUICtor }
-  });
-  state.clerkLoaded = true;
-
-  if (window.Clerk.addListener) {
-    window.Clerk.addListener(async ({ session }) => {
-      if (!session) return;
-      try {
-        await completeClerkSession();
-      } catch (error) {
-        clearSession();
-        setAuthHelp(error.message);
-      }
-    });
-  }
-
-  if (window.Clerk.isSignedIn) {
-    try {
-      await completeClerkSession();
-    } catch (error) {
-      clearSession();
-      setAuthHelp(error.message);
-    }
-    return;
-  }
-
-  clearSession();
-  configureAuthUi();
-  window.Clerk.mountSignIn($('#clerkSignInMount'));
+  $('#localLoginFields').hidden = false;
+  setAuthHelp('');
 }
 
 function bindEvents() {
   $('#loginForm').addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (state.authProvider === 'clerk') return;
     const rememberMe = Boolean(event.currentTarget.elements.rememberMe?.checked);
     try {
       const result = await api('/api/auth/login', {
@@ -4894,10 +4959,7 @@ function bindEvents() {
     }
   });
 
-  $('#logoutButton').addEventListener('click', async () => {
-    if (state.authProvider === 'clerk' && window.Clerk) {
-      await window.Clerk.signOut();
-    }
+  $('#logoutButton').addEventListener('click', () => {
     clearSession();
     configureAuthUi();
   });
@@ -5052,10 +5114,32 @@ function bindEvents() {
       renderFieldConfig();
       return;
     }
+    const permissionsButton = event.target.closest('[data-edit-page-permissions]');
+    if (permissionsButton) {
+      openPageViewPermissionModal(permissionsButton.dataset.editPagePermissions)
+        .catch((error) => toast(titleCaseMessage(error.message), 'error'));
+      return;
+    }
     const editButton = event.target.closest('[data-edit-module]');
     if (editButton) {
       openModuleModal(editButton.dataset.editModule);
     }
+  });
+  $('#pageViewPermissionForm')?.addEventListener('submit', (event) => {
+    savePageViewPermission(event);
+  });
+  $('#closePageViewPermissionModal')?.addEventListener('click', closePageViewPermissionModal);
+  $('#cancelPageViewPermissionButton')?.addEventListener('click', closePageViewPermissionModal);
+  $('#pageViewPermissionModal')?.addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) closePageViewPermissionModal();
+  });
+  $('#pageViewPermissionForm')?.addEventListener('input', (event) => {
+    const search = event.target.closest('[data-permission-search]');
+    if (search) filterPermissionPicker(search.closest('[data-permission-picker]'));
+  });
+  $('#pageViewPermissionForm')?.addEventListener('change', (event) => {
+    const checkbox = event.target.closest('.permission-check input[type="checkbox"]');
+    if (checkbox) updatePermissionPickerCount(checkbox.closest('[data-permission-picker]'));
   });
   $('#moduleRuntimeSearchButton')?.addEventListener('click', () => {
     state.moduleRuntimeSearch = $('#moduleRuntimeSearch').value;
@@ -6488,11 +6572,6 @@ async function init() {
   }
   bindEvents();
   configureAuthUi();
-
-  if (state.authProvider === 'clerk') {
-    await initClerkAuth();
-    return;
-  }
 
   if (!state.token || !state.user) {
     clearSession();

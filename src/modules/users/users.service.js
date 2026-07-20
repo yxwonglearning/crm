@@ -4,7 +4,7 @@ const moduleConfig = require('../sysadmin/module-config.service');
 const repository = require('./users.repository');
 const { validateFieldValue } = require('../../shared/field-validation');
 
-const systemFieldKeys = new Set(['name', 'email', 'password', 'clerkUserId', 'role', 'status']);
+const systemFieldKeys = new Set(['name', 'staffId', 'email', 'password', 'role', 'status']);
 
 function parseCustomFields(value) {
   if (!value) return {};
@@ -35,6 +35,16 @@ function normalizeCustomFieldValue(field, value) {
     return Number(value);
   }
   return value;
+}
+
+function generatedStaffId() {
+  const timestamp = Date.now().toString(36).toUpperCase();
+  const suffix = Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `STF-${timestamp}-${suffix}`;
+}
+
+function normalizedStaffId(input) {
+  return String(input?.staffId || '').trim() || generatedStaffId();
 }
 
 async function userFieldConfig() {
@@ -77,19 +87,24 @@ async function listUsers(filters = {}) {
 }
 
 async function createUser(input) {
-  const config = await userFieldConfig();
-  await validateConfiguredFields(input, config.fields);
+  const fieldConfig = await userFieldConfig();
+  const staffId = normalizedStaffId(input);
+  const normalizedInput = {
+    ...input,
+    staffId
+  };
+  await validateConfiguredFields(normalizedInput, fieldConfig.fields);
   const password = String(input.password).trim();
   const passwordHash = await bcrypt.hash(password, 12);
   try {
     const id = await repository.createUser({
-      name: input.name,
-      email: input.email,
-      clerkUserId: input.clerkUserId || null,
+      name: normalizedInput.name,
+      staffId,
+      email: normalizedInput.email,
       passwordHash,
-      role: input.role,
-      status: input.status,
-      customFields: await customFieldsFromInput(input, config.fields)
+      role: normalizedInput.role,
+      status: normalizedInput.status,
+      customFields: await customFieldsFromInput(normalizedInput, fieldConfig.fields)
     });
     const created = await repository.findUserCredentialsById(id);
     if (!created || !await bcrypt.compare(password, created.password_hash)) {
@@ -98,7 +113,7 @@ async function createUser(input) {
     return { id, user: { id } };
   } catch (error) {
     if (error.code === 'ER_DUP_ENTRY') {
-      throw new AppError('A user with this email already exists', 409);
+      throw new AppError('A user with this email or staff ID already exists', 409);
     }
     throw error;
   }
@@ -119,8 +134,8 @@ async function updateUser(id, input) {
     ...input
   }, config.fields, id);
   if (input.name) updates.name = input.name;
+  if (input.staffId !== undefined) updates.staff_id = input.staffId || null;
   if (input.email) updates.email = input.email.toLowerCase();
-  if (input.clerkUserId !== undefined) updates.clerk_user_id = input.clerkUserId || null;
   if (input.role) updates.role = input.role;
   if (input.status) updates.status = input.status;
   if (input.password) {
@@ -142,7 +157,7 @@ async function updateUser(id, input) {
     }
   } catch (error) {
     if (error.code === 'ER_DUP_ENTRY') {
-      throw new AppError('A user with this email already exists', 409);
+      throw new AppError('A user with this email or staff ID already exists', 409);
     }
     throw error;
   }

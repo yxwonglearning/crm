@@ -245,7 +245,9 @@ async function main() {
 
     const list = await request('GET', `/api/users?search=${encodeURIComponent(createdUserEmail)}`);
     expectStatus(list, 200, 'list users');
-    assert.ok(list.body.users.some((user) => user.email === createdUserEmail));
+    const createdUser = list.body.users.find((user) => user.email === createdUserEmail);
+    assert.ok(createdUser);
+    assert.match(createdUser.staff_id, /^STF-[A-Z0-9]+-[A-Z0-9]{4}$/);
 
     const update = await request('PATCH', `/api/users/${create.body.user.id}`, {
       json: { status: 'inactive' }

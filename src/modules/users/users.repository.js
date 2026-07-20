@@ -12,6 +12,7 @@ function sqlIdentifier(identifier) {
 }
 
 const systemFieldColumns = {
+  staffId: 'staff_id',
   name: 'name',
   email: 'email',
   role: 'role',
@@ -76,14 +77,14 @@ async function listUsers(filters = {}, fields = []) {
 
   if (filters.search) {
     const search = `%${filters.search}%`;
-    where.push('(name LIKE ? OR email LIKE ? OR role LIKE ? OR status LIKE ?)');
-    values.push(search, search, search, search);
+    where.push('(staff_id LIKE ? OR name LIKE ? OR email LIKE ? OR role LIKE ? OR status LIKE ?)');
+    values.push(search, search, search, search, search);
   }
 
   addFieldFilter(where, values, fields, filters);
 
   const [rows] = await pool.execute(
-    `SELECT id, clerk_user_id, name, email, role, status, custom_fields, created_at, updated_at
+    `SELECT id, staff_id, name, email, role, status, custom_fields, created_at, updated_at
      FROM users
      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
      ORDER BY name ASC`,
@@ -94,7 +95,7 @@ async function listUsers(filters = {}, fields = []) {
 
 async function findUserById(id) {
   const [rows] = await pool.execute(
-    `SELECT id, clerk_user_id, name, email, role, status, custom_fields, created_at, updated_at
+    `SELECT id, staff_id, name, email, role, status, custom_fields, created_at, updated_at
      FROM users
      WHERE id = ?
      LIMIT 1`,
@@ -116,9 +117,9 @@ async function findUserCredentialsById(id) {
 
 async function createUser(user) {
   const [result] = await pool.execute(
-    `INSERT INTO users (clerk_user_id, name, email, password_hash, role, status, custom_fields)
+    `INSERT INTO users (staff_id, name, email, password_hash, role, status, custom_fields)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [user.clerkUserId || null, user.name, user.email.toLowerCase(), user.passwordHash, user.role, user.status, JSON.stringify(user.customFields || {})]
+    [user.staffId || null, user.name, user.email.toLowerCase(), user.passwordHash, user.role, user.status, JSON.stringify(user.customFields || {})]
   );
   return result.insertId;
 }

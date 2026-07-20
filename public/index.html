@@ -55,7 +55,6 @@
                 <button type="submit">Sign In</button>
                 <p class="muted">Seeded admin credentials come from your `.env` file.</p>
               </div>
-              <div id="clerkSignInMount" class="clerk-auth-mount" hidden></div>
               <p id="authHelpText" class="muted"></p>
             </form>
           </div>
@@ -1269,6 +1268,35 @@
 
       </section>
     </main>
+
+    <div id="pageViewPermissionModal" class="modal-backdrop drawer-backdrop" hidden>
+      <form id="pageViewPermissionForm" class="panel page-permission-drawer" aria-label="Page Permissions">
+        <div class="modal-header">
+          <div>
+            <span class="eyebrow">Page access</span>
+            <h2 id="pageViewPermissionTitle">Page Permissions</h2>
+          </div>
+          <div class="modal-title-actions">
+            <button type="button" class="icon-button fullscreen-button" data-modal-fullscreen aria-label="Enlarge to full screen" aria-pressed="false" title="Enlarge to full screen"></button>
+            <button type="button" class="icon-button" id="closePageViewPermissionModal" aria-label="Close">x</button>
+          </div>
+        </div>
+        <p class="muted page-permission-intro">Choose which roles and individual users can use each action on this page. Department-level visibility is planned for View access.</p>
+        <section class="page-permission-panel">
+          <div class="permissions-panel-heading page-permission-heading">
+            <strong>Module Actions</strong>
+            <small>Role and user access for this page. Field-level access remains in the main Permissions workspace.</small>
+          </div>
+          <div id="pageModulePermissionRows" class="page-permission-content">
+            <p class="muted">Loading permissions...</p>
+          </div>
+        </section>
+        <div class="form-actions end-actions">
+          <button type="submit" id="savePageViewPermissionButton">Save Permissions</button>
+          <button type="button" class="secondary" id="cancelPageViewPermissionButton">Cancel</button>
+        </div>
+      </form>
+    </div>
 
     <div id="toast" class="toast" hidden></div>
     <div id="successPrompt" class="modal-backdrop success-prompt-backdrop" hidden>

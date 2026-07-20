@@ -21,7 +21,7 @@ async function login(email, password, options = {}) {
   }
 
   if (!user.password_hash) {
-    throw new AppError('This account uses Clerk sign-in', 401);
+    throw new AppError('Invalid email or password', 401);
   }
 
   const passwordMatches = await bcrypt.compare(password, user.password_hash);

@@ -175,6 +175,7 @@ function moduleFieldColumn(moduleKey, field) {
       notes: 'notes'
     },
     users: {
+      staffId: 'staff_id',
       name: 'name',
       email: 'email',
       password: 'password_hash',

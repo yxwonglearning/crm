@@ -82,7 +82,8 @@ The sections below serve as the detailed project log, implementation notes, feat
 - Import/export mapping controls for per-field import headers, export headers, and export visibility.
 - Field validation rules for length, numeric range, regex, conditional required, and unique values.
 - Formula workspace with formula expressions, reusable custom helper functions, and SQL capture storage.
-- Backend-backed Form Design drawer for per-form-type visual field ordering with draft/publish controls.
+- Backend-backed Form Design drawer for per-form-type visual field ordering with draft/publish controls; newly created fields are reconciled into each form design automatically.
+- Page-level Permissions drawer for configuring role and specific-user access without leaving Module Pages.
 - All pop-out modals include a fullscreen/enlarge button.
 - Customer detail-table data entry inside the Add/Edit Customer modal.
 - Detail-table row controls:
@@ -165,7 +166,7 @@ Admins should have a dedicated portal for configuring the CRM:
    - Admins can create, edit, publish/draft/archive, show/hide in menu, and delete custom modules.
    - Custom module keys are stable once created and each custom module gets a backing data table for future records.
    - Generated frontend pages and record CRUD are now available for published custom modules.
-3. Phase 3: Form Builder - mostly complete, pending generated-page smoke test
+3. Phase 3: Form Builder - complete
    - Existing customer and user fields are configurable through Form Builder.
    - Admins can add one field at a time with `Add Field`.
    - Admins can edit existing fields and add new fields through `Batch Edit`.
@@ -177,6 +178,7 @@ Admins should have a dedicated portal for configuring the CRM:
    - Field validation rules support min/max length, min/max numeric value, regex, conditional required, and unique values.
    - `Formula` opens the Formula Builder for formula expressions, reusable custom functions, and SQL capture notes.
    - `Form Design` opens a right-side visual drawer for Add, Edit, and Detail form layouts. Draft and published layouts are stored in module configuration.
+   - Newly added fields are automatically included in the applicable form-design draft, so they are immediately available for layout configuration.
    - `Batch Edit` can duplicate selected configurable fields, delete unused configurable fields, and archive configurable fields that should be hidden without dropping existing data.
    - `Browser Buttons` stores reusable master-data lookup definitions. Browser Button fields can reference these definitions through field lookup metadata.
    - Browser Buttons are managed from a module-first workspace: select a module, then choose the main or detail table when creating or editing browser definitions.
@@ -185,7 +187,7 @@ Admins should have a dedicated portal for configuring the CRM:
 - Add/Edit Field and Batch Edit include a module-first Browser Button picker for `browser_button` fields and save `lookupConfig.browserButtonKey`.
 - Formula fields are evaluated on the customer form and server save path.
    - Formula save paths validate field dependencies, reject unknown field references, and block circular references before saving configuration.
-   - Still pending: full generated-page smoke testing after Module Builder and Module Page Publisher are connected.
+   - Generated-page smoke coverage is connected through Module Builder and Module Page Publisher.
 4. Phase 4: Module Page Publisher - complete
    - Admin Portal has a `Module Pages` section that lists each module page state, menu status, field count, layout publishing count, and actions.
    - Published custom modules can open as generated CRM pages from the menu or Module Pages section.
@@ -216,6 +218,11 @@ Admins should have a dedicated portal for configuring the CRM:
 6. Phase 6: Permissions - mostly done
    - Admin Portal has a `Permissions` section for module and field access.
    - Module permissions control view, create, edit, delete, import, export, and configuration access by role or specific user.
+   - Module Pages provides a page-specific `Permissions` action that opens a right-side configuration drawer instead of navigating away from the page list.
+   - `View` access uses Departments, Roles, and Specific Users. Department access is displayed first as a planned control until the backend Department module and membership data are implemented.
+   - Create, Edit, Delete, Import, and Export use Roles and Specific Users only; Configure remains in the main Permissions workspace.
+   - Action sections open expanded by default, the drawer body scrolls independently from its fixed header and footer, and role/user pickers show a compact set of entries with internal scrolling for additional options.
+   - Department-level page visibility is planned for the `View` action. Department records and user membership will be sourced from a future backend Department module before this control becomes editable.
    - Field permissions control view, create, edit, import, and export by role or specific user.
    - Customer list/config/import/save paths enforce the configured permissions.
 7. Phase 7: Dashboard Builder - planned
@@ -311,7 +318,6 @@ Dashboard ownership boundaries:
 - The Express backend owns the guarded dashboard API, permission checks, SQL validation, query execution, and JSON result shaping.
 - The frontend owns the low-code dashboard builder, widget layout, chart/table/pivot rendering, and user-facing refresh states.
 - Convex, if added later, should start as a realtime side channel for notifications, activity events, import/job status, user presence, and dashboard refresh signals. It should not initially duplicate full CRM tables or dashboard result rows.
-- Clerk, if added later, should own authentication and sessions. The local MySQL `users` table should continue to hold CRM-specific profile, role, status, permission, and module-access metadata mapped to Clerk user IDs.
 
 Recommended Convex event flow for dashboards:
 
@@ -343,75 +349,25 @@ Build order:
 6. Add filters, permissions, export/import, version history, and rollback.
 7. Add Convex only after the SQL dashboard engine exists, starting with realtime notifications and refresh signals rather than moving dashboard data storage.
 
-### Clerk Authentication Direction
+### Local Authentication Direction
 
-The current app uses Express, MySQL, bcrypt password hashes, and custom JWT bearer tokens. Before public production exposure, the preferred auth direction is to migrate authentication and session management to Clerk while keeping CRM data in MySQL.
+The app uses Express, MySQL, bcrypt password hashes, and custom JWT bearer tokens. This is the intended authentication model for the in-house CRM.
 
-Recommended Clerk migration boundaries:
+Local auth boundaries:
 
-- Clerk owns sign-in, sign-out, password reset, MFA, session/device management, and hosted auth security.
-- Express verifies Clerk session tokens on protected API requests.
-- The MySQL `users` table keeps CRM-specific fields such as role, status, permissions, custom user fields, and admin access.
-- Add a stable `clerk_user_id` mapping to local users before removing custom password login.
-- Stop storing new application password hashes once a user is migrated to Clerk.
-- Add Clerk webhooks later to sync user created/updated/deleted events into local CRM user records.
-- Keep dashboard, module, customer, import, action-flow, and permission data in MySQL unless there is a deliberate future full backend migration.
+- The MySQL `users` table owns CRM user identity, staff IDs, roles, status, permissions, and custom user fields.
+- `staff_id` is the stable internal staff/business identifier and is generated automatically when admin leaves it blank.
+- Email and password are used for local sign-in.
+- Password hashes stay in `users.password_hash` and are never exposed through the API.
+- JWTs are signed by the backend with `JWT_SECRET` and verified locally on protected API requests.
+- Setting a user `status` to `inactive` blocks access without deleting the user record.
 
-Suggested auth migration order:
+Keep maintaining these user fields in MySQL:
 
-1. Add Clerk project keys and backend token verification in a feature branch.
-2. Add `clerk_user_id` to local users and map the current admin user.
-3. Replace the login page with Clerk sign-in/sign-out UI.
-4. Update `requireAuth` to verify Clerk identity and load the matching local active CRM user.
-5. Keep role and permission checks based on the local MySQL user record.
-6. Add Clerk webhook handling for user lifecycle sync.
-7. Disable the custom `/api/auth/login` password flow after successful migration and testing.
-
-Current Clerk migration implementation:
-
-- `AUTH_PROVIDER=local` keeps the existing local email/password + app JWT flow.
-- `AUTH_PROVIDER=clerk` disables local password login and mounts Clerk sign-in on the login page.
-- Clerk session tokens are sent to Express as bearer tokens and verified server-side.
-- Express then loads the active CRM user from MySQL by `users.clerk_user_id`.
-- If no active MySQL user is mapped to the Clerk user, the API returns a forbidden response. This is intentional so Clerk identity does not bypass CRM role/status/permission controls.
-- `CLERK_AUTO_LINK_BY_EMAIL=false` is the recommended default. Setting it to `true` can auto-link a Clerk account to an unmapped MySQL user with the same email, but should only be used during a controlled migration window.
-
-Required Clerk environment values:
-
-```text
-AUTH_PROVIDER=clerk
-CLERK_PUBLISHABLE_KEY=pk_...
-CLERK_SECRET_KEY=sk_...
-CLERK_JWT_KEY=-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----
-CLERK_AUTHORIZED_PARTIES=http://localhost:3000,https://your-crm-domain.example
-CLERK_AUTO_LINK_BY_EMAIL=false
-```
-
-MySQL maintenance for Clerk:
-
-```sql
--- Find the local CRM user to map.
-SELECT id, email, name, role, status, clerk_user_id
-FROM users
-WHERE email = 'admin@example.com';
-
--- Map the local CRM user to the Clerk user ID from the Clerk dashboard.
-UPDATE users
-SET clerk_user_id = 'user_xxxxxxxxxxxxxxxxx'
-WHERE email = 'admin@example.com';
-
--- Keep role/status in MySQL because those still drive CRM permissions.
-UPDATE users
-SET role = 'admin', status = 'active'
-WHERE clerk_user_id = 'user_xxxxxxxxxxxxxxxxx';
-```
-
-After enabling Clerk, keep maintaining these fields in MySQL:
-
-- `clerk_user_id`: identity mapping to Clerk.
-- `email` and `name`: CRM display/search fields. Keep them aligned with Clerk via manual update or future webhook sync.
+- `staff_id`: internal staff/business identifier for reports, HR references, and user search.
+- `email` and `name`: CRM login/display/search fields.
 - `role`: CRM authorization level.
-- `status`: local CRM access switch. Set `inactive` to block a Clerk user from the CRM without deleting the Clerk account.
+- `status`: local CRM access switch.
 - `custom_fields`: user profile fields created by Form Builder.
 
 ### Form Builder Conventions
@@ -1444,16 +1400,15 @@ Reliability:
 4. Add UI smoke tests for login, customer CRUD, import, and user CRUD.
 
 Recommended feature order:
-1. Clerk authentication migration for managed sessions, password reset, and MFA.
-2. Customer activity timeline for calls, meetings, follow-ups, and internal notes.
-3. Tasks and reminders.
-4. Deals/opportunities pipeline.
-5. Import preview and duplicate detection.
-6. Audit logs for customer/user changes.
-7. Low-code dashboard builder with SQL view/query data sources and chart widgets.
-8. File attachments.
-9. Email integration.
-10. Production HTTPS setup if exposing beyond Tailscale.
+1. Customer activity timeline for calls, meetings, follow-ups, and internal notes.
+2. Tasks and reminders.
+3. Deals/opportunities pipeline.
+4. Import preview and duplicate detection.
+5. Audit logs for customer/user changes.
+6. Low-code dashboard builder with SQL view/query data sources and chart widgets.
+7. File attachments.
+8. Email integration.
+9. Production HTTPS setup if exposing beyond Tailscale.
 ```
 
 ## Missing Before Production
@@ -1461,7 +1416,6 @@ Recommended feature order:
 - Strong `JWT_SECRET`.
 - Admin credentials supplied through `.env`, with no public default login.
 - Production session lifetime policy.
-- Clerk or equivalent managed auth migration if exposing beyond trusted private access.
 - Dedicated MySQL user.
 - Backup and restore process.
 - Audit logs.

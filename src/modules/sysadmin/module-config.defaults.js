@@ -148,6 +148,22 @@ const userFields = [
     locked: true
   },
   {
+    fieldKey: 'staffId',
+    dataKey: 'staff_id',
+    label: 'Staff ID',
+    type: 'text',
+    required: false,
+    showInTable: true,
+    showInForm: true,
+    showInImport: false,
+    searchable: true,
+    validationRules: {
+      unique: true
+    },
+    sortOrder: 15,
+    locked: true
+  },
+  {
     fieldKey: 'email',
     dataKey: 'email',
     label: 'Email',
