@@ -4,6 +4,7 @@ const { asyncHandler } = require('../../shared/errors');
 const { validate } = require('../../shared/validation');
 const { requireAuth, requireRole } = require('../auth/auth.middleware');
 const service = require('./module-config.service');
+const { listModuleTemplates } = require('./module-templates');
 const permissions = require('../permissions/permissions.service');
 
 const sysadminRoutes = express.Router();
@@ -179,9 +180,12 @@ const moduleSchema = z.object({
   moduleKey: z.string().trim().min(1).max(80).optional(),
   description: z.string().trim().max(255).optional(),
   status: z.enum(['draft', 'published', 'archived']).optional(),
-  showInMenu: z.boolean().optional()
+  showInMenu: z.boolean().optional(),
+  creationMode: z.enum(['scratch', 'existing_form', 'template']).optional(),
+  sourceFormKey: z.string().trim().max(80).optional(),
+  templateKey: z.string().trim().max(80).optional()
 });
-const updateModuleSchema = moduleSchema.omit({ moduleKey: true }).partial().refine((value) => Object.keys(value).length > 0, {
+const updateModuleSchema = moduleSchema.omit({ moduleKey: true, creationMode: true, sourceFormKey: true, templateKey: true }).partial().refine((value) => Object.keys(value).length > 0, {
   message: 'At least one module setting is required'
 });
 
@@ -246,6 +250,10 @@ sysadminRoutes.post('/modules/:moduleKey/config-history/versions', asyncHandler(
 sysadminRoutes.post('/modules/:moduleKey/config-history/:versionId/rollback', asyncHandler(async (req, res) => {
   const input = validate(restoreConfigVersionSchema, req.body);
   res.json(await service.rollbackConfigVersion(req.params.moduleKey, req.params.versionId, req.user, input));
+}));
+
+sysadminRoutes.get('/module-templates', asyncHandler(async (_req, res) => {
+  res.json({ templates: listModuleTemplates() });
 }));
 
 sysadminRoutes.get('/modules/:moduleKey/field-permissions', asyncHandler(async (req, res) => {

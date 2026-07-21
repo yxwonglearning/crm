@@ -12,6 +12,7 @@ const smokeAdminPassword = process.env.SMOKE_ADMIN_PASSWORD || config.admin.pass
 const createdCustomerIds = [];
 const createdRecordIds = [];
 let createdModuleKey = '';
+const creationModeModuleKeys = [];
 let createdUserEmail = '';
 let createdUserId = 0;
 let baseUrl = '';
@@ -107,6 +108,14 @@ async function cleanup() {
     }
   } catch (_error) {
     // Best-effort.
+  }
+
+  for (const moduleKey of creationModeModuleKeys) {
+    try {
+      await request('DELETE', `/api/sysadmin/modules/${moduleKey}`);
+    } catch (_error) {
+      // Best-effort.
+    }
   }
 
   try {
@@ -476,6 +485,57 @@ async function main() {
     await request('PATCH', `/api/users/${createdUserId}`, { json: { organizationNodeId: null, status: 'inactive' } });
     await request('DELETE', `/api/departments/${permissionGroup.body.node.id}`);
     await request('DELETE', `/api/departments/${permissionDepartment.body.node.id}`);
+  });
+
+  await smoke('module creation routes and templates smoke', async () => {
+    const templates = await request('GET', '/api/sysadmin/module-templates');
+    expectStatus(templates, 200, 'list module templates');
+    assert.deepEqual(templates.body.templates.map((template) => template.key), ['companies', 'contacts', 'sales_opportunities']);
+    assert.ok(templates.body.templates.every((template) => template.fieldCount > 0));
+
+    const templateModuleKey = `${runId}_companies`;
+    creationModeModuleKeys.push(templateModuleKey);
+    const fromTemplate = await request('POST', '/api/sysadmin/modules', {
+      json: {
+        name: 'Smoke Companies',
+        moduleKey: templateModuleKey,
+        creationMode: 'template',
+        templateKey: 'companies',
+        status: 'draft'
+      }
+    });
+    expectStatus(fromTemplate, 201, 'create module from template');
+    assert.ok(findField(fromTemplate.body, 'companyName'), 'Companies template should create Company Name');
+    assert.ok(findField(fromTemplate.body, 'status'), 'Companies template should create Status');
+
+    const copiedModuleKey = `${runId}_copied_form`;
+    creationModeModuleKeys.push(copiedModuleKey);
+    const fromExistingForm = await request('POST', '/api/sysadmin/modules', {
+      json: {
+        name: 'Smoke Copied Form Module',
+        moduleKey: copiedModuleKey,
+        creationMode: 'existing_form',
+        sourceFormKey: createdModuleKey,
+        status: 'draft'
+      }
+    });
+    expectStatus(fromExistingForm, 201, 'create module from existing form');
+    assert.equal(findField(fromExistingForm.body, 'title').required, true);
+    assert.notEqual(findField(fromExistingForm.body, 'lineNote').detailTableName, detailTableName, 'Copied form must own a new detail table');
+    assert.deepEqual(fromExistingForm.body.formLayouts.published.add.order, ['title', 'amount', 'amountDouble', 'lineNote']);
+
+    const blankModuleKey = `${runId}_blank`;
+    creationModeModuleKeys.push(blankModuleKey);
+    const fromScratch = await request('POST', '/api/sysadmin/modules', {
+      json: {
+        name: 'Smoke Blank Module',
+        moduleKey: blankModuleKey,
+        creationMode: 'scratch',
+        status: 'draft'
+      }
+    });
+    expectStatus(fromScratch, 201, 'create blank module');
+    assert.equal(fromScratch.body.fields.length, 0);
   });
 
   await smoke('Phase 4 generated module page, record CRUD, filters, detail rows, and import/export smoke', async () => {

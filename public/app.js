@@ -37,6 +37,7 @@ const state = {
   userFields: [],
   adminModules: [],
   standaloneForms: [],
+  moduleTemplates: [],
   publishedModules: [],
   moduleRuntimeConfigs: {},
   moduleRuntimeRecords: {},
@@ -3987,11 +3988,50 @@ function moduleByKey(moduleKey) {
   return configModules.find((module) => module.key === moduleKey) || null;
 }
 
-function openModuleModal(moduleKey = '') {
+function renderModuleCreationSources() {
+  const form = $('#moduleForm');
+  if (!form) return;
+  const reusableForms = state.adminModules.filter((config) => (config.module?.moduleKey || config.moduleKey));
+  form.elements.sourceFormKey.innerHTML = reusableForms.length
+    ? `<option value="">Choose a Form Builder form</option>${reusableForms.map((config) => {
+      const module = config.module || config;
+      return `<option value="${escapeHtml(module.moduleKey || module.key)}">${escapeHtml(module.name)} · ${config.fields?.length || 0} fields</option>`;
+    }).join('')}`
+    : '<option value="">No Form Builder forms available</option>';
+  form.elements.templateKey.innerHTML = `<option value="">Choose a template</option>${state.moduleTemplates.map((template) => `<option value="${escapeHtml(template.key)}">${escapeHtml(template.name)} · ${template.fieldCount} fields</option>`).join('')}`;
+}
+
+function syncModuleCreationMode() {
+  const form = $('#moduleForm');
+  if (!form) return;
+  const editing = Boolean(form.elements.editingModuleKey.value);
+  const mode = form.elements.creationMode?.value || 'scratch';
+  $('#moduleCreationModeFields').hidden = editing;
+  $('#moduleExistingFormRow').hidden = editing || mode !== 'existing_form';
+  $('#moduleTemplateRow').hidden = editing || mode !== 'template';
+  form.elements.sourceFormKey.required = !editing && mode === 'existing_form';
+  form.elements.templateKey.required = !editing && mode === 'template';
+  $$('.module-creation-route').forEach((route) => {
+    route.classList.toggle('is-selected', route.querySelector('input')?.checked);
+  });
+  const template = state.moduleTemplates.find((item) => item.key === form.elements.templateKey.value);
+  $('#moduleTemplateDescription').textContent = template?.description || 'Choose a template to preview its purpose.';
+}
+
+async function openModuleModal(moduleKey = '') {
   const form = $('#moduleForm');
   const modal = $('#moduleModal');
   if (!form || !modal) return;
   const module = moduleKey ? moduleByKey(moduleKey) : null;
+  if (!module) {
+    const [modules, templates] = await Promise.all([
+      api('/api/sysadmin/modules'),
+      api('/api/sysadmin/module-templates')
+    ]);
+    state.adminModules = modules.modules || [];
+    syncConfigModuleCatalog();
+    state.moduleTemplates = templates.templates || [];
+  }
   form.reset();
   form.dataset.moduleKeyEdited = module ? 'true' : 'false';
   form.elements.editingModuleKey.value = module?.key || '';
@@ -4001,7 +4041,13 @@ function openModuleModal(moduleKey = '') {
   form.elements.description.value = module?.description || '';
   form.elements.status.value = module?.status || 'draft';
   form.elements.showInMenu.checked = Boolean(module?.showInMenu);
+  renderModuleCreationSources();
+  syncModuleCreationMode();
   $('#moduleFormTitle').textContent = module ? 'Edit Module' : 'New Module';
+  $('#moduleFormDescription').textContent = module
+    ? 'Update publishing, menu visibility, and module details.'
+    : 'Choose a starting point, then define how this module should appear.';
+  $('#saveModuleButton').textContent = module ? 'Save Module' : 'Create Module';
   modal.hidden = false;
   document.body.classList.add('modal-open');
   form.elements.name.focus();
@@ -4117,7 +4163,10 @@ async function saveModule(event) {
     moduleKey: form.elements.moduleKey.value.trim(),
     description: form.elements.description.value.trim(),
     status: form.elements.status.value,
-    showInMenu: form.elements.showInMenu.checked
+    showInMenu: form.elements.showInMenu.checked,
+    creationMode: form.elements.creationMode?.value || 'scratch',
+    sourceFormKey: form.elements.sourceFormKey?.value || undefined,
+    templateKey: form.elements.templateKey?.value || undefined
   };
   if (body.status !== 'published') body.showInMenu = false;
   const endpoint = editingModuleKey
@@ -6002,7 +6051,10 @@ function bindEvents() {
     form.dataset.formKeyEdited = 'true';
     event.currentTarget.value = slugFormKeyPreview(event.currentTarget.value);
   });
-  $('#newModuleButton')?.addEventListener('click', () => openModuleModal());
+  $('#newModuleButton')?.addEventListener('click', () => openModuleModal().catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  $('#moduleForm')?.addEventListener('change', (event) => {
+    if (event.target.matches('[name="creationMode"], [name="templateKey"]')) syncModuleCreationMode();
+  });
   $('#closeModuleModal')?.addEventListener('click', closeModuleModal);
   $('#cancelModuleButton')?.addEventListener('click', closeModuleModal);
   $('#moduleForm')?.addEventListener('submit', (event) => {
@@ -6035,7 +6087,7 @@ function bindEvents() {
     }
     const editButton = event.target.closest('[data-edit-module]');
     if (editButton) {
-      openModuleModal(editButton.dataset.editModule);
+      openModuleModal(editButton.dataset.editModule).catch((error) => toast(titleCaseMessage(error.message), 'error'));
       return;
     }
     const deleteButton = event.target.closest('[data-delete-module]');
@@ -6075,7 +6127,7 @@ function bindEvents() {
     }
     const editButton = event.target.closest('[data-edit-module]');
     if (editButton) {
-      openModuleModal(editButton.dataset.editModule);
+      openModuleModal(editButton.dataset.editModule).catch((error) => toast(titleCaseMessage(error.message), 'error'));
     }
   });
   $('#pageViewPermissionForm')?.addEventListener('submit', (event) => {

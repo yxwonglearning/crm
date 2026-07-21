@@ -178,6 +178,8 @@ Admins should have a dedicated portal for configuring the CRM:
    - Admin Portal has a `Modules` section.
    - Customers and Users are visible as existing system modules.
    - Admins can create, edit, publish/draft/archive, show/hide in menu, and delete custom modules.
+   - `Add New Module` opens in a full-height right-side drawer with three compact starting routes: a blank module, a copy of an existing module form configured in Form Builder, or a reusable Companies, Contacts, or Sales Opportunities template. Module Details use a single-column layout.
+   - Reused Form Builder forms copy their fields and Add/Edit/Detail layouts, including safely remapped detail tables. Existing forms and templates remain independent from the created module.
    - Custom module keys are stable once created and each custom module gets a backing data table for future records.
    - Generated frontend pages and record CRUD are now available for published custom modules.
 3. Phase 3: Form Builder - complete
@@ -1070,7 +1072,8 @@ JSON endpoints use `Content-Type: application/json` unless noted otherwise. Vali
   }
   ```
 
-- `POST /api/sysadmin/modules` - creates a custom module.
+- `GET /api/sysadmin/module-templates` - lists reusable module templates and their field counts.
+- `POST /api/sysadmin/modules` - creates a custom module. Optional `creationMode` values are `scratch`, `existing_form`, and `template`; the latter two require `sourceFormKey` or `templateKey` respectively.
 - `PATCH /api/sysadmin/modules/:moduleKey` - updates custom module name, description, status, or menu visibility.
 - `DELETE /api/sysadmin/modules/:moduleKey` - deletes an unused custom module.
 
@@ -1082,9 +1085,13 @@ JSON endpoints use `Content-Type: application/json` unless noted otherwise. Vali
     "moduleKey": "projects",
     "description": "Project tracking records",
     "status": "draft",
-    "showInMenu": false
+    "showInMenu": false,
+    "creationMode": "template",
+    "templateKey": "sales_opportunities"
   }
   ```
+
+  To reuse a Form Builder form instead, send `"creationMode": "existing_form"` with `"sourceFormKey": "customers"`. The source fields and Add/Edit/Detail layouts are copied; the new module receives its own safely remapped detail tables.
 
   Update request:
 

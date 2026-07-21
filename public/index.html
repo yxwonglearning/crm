@@ -345,42 +345,84 @@
               </div>
             </section>
 
-            <div id="moduleModal" class="modal-backdrop" hidden>
-              <form id="moduleForm" class="panel modal-card narrow-modal">
+            <div id="moduleModal" class="modal-backdrop drawer-backdrop" hidden>
+              <form id="moduleForm" class="panel form-builder-tool-drawer module-creation-drawer" aria-label="Module Configuration">
                 <div class="modal-header">
-                  <h2 id="moduleFormTitle">New Module</h2>
+                  <div>
+                    <span class="eyebrow">Module Builder</span>
+                    <h2 id="moduleFormTitle">New Module</h2>
+                    <p id="moduleFormDescription" class="muted">Choose a starting point, then define how this module should appear.</p>
+                  </div>
                   <div class="modal-title-actions">
                     <button type="button" class="icon-button fullscreen-button" data-modal-fullscreen aria-label="Enlarge to full screen" aria-pressed="false" title="Enlarge to full screen"></button>
                     <button type="button" class="icon-button" id="closeModuleModal" aria-label="Close">x</button>
                   </div>
                 </div>
                 <input name="editingModuleKey" type="hidden">
-                <label>
-                  Module Name
-                  <input name="name" type="text" required>
-                </label>
-                <label>
-                  Module Key
-                  <input name="moduleKey" type="text" required>
-                </label>
-                <label>
-                  Description
-                  <textarea name="description" rows="3"></textarea>
-                </label>
-                <label>
-                  Status
-                  <select name="status">
-                    <option value="draft">Draft</option>
-                    <option value="published">Published</option>
-                    <option value="archived">Archived</option>
-                  </select>
-                </label>
-                <label class="checkbox-label">
-                  <input name="showInMenu" type="checkbox">
-                  Show in menu when published
-                </label>
-                <div class="form-actions">
-                  <button type="submit">Save Module</button>
+                <div class="form-builder-tool-body module-creation-body">
+                  <fieldset id="moduleCreationModeFields" class="module-creation-routes">
+                    <legend>How would you like to begin?</legend>
+                    <label class="module-creation-route is-selected">
+                      <input name="creationMode" type="radio" value="scratch" checked>
+                      <span class="module-route-mark" aria-hidden="true">+</span>
+                      <span><strong>Build from scratch</strong><small>Create an empty module and add fields yourself.</small></span>
+                    </label>
+                    <label class="module-creation-route">
+                      <input name="creationMode" type="radio" value="existing_form">
+                      <span class="module-route-mark" aria-hidden="true">F</span>
+                      <span><strong>Reuse Form Builder form</strong><small>Copy fields and layouts from a form you already configured.</small></span>
+                    </label>
+                    <label class="module-creation-route">
+                      <input name="creationMode" type="radio" value="template">
+                      <span class="module-route-mark" aria-hidden="true">T</span>
+                      <span><strong>Use a template</strong><small>Start with recommended fields for a business object.</small></span>
+                    </label>
+                  </fieldset>
+                  <section class="module-details-card">
+                    <div class="module-details-heading">
+                      <span class="eyebrow">Module details</span>
+                      <p>These settings can be changed later from Module Builder.</p>
+                    </div>
+                    <div class="module-details-grid">
+                      <label id="moduleExistingFormRow" class="module-details-wide" hidden>
+                        Form Builder Form
+                        <select name="sourceFormKey"></select>
+                        <small class="field-hint">Fields and Add/Edit/Detail layouts are copied. Later changes remain independent.</small>
+                      </label>
+                      <label id="moduleTemplateRow" class="module-details-wide" hidden>
+                        Module Template
+                        <select name="templateKey"></select>
+                        <small id="moduleTemplateDescription" class="field-hint"></small>
+                      </label>
+                      <label>
+                        Module Name
+                        <input name="name" type="text" required>
+                      </label>
+                      <label>
+                        Module Key
+                        <input name="moduleKey" type="text" required>
+                      </label>
+                      <label class="module-details-wide">
+                        Description
+                        <textarea name="description" rows="4"></textarea>
+                      </label>
+                      <label>
+                        Status
+                        <select name="status">
+                          <option value="draft">Draft</option>
+                          <option value="published">Published</option>
+                          <option value="archived">Archived</option>
+                        </select>
+                      </label>
+                      <label class="checkbox-label module-menu-setting">
+                        <input name="showInMenu" type="checkbox">
+                        <span><strong>Show in menu</strong><small>Available when the module is published.</small></span>
+                      </label>
+                    </div>
+                  </section>
+                </div>
+                <div class="form-actions end-actions">
+                  <button type="submit" id="saveModuleButton">Create Module</button>
                   <button type="button" class="secondary" id="cancelModuleButton">Cancel</button>
                 </div>
               </form>

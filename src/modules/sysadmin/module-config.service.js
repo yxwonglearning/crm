@@ -1,6 +1,7 @@
 const { AppError } = require('../../shared/errors');
 const { formulaDependencyGraph } = require('../../shared/formula-dependencies');
 const repository = require('./module-config.repository');
+const { findModuleTemplate } = require('./module-templates');
 const { customerModule, customerFields, userModule, userFields } = require('./module-config.defaults');
 
 const defaultModules = new Map([
@@ -417,14 +418,62 @@ async function createModule(input, user = null) {
   const module = normalizeModuleInput(input, { creating: true });
   const existing = await repository.findModuleByKey(module.moduleKey);
   if (existing) throw new AppError('Module key already exists', 409);
+  const creationMode = input.creationMode || 'scratch';
+  let sourceFields = [];
+  let sourceLayouts = null;
+  if (creationMode === 'existing_form') {
+    if (!input.sourceFormKey) throw new AppError('Choose an existing form', 422);
+    const sourceModule = await repository.findModuleByKey(input.sourceFormKey);
+    if (!sourceModule) throw new AppError('Form Builder form not found', 404);
+    const sourceConfig = await getModuleConfig(input.sourceFormKey);
+    sourceFields = sourceConfig.fields || [];
+    sourceLayouts = sourceConfig.formLayouts || null;
+  } else if (creationMode === 'template') {
+    if (!input.templateKey) throw new AppError('Choose a module template', 422);
+    const template = findModuleTemplate(input.templateKey);
+    if (!template) throw new AppError('Module template not found', 404);
+    sourceFields = template.fields;
+  }
   await repository.createModule(module);
+  try {
+    const copiedDetailTables = new Map();
+    for (const field of sourceFields) {
+      let detailTableName = field.detailTableName;
+      if (creationMode === 'existing_form' && field.tableType === 'detail') {
+        const sourceTableKey = field.detailTableName || '__default_detail_table__';
+        if (!copiedDetailTables.has(sourceTableKey)) {
+          copiedDetailTables.set(sourceTableKey, `${moduleTableBase(module.moduleKey)}_dt${copiedDetailTables.size + 1}`);
+        }
+        detailTableName = copiedDetailTables.get(sourceTableKey);
+      }
+      await createField(module.moduleKey, {
+        ...field,
+        tableType: field.tableType || 'main',
+        detailTableName,
+        showInTable: field.showInTable !== false,
+        showInForm: field.showInForm !== false,
+        showInImport: field.showInImport !== false,
+        showInExport: field.showInExport !== false
+      }, user);
+    }
+    if (sourceLayouts) {
+      for (const [state, layoutsByType] of Object.entries(sourceLayouts)) {
+        for (const [formType, layout] of Object.entries(layoutsByType || {})) {
+          await repository.upsertFormLayout(module.moduleKey, state, formType, layout);
+        }
+      }
+    }
+  } catch (error) {
+    await repository.deleteModule(module.moduleKey);
+    throw error;
+  }
   await recordConfigChange(module.moduleKey, {
     action: 'module.create',
     targetType: 'module',
     targetKey: module.moduleKey,
     summary: `Created module ${module.name}`,
     before: null,
-    after: module,
+    after: { ...module, creationMode, sourceFormKey: input.sourceFormKey || null, templateKey: input.templateKey || null },
     user
   });
   return getModuleConfig(module.moduleKey);
@@ -891,7 +940,9 @@ async function createField(moduleKey, input, user = null) {
   const module = await repository.findModuleByKey(moduleKey);
   if (!module) throw new AppError('Module not found', 404);
 
-  const fieldKey = slugFieldKey(input.fieldKey || input.label);
+  const requestedFieldKey = String(input.fieldKey || '').trim();
+  if (requestedFieldKey) assertConfigKey(requestedFieldKey, 'Field key');
+  const fieldKey = requestedFieldKey || slugFieldKey(input.label);
   if (!fieldKey) throw new AppError('Field label is required', 422);
   if (await repository.findField(moduleKey, fieldKey)) {
     throw new AppError('Field key already exists', 409);
