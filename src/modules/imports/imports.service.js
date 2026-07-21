@@ -36,10 +36,7 @@ function assertCustomPublishedModule(config) {
 async function moduleFieldsForAction(moduleKey, action, user) {
   const config = await moduleConfig.getModuleConfig(moduleKey);
   const module = assertCustomPublishedModule(config);
-  const modulePermissions = await permissions.userModulePagePermissions(moduleKey, user);
-  if (!modulePermissions[action]) {
-    throw new AppError(`You do not have ${action} permission for this page`, 403);
-  }
+  await permissions.assertModulePageActionAllowed(moduleKey, user, action);
 
   const activeFields = (config.fields || []).filter((field) => !field.archived);
   const permissionMap = await permissions.userFieldPermissions(moduleKey, user, activeFields);

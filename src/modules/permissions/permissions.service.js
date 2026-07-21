@@ -267,11 +267,45 @@ async function userModulePagePermissions(moduleKey, user) {
   }), {});
 }
 
-async function assertModuleActionAllowed(moduleKey, user, action) {
+async function assertModuleActionAllowed(moduleKey, user, action, context = {}) {
   const userPermissions = await userModulePermissions(moduleKey, user);
-  if (!userPermissions[action]) {
+  const allowed = Boolean(userPermissions[action]);
+  await repository.createPermissionAuditLog({
+    userId: user?.id,
+    moduleKey,
+    recordId: context.recordId,
+    action,
+    allowed,
+    decisionReason: allowed
+      ? (user?.role === 'admin' ? 'admin_role' : 'module_permission_grant')
+      : 'no_module_permission_grant'
+  });
+  if (!allowed) {
     throw new AppError(`You do not have ${action} permission for this module`, 403);
   }
+}
+
+async function assertModulePageActionAllowed(moduleKey, user, action, context = {}) {
+  const userPermissions = await userModulePagePermissions(moduleKey, user);
+  const allowed = Boolean(userPermissions.view && (action === 'view' || userPermissions[action]));
+  await repository.createPermissionAuditLog({
+    userId: user?.id,
+    moduleKey,
+    recordId: context.recordId,
+    action,
+    allowed,
+    decisionReason: allowed
+      ? (user?.role === 'admin' ? 'admin_role' : 'page_permission_grant')
+      : 'no_page_permission_grant'
+  });
+  if (!allowed) {
+    throw new AppError(`You do not have ${action} permission for this page`, 403);
+  }
+  return userPermissions;
+}
+
+async function listPermissionAuditLogs(filters = {}) {
+  return repository.listPermissionAuditLogs(filters);
 }
 
 async function userFieldPermissions(moduleKey, user, fields) {
@@ -335,6 +369,8 @@ module.exports = {
   userModulePageAccessAllowed,
   userModulePagePermissions,
   assertModuleActionAllowed,
+  assertModulePageActionAllowed,
+  listPermissionAuditLogs,
   listFieldPermissionMatrix,
   saveFieldPermissionMatrix,
   userFieldPermissions,

@@ -95,6 +95,7 @@ async function listRecords(moduleKey, fields, filters = {}) {
     field.tableType !== 'detail'
     && (field.showInTable || field.searchable)
     && field.type !== 'checkbox'
+    && field.permissions?.view !== false
   ));
 
   if (filters.search && searchableFields.length) {

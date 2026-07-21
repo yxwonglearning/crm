@@ -2539,6 +2539,157 @@ td {
   min-width: var(--permission-table-min-w);
 }
 
+.permissions-panel-heading > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.preview-pill {
+  padding: 3px 7px;
+  border: 1px solid #f3c768;
+  border-radius: 999px;
+  background: #fff7df;
+  color: #8a5a00;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.record-access-preview {
+  padding: 16px;
+  border: 1px solid #cfdbe5;
+  border-radius: 7px;
+  background: #f7fafc;
+}
+
+.record-access-preview-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.record-access-card {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.record-access-card-heading {
+  display: grid;
+  gap: 3px;
+  margin-bottom: 12px;
+}
+
+.record-access-card-heading small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.record-access-scope-card {
+  grid-row: span 2;
+}
+
+.record-scope-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.record-scope-option {
+  position: relative;
+  min-height: 74px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #fbfdff;
+  cursor: pointer;
+}
+
+.record-scope-option.is-selected {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-soft);
+}
+
+.record-scope-option input {
+  align-self: center;
+}
+
+.record-scope-option strong,
+.record-scope-option small {
+  display: block;
+}
+
+.record-scope-option small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.record-access-subjects {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.record-access-subjects > div {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.record-access-subjects .permission-check-list {
+  max-height: 128px;
+}
+
+.record-access-action-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.record-access-action-options label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #f8fafc;
+}
+
+.record-access-preview-note {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-left: 3px solid #d89b24;
+  background: #fff9e9;
+  color: #6f531a;
+  font-size: 12px;
+}
+
+@media (max-width: 1080px) {
+  .record-access-preview-grid,
+  .record-access-subjects { grid-template-columns: 1fr; }
+  .record-access-scope-card { grid-row: auto; }
+}
+
+@media (max-width: 680px) {
+  .record-scope-options,
+  .record-access-action-options { grid-template-columns: 1fr; }
+  .record-access-preview-note { align-items: flex-start; flex-direction: column; }
+}
+
 .permissions-table th,
 .permissions-table td {
   vertical-align: top;
@@ -3463,6 +3614,182 @@ td {
   box-shadow: none;
 }
 
+.permission-audit-drawer {
+  width: min(100%, clamp(720px, 54vw, 960px));
+  height: 100vh;
+  border-radius: 0;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  box-shadow: -16px 0 34px rgba(15, 23, 42, 0.22);
+  animation: drawer-in 180ms ease-out;
+}
+
+.permission-audit-drawer.is-fullscreen {
+  width: 100%;
+  box-shadow: none;
+}
+
+.permission-audit-drawer > .modal-header,
+.permission-audit-drawer > .form-actions {
+  padding: 18px 22px;
+  margin: 0;
+  background: #fff;
+}
+
+.permission-audit-drawer > .modal-header { border-bottom: 1px solid var(--line); }
+.permission-audit-drawer > .form-actions { border-top: 1px solid var(--line); }
+
+.permission-audit-filters {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.2fr) repeat(2, minmax(130px, 0.8fr)) auto;
+  align-items: end;
+  gap: 10px;
+  padding: 14px 22px;
+  background: #fff;
+  border-bottom: 1px solid var(--line);
+}
+
+.permission-audit-filters label {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.permission-audit-filters button { min-height: 38px; }
+
+.permission-audit-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 22px;
+  color: var(--muted);
+  background: #f4f7fa;
+  border-bottom: 1px solid var(--line);
+}
+
+.permission-audit-summary strong { color: var(--ink); }
+
+.permission-audit-list {
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 16px 22px 28px;
+  background: #f4f7fa;
+}
+
+.permission-audit-entry {
+  --audit-accent: #14804a;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--audit-accent);
+  border-radius: 8px;
+  background: #fff;
+  padding: 14px 16px;
+}
+
+.permission-audit-entry.is-denied { --audit-accent: #c0362c; }
+
+.permission-audit-entry-head,
+.permission-audit-entry-head > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.permission-audit-entry-head {
+  justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e8edf2;
+}
+
+.permission-audit-entry-head time {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.permission-result-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  color: var(--audit-accent);
+  background: #e8f5ee;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.permission-audit-entry.is-denied .permission-result-badge { background: #fbeceb; }
+
+.permission-audit-entry-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 20px;
+  padding-top: 12px;
+}
+
+.permission-audit-entry-grid > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.permission-audit-entry-grid span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.permission-audit-entry-grid strong {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.permission-audit-empty {
+  min-height: 180px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 6px;
+  padding: 24px;
+  color: var(--muted);
+  text-align: center;
+  border: 1px dashed #cbd5df;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.permission-audit-empty strong { color: var(--ink); }
+
+@media (max-width: 760px) {
+  .permission-audit-filters {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .permission-audit-filters label:first-child,
+  .permission-audit-filters button {
+    grid-column: 1 / -1;
+  }
+
+  .permission-audit-entry-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .permission-audit-entry-grid { grid-template-columns: 1fr; }
+}
+
 .version-history-drawer > .modal-header,
 .version-history-drawer > .form-actions {
   padding: 18px 22px;
@@ -3578,11 +3905,10 @@ td {
 .page-view-access-card {
   display: grid;
   gap: 16px;
-  padding: 18px;
-  border: 1px solid #b8c9d8;
-  border-radius: 12px;
-  background: #fbfdff;
-  box-shadow: inset 4px 0 0 var(--primary);
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
 }
 
 .page-permission-card-header,
@@ -4226,6 +4552,7 @@ td {
 .form-design-drawer.is-fullscreen .fullscreen-button::before,
 .version-history-drawer.is-fullscreen .fullscreen-button::before,
 .page-permission-drawer.is-fullscreen .fullscreen-button::before,
+.permission-audit-drawer.is-fullscreen .fullscreen-button::before,
 .api-connector-drawer.is-fullscreen .fullscreen-button::before,
 .api-interface-drawer.is-fullscreen .fullscreen-button::before {
   width: 10px;
@@ -4238,6 +4565,7 @@ td {
 .form-design-drawer.is-fullscreen .fullscreen-button::after,
 .version-history-drawer.is-fullscreen .fullscreen-button::after,
 .page-permission-drawer.is-fullscreen .fullscreen-button::after,
+.permission-audit-drawer.is-fullscreen .fullscreen-button::after,
 .api-connector-drawer.is-fullscreen .fullscreen-button::after,
 .api-interface-drawer.is-fullscreen .fullscreen-button::after {
   display: block;

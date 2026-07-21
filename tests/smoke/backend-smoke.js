@@ -464,7 +464,29 @@ async function main() {
     const memberMenu = await request('GET', '/api/modules');
     expectStatus(memberMenu, 200, 'department member module menu');
     assert.ok(memberMenu.body.modules.some((entry) => entry.module.moduleKey === createdModuleKey), 'ancestor department View grant should include nested group member');
+    const allowedRecords = await request('GET', `/api/modules/${createdModuleKey}/records`);
+    expectStatus(allowedRecords, 200, 'allow record list with department view permission');
+    const deniedCreate = await request('POST', `/api/modules/${createdModuleKey}/records`, {
+      json: {}
+    });
+    expectStatus(deniedCreate, 403, 'deny record create without page create permission');
     token = adminToken;
+
+    const permissionAudit = await request(
+      'GET',
+      `/api/sysadmin/permission-audit?moduleKey=${encodeURIComponent(createdModuleKey)}&limit=20`
+    );
+    expectStatus(permissionAudit, 200, 'permission audit review');
+    assert.ok(permissionAudit.body.auditLogs.some((entry) => (
+      entry.action === 'create'
+      && entry.allowed === false
+      && entry.userId === createdUserId
+    )), 'denied record create should be audited');
+    assert.ok(permissionAudit.body.auditLogs.some((entry) => (
+      entry.action === 'view'
+      && entry.allowed === true
+      && entry.userId === createdUserId
+    )), 'allowed module view should be audited');
 
     const fieldPermissions = await request('GET', `/api/sysadmin/modules/${createdModuleKey}/field-permissions`);
     expectStatus(fieldPermissions, 200, 'field permissions');
@@ -482,6 +504,13 @@ async function main() {
       json: { fields }
     });
     expectStatus(saveFieldPermissions, 200, 'save field permissions');
+    token = userLogin.body.token;
+    const fieldRestrictedRecords = await request('GET', `/api/modules/${createdModuleKey}/records`);
+    expectStatus(fieldRestrictedRecords, 200, 'list records with field restrictions');
+    assert.ok(fieldRestrictedRecords.body.records.every((record) => (
+      Object.keys(record.customFields || {}).length === 0
+    )), 'record list must not expose fields without view permission');
+    token = adminToken;
     await request('PATCH', `/api/users/${createdUserId}`, { json: { organizationNodeId: null, status: 'inactive' } });
     await request('DELETE', `/api/departments/${permissionGroup.body.node.id}`);
     await request('DELETE', `/api/departments/${permissionDepartment.body.node.id}`);

@@ -191,6 +191,20 @@ const updateModuleSchema = moduleSchema.omit({ moduleKey: true, creationMode: tr
 
 sysadminRoutes.use(requireAuth, requireRole('admin'));
 
+sysadminRoutes.get('/permission-audit', asyncHandler(async (req, res) => {
+  const allowed = req.query.allowed === undefined
+    ? undefined
+    : ['true', '1'].includes(String(req.query.allowed).toLowerCase());
+  res.json({
+    auditLogs: await permissions.listPermissionAuditLogs({
+      moduleKey: String(req.query.moduleKey || '').trim(),
+      action: String(req.query.action || '').trim(),
+      allowed,
+      limit: req.query.limit
+    })
+  });
+}));
+
 sysadminRoutes.get('/modules', asyncHandler(async (_req, res) => {
   res.json({ modules: await service.listModules() });
 }));

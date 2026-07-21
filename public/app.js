@@ -24,6 +24,10 @@ function readStoredSession() {
 
 const storedSession = readStoredSession();
 
+const permissionPreviewFeatures = {
+  recordAccess: false
+};
+
 const state = {
   token: storedSession.token,
   user: storedSession.user,
@@ -60,6 +64,8 @@ const state = {
   permissionMatrix: null,
   fieldPermissionMatrix: null,
   activePermissionModule: 'customers',
+  permissionAuditLogs: [],
+  permissionAuditLoading: false,
   pageViewPermissionModule: '',
   pageViewPermissionMatrix: null,
   activeBrowserSource: '',
@@ -1715,7 +1721,7 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
 function setModalFullscreen(modal, enabled) {
-  const card = modal?.querySelector('.modal-card, .form-design-drawer, .version-history-drawer, .page-permission-drawer, .api-connector-drawer, .api-interface-drawer');
+  const card = modal?.querySelector('.modal-card, .form-design-drawer, .version-history-drawer, .page-permission-drawer, .permission-audit-drawer, .api-connector-drawer, .api-interface-drawer');
   const button = card?.querySelector('[data-modal-fullscreen]');
   if (!card || !button) return;
   modal.classList.toggle('is-fullscreen', enabled);
@@ -1731,7 +1737,7 @@ function resetModalFullscreen(modal) {
 
 function toggleModalFullscreen(button) {
   const modal = button.closest('.modal-backdrop');
-  const card = button.closest('.modal-card, .form-design-drawer, .version-history-drawer, .page-permission-drawer, .api-connector-drawer, .api-interface-drawer');
+  const card = button.closest('.modal-card, .form-design-drawer, .version-history-drawer, .page-permission-drawer, .permission-audit-drawer, .api-connector-drawer, .api-interface-drawer');
   if (!modal || !card) return;
   setModalFullscreen(modal, !card.classList.contains('is-fullscreen'));
 }
@@ -3536,6 +3542,55 @@ function renderFieldPermissionCell(field, action) {
   `;
 }
 
+function renderRecordAccessPreview() {
+  const panel = $('#recordAccessPreviewPanel');
+  const body = $('#recordAccessPreviewBody');
+  if (!panel || !body) return;
+  panel.hidden = !permissionPreviewFeatures.recordAccess;
+  if (panel.hidden) return;
+  const scopes = [
+    ['all', 'All records', 'Full access across this module.'],
+    ['own', 'Own records', 'Records created or owned by the current user.'],
+    ['assigned', 'Assigned records', 'Records assigned directly to the current user.'],
+    ['department', 'Department records', 'Records owned inside the user\'s department.'],
+    ['descendants', 'Department + children', 'Includes child departments and groups.'],
+    ['custom', 'Custom rules', 'Combine ownership, fields, and conditions.']
+  ];
+  body.innerHTML = `
+    <div class="record-access-preview-grid">
+      <section class="record-access-card record-access-scope-card">
+        <div class="record-access-card-heading"><strong>1. Access scope</strong><small>Choose the broadest set of records this rule allows.</small></div>
+        <div class="record-scope-options">
+          ${scopes.map(([value, label, description], index) => `
+            <label class="record-scope-option ${index === 3 ? 'is-selected' : ''}">
+              <input type="radio" name="recordAccessPreviewScope" value="${value}" ${index === 3 ? 'checked' : ''}>
+              <span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(description)}</small></span>
+            </label>
+          `).join('')}
+        </div>
+      </section>
+      <section class="record-access-card">
+        <div class="record-access-card-heading"><strong>2. Apply to</strong><small>Select who receives this record-access rule.</small></div>
+        <div class="record-access-subjects">
+          <div><strong>Roles</strong>${renderPermissionPicker('roles', 'record', permissionRoleItems(), ['manager', 'user'])}</div>
+          <div><strong>Departments</strong>${renderPermissionPicker('departments', 'record', permissionDepartmentItems(), [])}</div>
+          <div><strong>Specific users</strong>${renderPermissionPicker('users', 'record', permissionUserItems(), [])}</div>
+        </div>
+      </section>
+      <section class="record-access-card record-access-actions-card">
+        <div class="record-access-card-heading"><strong>3. Allowed actions</strong><small>Page and field permissions must also allow the action.</small></div>
+        <div class="record-access-action-options">
+          ${['View', 'Create', 'Edit', 'Delete', 'Import', 'Export'].map((action, index) => `<label><input type="checkbox" ${index < 3 ? 'checked' : ''}> <span>${action}</span></label>`).join('')}
+        </div>
+      </section>
+      <aside class="record-access-preview-note">
+        <strong>Preview only</strong>
+        <span>This interface is not saved or enforced yet. It can be hidden without deleting the implementation.</span>
+      </aside>
+    </div>
+  `;
+}
+
 function renderPermissions() {
   const body = $('#permissionRows');
   if (!body) return;
@@ -3543,6 +3598,7 @@ function renderPermissions() {
   const selector = $('#permissionModuleSelect');
   if (selector) selector.value = state.activePermissionModule;
   const permissions = state.permissionMatrix?.permissions || {};
+  renderRecordAccessPreview();
 
   body.innerHTML = workspacePermissionActions.map((action) => `
     <tr data-permission-action-row="${escapeHtml(action)}">
@@ -3667,6 +3723,104 @@ async function savePermissionMatrix() {
     button.disabled = false;
     button.textContent = 'Save Permissions';
   }
+}
+
+function permissionAuditReasonLabel(reason) {
+  const labels = {
+    admin_role: 'Admin role',
+    module_permission_grant: 'Module permission grant',
+    page_permission_grant: 'Page permission grant',
+    no_module_permission_grant: 'No module permission grant',
+    no_page_permission_grant: 'No page permission grant'
+  };
+  return labels[reason] || titleCaseMessage(String(reason || 'Permission decision').replaceAll('_', ' '));
+}
+
+function renderPermissionAuditModuleFilter() {
+  const select = $('#permissionAuditModuleFilter');
+  if (!select) return;
+  const selected = select.value || state.activePermissionModule || '';
+  select.innerHTML = [
+    '<option value="">All modules</option>',
+    ...state.adminModules.map((entry) => {
+      const module = entry.module || entry;
+      const key = module.moduleKey || module.key;
+      return `<option value="${escapeHtml(key)}">${escapeHtml(module.name || titleCaseMessage(key))}</option>`;
+    })
+  ].join('');
+  select.value = [...select.options].some((option) => option.value === selected) ? selected : '';
+}
+
+function renderPermissionAudit() {
+  const list = $('#permissionAuditList');
+  if (!list) return;
+  if (state.permissionAuditLoading) {
+    list.innerHTML = '<div class="permission-audit-empty">Loading audit decisions...</div>';
+    return;
+  }
+  const logs = state.permissionAuditLogs || [];
+  $('#permissionAuditCount').textContent = `${logs.length} decision${logs.length === 1 ? '' : 's'}`;
+  list.innerHTML = logs.map((entry) => {
+    const user = entry.userName || entry.staffId || (entry.userId ? `User ${entry.userId}` : 'Former or system user');
+    const identity = entry.staffId && entry.userName ? `${entry.userName} · ${entry.staffId}` : user;
+    return `
+      <article class="permission-audit-entry ${entry.allowed ? 'is-allowed' : 'is-denied'}">
+        <div class="permission-audit-entry-head">
+          <div>
+            <span class="permission-result-badge">${entry.allowed ? 'Allowed' : 'Denied'}</span>
+            <strong>${escapeHtml(permissionActionLabel(entry.action))}</strong>
+          </div>
+          <time>${escapeHtml(versionHistoryDate(entry.createdAt))}</time>
+        </div>
+        <div class="permission-audit-entry-grid">
+          <div><span>User</span><strong>${escapeHtml(identity)}</strong></div>
+          <div><span>Module</span><strong>${escapeHtml(titleCaseMessage(entry.moduleKey))}</strong></div>
+          <div><span>Record</span><strong>${entry.recordId ? `#${escapeHtml(entry.recordId)}` : 'Not applicable'}</strong></div>
+          <div><span>Reason</span><strong>${escapeHtml(permissionAuditReasonLabel(entry.decisionReason))}</strong></div>
+        </div>
+      </article>
+    `;
+  }).join('') || '<div class="permission-audit-empty"><strong>No audit decisions found</strong><span>Try changing the filters or perform an action in a module.</span></div>';
+}
+
+async function loadPermissionAudit() {
+  const params = new URLSearchParams({ limit: '200' });
+  const moduleKey = $('#permissionAuditModuleFilter')?.value || '';
+  const action = $('#permissionAuditActionFilter')?.value || '';
+  const allowed = $('#permissionAuditResultFilter')?.value || '';
+  if (moduleKey) params.set('moduleKey', moduleKey);
+  if (action) params.set('action', action);
+  if (allowed) params.set('allowed', allowed);
+  state.permissionAuditLoading = true;
+  renderPermissionAudit();
+  try {
+    const payload = await api(`/api/sysadmin/permission-audit?${params.toString()}`);
+    state.permissionAuditLogs = payload.auditLogs || [];
+  } catch (error) {
+    state.permissionAuditLogs = [];
+    toast(titleCaseMessage(error.message), 'error');
+  } finally {
+    state.permissionAuditLoading = false;
+    renderPermissionAudit();
+  }
+}
+
+async function openPermissionAuditDrawer() {
+  renderPermissionAuditModuleFilter();
+  $('#permissionAuditActionFilter').value = '';
+  $('#permissionAuditResultFilter').value = '';
+  const drawer = $('#permissionAuditDrawer');
+  drawer.hidden = false;
+  document.body.classList.add('modal-open');
+  await loadPermissionAudit();
+}
+
+function closePermissionAuditDrawer() {
+  const drawer = $('#permissionAuditDrawer');
+  if (!drawer) return;
+  resetModalFullscreen(drawer);
+  drawer.hidden = true;
+  document.body.classList.remove('modal-open');
 }
 
 function permissionDepartmentItems() {
@@ -6366,6 +6520,13 @@ function bindEvents() {
     }
   });
   $('#savePermissionsButton').addEventListener('click', savePermissionMatrix);
+  $('#viewPermissionAuditButton').addEventListener('click', () => {
+    openPermissionAuditDrawer().catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  });
+  $('#refreshPermissionAuditButton').addEventListener('click', loadPermissionAudit);
+  $('#permissionAuditModuleFilter').addEventListener('change', loadPermissionAudit);
+  $('#permissionAuditActionFilter').addEventListener('change', loadPermissionAudit);
+  $('#permissionAuditResultFilter').addEventListener('change', loadPermissionAudit);
   $('#permissionRows').addEventListener('input', (event) => {
     const search = event.target.closest('[data-permission-search]');
     if (!search) return;
@@ -6515,6 +6676,20 @@ function bindEvents() {
     }
     applyCustomerFormulas();
   });
+  $('#recordAccessPreviewBody')?.addEventListener('change', (event) => {
+    const scope = event.target.closest('[name="recordAccessPreviewScope"]');
+    if (scope) {
+      $$('#recordAccessPreviewBody .record-scope-option').forEach((option) => {
+        option.classList.toggle('is-selected', option.querySelector('input')?.checked);
+      });
+    }
+    const checkbox = event.target.closest('.permission-check input[type="checkbox"]');
+    if (checkbox) updatePermissionPickerCount(checkbox.closest('[data-permission-picker]'));
+  });
+  $('#recordAccessPreviewBody')?.addEventListener('input', (event) => {
+    const search = event.target.closest('[data-permission-search]');
+    if (search) filterPermissionPicker(search.closest('[data-permission-picker]'));
+  });
   $('#customerFormFields').addEventListener('input', () => {
     applyCustomerFormulas();
   });
@@ -6654,6 +6829,9 @@ function bindEvents() {
     }
     if (!$('#versionHistoryDrawer').hidden) {
       closeVersionHistoryDrawer();
+    }
+    if (!$('#permissionAuditDrawer').hidden) {
+      closePermissionAuditDrawer();
     }
     if (!$('#formulaBuilderModal').hidden) {
       closeFormulaBuilderModal();
@@ -6912,6 +7090,11 @@ function bindEvents() {
   $('#publishFormDesignButton').addEventListener('click', publishFormDesign);
   $('#closeVersionHistoryDrawer').addEventListener('click', closeVersionHistoryDrawer);
   $('#closeVersionHistoryFooter').addEventListener('click', closeVersionHistoryDrawer);
+  $('#closePermissionAuditDrawer').addEventListener('click', closePermissionAuditDrawer);
+  $('#closePermissionAuditFooter').addEventListener('click', closePermissionAuditDrawer);
+  $('#permissionAuditDrawer').addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) closePermissionAuditDrawer();
+  });
   $('#createConfigVersionButton').addEventListener('click', () => {
     createConfigVersionCheckpoint().catch((error) => toast(error.message, 'error'));
   });

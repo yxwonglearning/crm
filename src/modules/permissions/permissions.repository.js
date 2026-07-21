@@ -176,6 +176,57 @@ async function replaceModuleDepartmentPermissions(moduleId, departmentIds = []) 
   }
 }
 
+async function createPermissionAuditLog({ userId, moduleKey, recordId, action, allowed, decisionReason }) {
+  const [result] = await pool.execute(
+    `INSERT INTO crm_permission_audit_logs (
+      user_id, module_key, record_id, action, allowed, decision_reason
+    ) VALUES (?, ?, ?, ?, ?, ?)`,
+    [userId || null, moduleKey, recordId || null, action, allowed ? 1 : 0, decisionReason]
+  );
+  return result.insertId;
+}
+
+async function listPermissionAuditLogs({ moduleKey = '', action = '', allowed, limit = 100 } = {}) {
+  const where = [];
+  const values = [];
+  const safeLimit = Math.min(Math.max(Number(limit) || 100, 1), 500);
+  if (moduleKey) {
+    where.push('logs.module_key = ?');
+    values.push(moduleKey);
+  }
+  if (action) {
+    where.push('logs.action = ?');
+    values.push(action);
+  }
+  if (allowed !== undefined) {
+    where.push('logs.allowed = ?');
+    values.push(allowed ? 1 : 0);
+  }
+  const [rows] = await pool.execute(
+    `SELECT logs.id, logs.user_id, users.staff_id, users.name AS user_name,
+            logs.module_key, logs.record_id, logs.action, logs.allowed,
+            logs.decision_reason, logs.created_at
+     FROM crm_permission_audit_logs logs
+     LEFT JOIN users ON users.id = logs.user_id
+     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+     ORDER BY logs.created_at DESC, logs.id DESC
+     LIMIT ${safeLimit}`,
+    values
+  );
+  return rows.map((row) => ({
+    id: Number(row.id),
+    userId: row.user_id ? Number(row.user_id) : null,
+    staffId: row.staff_id || null,
+    userName: row.user_name || null,
+    moduleKey: row.module_key,
+    recordId: row.record_id ? Number(row.record_id) : null,
+    action: row.action,
+    allowed: Boolean(row.allowed),
+    decisionReason: row.decision_reason,
+    createdAt: row.created_at
+  }));
+}
+
 module.exports = {
   listFieldPermissions,
   permissionCount,
@@ -183,5 +234,7 @@ module.exports = {
   listModulePermissions,
   replaceModulePermissions,
   listModuleDepartmentPermissions,
-  replaceModuleDepartmentPermissions
+  replaceModuleDepartmentPermissions,
+  createPermissionAuditLog,
+  listPermissionAuditLogs
 };

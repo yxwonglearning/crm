@@ -659,6 +659,7 @@
                       <p>Control module configuration and field-level access. Page actions are managed from Pages.</p>
                     </div>
                     <div class="section-heading-actions">
+                      <button type="button" class="secondary" id="viewPermissionAuditButton">View Audit Log</button>
                       <button type="button" id="savePermissionsButton">Save Permissions</button>
                     </div>
                   </div>
@@ -681,6 +682,16 @@
                         </table>
                       </div>
                     </div>
+                    <section id="recordAccessPreviewPanel" class="permissions-panel record-access-preview" hidden>
+                      <div class="permissions-panel-heading">
+                        <div>
+                          <strong>Record Access</strong>
+                          <span class="preview-pill">Preview</span>
+                        </div>
+                        <small>Controls which individual records people can access inside this module.</small>
+                      </div>
+                      <div id="recordAccessPreviewBody"></div>
+                    </section>
                     <div class="permissions-panel">
                       <div class="permissions-panel-heading">
                         <strong>Field Actions</strong>
@@ -1530,6 +1541,55 @@
           <button type="button" class="secondary" id="cancelPageViewPermissionButton">Cancel</button>
         </div>
       </form>
+    </div>
+
+    <div id="permissionAuditDrawer" class="modal-backdrop drawer-backdrop" hidden>
+      <aside class="panel permission-audit-drawer" aria-label="Permission Audit Log">
+        <div class="modal-header">
+          <div>
+            <span class="eyebrow">Permission security</span>
+            <h2>Audit Log</h2>
+            <p class="muted">Trace allowed and denied access decisions across CRM modules.</p>
+          </div>
+          <div class="modal-title-actions">
+            <button type="button" class="icon-button fullscreen-button" data-modal-fullscreen aria-label="Enlarge to full screen" aria-pressed="false" title="Enlarge to full screen"></button>
+            <button type="button" class="icon-button" id="closePermissionAuditDrawer" aria-label="Close">x</button>
+          </div>
+        </div>
+        <div class="permission-audit-filters">
+          <label>Module
+            <select id="permissionAuditModuleFilter"></select>
+          </label>
+          <label>Action
+            <select id="permissionAuditActionFilter">
+              <option value="">All actions</option>
+              <option value="view">View</option>
+              <option value="create">Create</option>
+              <option value="edit">Edit</option>
+              <option value="delete">Delete</option>
+              <option value="import">Import</option>
+              <option value="export">Export</option>
+              <option value="configure">Configure</option>
+            </select>
+          </label>
+          <label>Result
+            <select id="permissionAuditResultFilter">
+              <option value="">All results</option>
+              <option value="true">Allowed</option>
+              <option value="false">Denied</option>
+            </select>
+          </label>
+          <button type="button" class="secondary" id="refreshPermissionAuditButton">Refresh</button>
+        </div>
+        <div class="permission-audit-summary">
+          <strong id="permissionAuditCount">0 decisions</strong>
+          <span>Newest decisions appear first.</span>
+        </div>
+        <div id="permissionAuditList" class="permission-audit-list" aria-live="polite"></div>
+        <div class="form-actions end-actions">
+          <button type="button" class="secondary" id="closePermissionAuditFooter">Close</button>
+        </div>
+      </aside>
     </div>
 
     <div id="toast" class="toast" hidden></div>

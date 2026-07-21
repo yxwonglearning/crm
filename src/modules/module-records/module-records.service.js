@@ -194,22 +194,40 @@ async function validateFields(moduleKey, input, fields, excludeId = null) {
   }
 }
 
-function normalizeRecord(record, detailTables = {}) {
+function normalizeRecord(record, detailTables = {}, fields = null) {
   if (!record) return null;
+  const visibleFields = Array.isArray(fields)
+    ? fields.filter((field) => field.permissions?.view !== false)
+    : null;
+  const visibleMainKeys = visibleFields
+    ? new Set(visibleFields.filter((field) => field.tableType !== 'detail').map((field) => field.fieldKey))
+    : null;
+  const visibleDetailFields = visibleFields
+    ? visibleFields.filter((field) => field.tableType === 'detail' && field.detailTableName)
+    : null;
+  const safeDetailTables = visibleDetailFields
+    ? Object.fromEntries(Array.from(new Set(visibleDetailFields.map((field) => field.detailTableName))).map((tableName) => {
+      const keys = new Set(visibleDetailFields.filter((field) => field.detailTableName === tableName).map((field) => field.fieldKey));
+      return [tableName, (detailTables[tableName] || []).map((row) => Object.fromEntries(
+        Object.entries(row).filter(([key]) => key === 'id' || key === 'mainid' || keys.has(key))
+      ))];
+    }))
+    : detailTables;
   return {
     id: record.id,
-    customFields: record.customFields || {},
-    detailTables,
+    customFields: visibleMainKeys
+      ? Object.fromEntries(Object.entries(record.customFields || {}).filter(([key]) => visibleMainKeys.has(key)))
+      : (record.customFields || {}),
+    detailTables: safeDetailTables,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt
   };
 }
 
-async function moduleRecordConfig(moduleKey, user) {
+async function moduleRecordConfig(moduleKey, user, action = 'view', context = {}) {
   const config = await moduleConfig.getModuleConfig(moduleKey);
   assertCustomPublishedModule(config);
-  const userPermissions = await permissions.userModulePagePermissions(moduleKey, user);
-  if (!userPermissions.view) throw new AppError('You do not have access to this page', 403);
+  const userPermissions = await permissions.assertModulePageActionAllowed(moduleKey, user, action, context);
   return {
     ...config,
     permissions: userPermissions,
@@ -237,21 +255,20 @@ async function listRecords(moduleKey, filters, user) {
     fields: config.fields,
     formLayouts: config.formLayouts,
     permissions: config.permissions,
-    records: records.map((record) => normalizeRecord(record))
+    records: records.map((record) => normalizeRecord(record, {}, config.fields))
   };
 }
 
 async function getRecord(moduleKey, id, user) {
-  const config = await moduleRecordConfig(moduleKey, user);
+  const config = await moduleRecordConfig(moduleKey, user, 'view', { recordId: id });
   const record = await repository.findRecordById(moduleKey, id);
   if (!record) throw new AppError('Record not found', 404);
   const detailTables = await repository.detailRowsByRecordId(record.id, config.fields);
-  return { record: normalizeRecord(record, detailTables) };
+  return { record: normalizeRecord(record, detailTables, config.fields) };
 }
 
 async function createRecord(moduleKey, input, user) {
-  const config = await moduleRecordConfig(moduleKey, user);
-  if (!config.permissions.create) throw new AppError('You do not have create permission for this page', 403);
+  const config = await moduleRecordConfig(moduleKey, user, 'create');
   const fields = mainFields(config).filter((field) => field.permissions?.create !== false);
   const customFields = applyFormulaFields(customFieldsFromInput(input, fields), fields);
   await validateFields(moduleKey, customFields, fields);
@@ -269,8 +286,7 @@ async function createRecord(moduleKey, input, user) {
 }
 
 async function updateRecord(moduleKey, id, input, user) {
-  const config = await moduleRecordConfig(moduleKey, user);
-  if (!config.permissions.edit) throw new AppError('You do not have edit permission for this page', 403);
+  const config = await moduleRecordConfig(moduleKey, user, 'edit', { recordId: id });
   const existing = await repository.findRecordById(moduleKey, id);
   if (!existing) throw new AppError('Record not found', 404);
   const fields = mainFields(config).filter((field) => field.permissions?.edit !== false);
@@ -303,9 +319,8 @@ async function updateRecord(moduleKey, id, input, user) {
 }
 
 async function deleteRecords(moduleKey, ids, user) {
-  const config = await moduleRecordConfig(moduleKey, user);
+  const config = await moduleRecordConfig(moduleKey, user, 'delete');
   assertCustomPublishedModule(config);
-  if (!config.permissions.delete) throw new AppError('You do not have delete permission for this page', 403);
   const existingRecords = [];
   for (const id of ids) {
     const record = await repository.findRecordById(moduleKey, id);

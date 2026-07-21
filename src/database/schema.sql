@@ -236,6 +236,22 @@ CREATE TABLE IF NOT EXISTS crm_module_permissions (
   CONSTRAINT crm_module_permissions_module_id_fk FOREIGN KEY (module_id) REFERENCES crm_modules(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS crm_permission_audit_logs (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id BIGINT UNSIGNED NULL,
+  module_key VARCHAR(80) NOT NULL,
+  record_id BIGINT UNSIGNED NULL,
+  action VARCHAR(40) NOT NULL,
+  allowed TINYINT(1) NOT NULL,
+  decision_reason VARCHAR(120) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY crm_permission_audit_logs_module_created_idx (module_key, created_at),
+  KEY crm_permission_audit_logs_user_created_idx (user_id, created_at),
+  KEY crm_permission_audit_logs_allowed_created_idx (allowed, created_at),
+  CONSTRAINT crm_permission_audit_logs_user_id_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS crm_api_connector_categories (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   category_key VARCHAR(80) NOT NULL,

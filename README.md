@@ -239,7 +239,7 @@ Admins should have a dedicated portal for configuring the CRM:
    - Dynamic assignment picker is available for Action Flow value fields and mapping rows, with context/current-record/system/fixed-value choices and previous-node output tokens.
    - Still pending: condition/query table builders, broader trigger/action runtime coverage, and workflow operation wiring.
    - Later add scheduling, cross-module orchestration, external integrations, and advanced execution monitoring.
-6. Phase 6: Permissions - mostly done
+6. Phase 6: Permissions - complete
    - Admin Portal has a `Permissions` section for module and field access.
    - Module permissions control view, create, edit, delete, import, export, and configuration access by role or specific user.
    - Module Pages provides a page-specific `Permissions` action that opens a right-side configuration drawer instead of navigating away from the page list.
@@ -250,7 +250,13 @@ Admins should have a dedicated portal for configuring the CRM:
    - User create/edit forms require an Organization Unit; existing or unspecified users default to the Organization root.
    - The organization-membership and inherited Page View integration passed the complete backend smoke suite on 2026-07-21.
    - Field permissions control view, create, edit, import, and export by role or specific user.
-   - Customer list/config/import/save paths enforce the configured permissions.
+   - Existing module and field permissions are enforced across generated record list, open, create, edit, delete, import, and export operations.
+   - Fields without View permission are excluded from returned record data and cannot be used by record search/filter paths.
+   - Allowed and denied permission decisions are stored in `crm_permission_audit_logs` with user/staff identity, module, optional record ID, action, result, decision reason, and timestamp.
+   - Admin Portal > Permissions includes a read-only `View Audit Log` right-side drawer with module, action, and Allowed/Denied filters, refresh, and fullscreen controls.
+   - The admin-only permission-audit API supports module, action, result, and result-limit filters.
+   - Record-scope rules such as Own, Assigned, or Department records are intentionally not required; the exploratory Record Access interface remains disabled behind a frontend feature flag.
+   - Database migration, allowed/denied audit coverage, field-view redaction coverage, and the complete backend smoke suite passed on 2026-07-21.
 7. Phase 7: Dashboard Builder - planned
    - Add low-code dashboard pages made from saved widget configuration instead of generated source code.
    - Use saved SQL views or guarded `SELECT` queries as dashboard data sources.
@@ -285,7 +291,7 @@ Admins should have a dedicated portal for configuring the CRM:
 - Advanced import/export profiles per module.
 - Low-code dashboard builder with SQL view/query data sources and reusable chart widgets.
 - Report builder and dashboard widgets.
-- Field-level and record-level permissions.
+- Field-level permissions are complete; separate record-scope rules are not required.
 - Full-database backup and verified disaster-recovery restore procedures. Form Builder configuration version history and snapshot recovery are implemented.
 
 ### Dashboard Builder Direction
@@ -571,7 +577,8 @@ Keep maintaining these user fields in MySQL:
 - Added fullscreen/enlarge controls to pop-out modals.
 - Standardized large pop-out scrolling so headers and action footers remain fixed while the middle content scrolls, including fullscreen mode.
 - Converted Batch Edit, Field Properties, and Import/Export Mapping from centered pop-outs to consistent right-side Form Builder drawers.
-- Added module and field permission matrices with role/user grants and runtime enforcement for customer access and imports.
+- Added module and field permission matrices with role/user grants and runtime enforcement for customer and generated-module CRUD, import, and export operations.
+- Added persistent allowed/denied permission auditing plus a filtered, read-only audit-review drawer in Admin Portal > Permissions.
 - Added Import/Export Mapping controls for mapped Excel import headers, export headers, export visibility, and customer export downloads.
 
 ### Country And Phone Handling
@@ -1272,6 +1279,29 @@ JSON endpoints use `Content-Type: application/json` unless noted otherwise. Vali
   ```
 
   Response: saved field permission matrix.
+
+- `GET /api/sysadmin/permission-audit` - returns recent allowed and denied permission decisions for admin review. Optional query parameters are `moduleKey`, `action`, `allowed`, and `limit` (maximum 500).
+
+  Response:
+
+  ```json
+  {
+    "auditLogs": [
+      {
+        "id": 42,
+        "userId": 7,
+        "staffId": "STF-EXAMPLE-0001",
+        "userName": "Example User",
+        "moduleKey": "projects",
+        "recordId": 18,
+        "action": "edit",
+        "allowed": false,
+        "decisionReason": "no_page_permission_grant",
+        "createdAt": "2026-07-21T08:30:00.000Z"
+      }
+    ]
+  }
+  ```
 
 - `GET /api/sysadmin/browser-buttons` - lists browser button lookup definitions.
 
