@@ -11,9 +11,11 @@ const REST_MAX_RESPONSE_BYTES = 1024 * 1024;
 const oauth2TokenCache = new Map();
 
 function recordValues(record = {}) {
+  const customFields = record.customFields || record.custom_fields;
+  if (!customFields || typeof customFields !== 'object') return { ...record };
   return {
     id: record.id,
-    ...(record.customFields || record.custom_fields || {})
+    ...customFields
   };
 }
 
@@ -41,7 +43,12 @@ function setValueAtPath(target, path, value) {
 }
 
 function resolveToken(rawValue, context) {
-  const value = String(rawValue || '').trim();
+  const value = String(rawValue ?? '').trim();
+  const wrappedExpression = value.match(/^=?\{\{\s*(.+?)\s*\}\}$/);
+  if (wrappedExpression) return resolveToken(wrappedExpression[1], context);
+  if (value.includes('{{')) {
+    return value.replace(/\{\{\s*(.+?)\s*\}\}/g, (_match, expression) => String(resolveToken(expression, context) ?? ''));
+  }
   if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
     return value.slice(1, -1);
   }
@@ -56,6 +63,9 @@ function resolveToken(rawValue, context) {
   }
   if (/^outputs\./i.test(value)) {
     return valueAtPath(context.outputs, value.replace(/^outputs\./i, ''));
+  }
+  if (/^loop\./i.test(value)) {
+    return valueAtPath(context.loop || {}, value.replace(/^loop\./i, ''));
   }
   return value;
 }
@@ -93,6 +103,17 @@ function parseMappingText(text = '', context) {
       if (key) mapping[key] = resolveToken(value, context);
       return mapping;
     }, {});
+}
+
+function configuredFieldMapping(config = {}, context, textKey = 'fieldMappingText') {
+  const rows = Array.isArray(config.fieldMappings) ? config.fieldMappings : [];
+  if (!rows.length) return parseMappingText(config[textKey], context);
+  return rows.reduce((mapping, row) => {
+    const key = String(row?.target || '').trim();
+    if (!key) return mapping;
+    mapping[key] = row.mode === 'expression' ? resolveToken(row.value, context) : row.value;
+    return mapping;
+  }, {});
 }
 
 function parseRestMappingText(text = '', source = {}) {
@@ -333,7 +354,7 @@ async function applyConnectorAuthentication(connector, method, url, headers, bod
 }
 
 function parseRestBody(endpoint, nodeConfig, context) {
-  const mapping = parseMappingText(nodeConfig.requestMapping, context);
+  const mapping = configuredFieldMapping(nodeConfig, context, 'requestMapping');
   if (Object.keys(mapping).length) return mapping;
   const content = endpoint.testBody?.content || nodeConfig.requestBodyText || '';
   if (!String(content || '').trim()) return null;
@@ -712,19 +733,50 @@ function compareValues(left, operator, right) {
   return false;
 }
 
-function evaluateCondition(condition = '', context) {
+function evaluateLegacyCondition(condition = '', context) {
   const text = String(condition || '').trim();
-  if (!text) return true;
+  if (!text) return { matched: true, rules: [] };
   const match = text.match(/^(.+?)\s+(equals|is|not_equals|is_not|contains|starts_with|ends_with|empty|not_empty|greater_than|less_than|=|==|!=|<>)\s*(.*)$/i);
-  if (!match) return false;
+  if (!match) return { matched: false, rules: [{ left: text, operator: 'invalid', matched: false }] };
   const left = resolveToken(match[1], context);
   const operator = match[2].toLowerCase();
   const right = resolveToken(match[3], context);
-  return compareValues(left, operator, right);
+  const matched = compareValues(left, operator, right);
+  return {
+    matched,
+    rules: [{ id: 'legacy_1', left: match[1].trim(), operator, matched }]
+  };
 }
 
-function nextNode(definition, nodeId) {
-  const edge = (definition.edges || []).find((item) => item.from === nodeId && item.kind !== 'loop_body');
+function evaluateStructuredCondition(config = {}, context) {
+  const rules = Array.isArray(config.conditionRules) ? config.conditionRules : [];
+  if (!rules.length) return evaluateLegacyCondition(config.condition, context);
+  const results = rules.map((rule, index) => {
+    const operator = String(rule.operator || '').toLowerCase();
+    const left = resolveToken(rule.left, context);
+    const right = ['empty', 'not_empty'].includes(operator) ? '' : resolveToken(rule.value, context);
+    return {
+      id: rule.id || `rule_${index + 1}`,
+      left: String(rule.left || ''),
+      operator,
+      matched: compareValues(left, operator, right)
+    };
+  });
+  const combinator = config.conditionCombinator === 'or' ? 'or' : 'and';
+  return {
+    matched: combinator === 'or' ? results.some((rule) => rule.matched) : results.every((rule) => rule.matched),
+    combinator,
+    rules: results
+  };
+}
+
+function edgeOutcome(edge) {
+  return String(edge?.outcome || edge?.label || '').trim().toLowerCase();
+}
+
+function nextNode(definition, nodeId, outcome = '') {
+  const edges = (definition.edges || []).filter((item) => item.from === nodeId && item.kind !== 'loop_body');
+  const edge = outcome ? edges.find((item) => edgeOutcome(item) === outcome) : edges.find((item) => !edgeOutcome(item));
   if (!edge) return null;
   return (definition.nodes || []).find((node) => node.id === edge.to) || null;
 }
@@ -747,9 +799,9 @@ async function executeRecordAction(node, context) {
   await assertRuntimeModule(targetModule);
 
   if (node.type === 'add_record') {
-    const customFields = parseMappingText(config.fieldMappingText, context);
+    const customFields = configuredFieldMapping(config, context);
     const id = await moduleRecords.createRecord(targetModule, customFields, context.trigger.userId || null);
-    return { action: node.type, targetModule, recordId: id };
+    return { action: node.type, targetModule, recordId: id, values: customFields };
   }
 
   if (node.type === 'update_record' || node.type === 'assign_owner' || node.type === 'change_status') {
@@ -757,7 +809,7 @@ async function executeRecordAction(node, context) {
     if (!targetId) throw new AppError('Update action needs a target record id', 422);
     const existing = await moduleRecords.findRecordById(targetModule, targetId);
     if (!existing) throw new AppError('Target record not found', 404);
-    const mappedFields = parseMappingText(config.fieldMappingText, context);
+    const mappedFields = configuredFieldMapping(config, context);
     if (node.type === 'assign_owner' && config.operatorValue) {
       mappedFields.ownerUserId = resolveToken(config.operatorValue, context);
     }
@@ -768,7 +820,7 @@ async function executeRecordAction(node, context) {
       ...existing.customFields,
       ...mappedFields
     }, context.trigger.userId || null);
-    return { action: node.type, targetModule, recordId: targetId, fields: Object.keys(mappedFields) };
+    return { action: node.type, targetModule, recordId: targetId, fields: Object.keys(mappedFields), values: mappedFields };
   }
 
   if (node.type === 'delete_record') {
@@ -782,15 +834,231 @@ async function executeRecordAction(node, context) {
   return { action: node.type, skipped: true, reason: 'Record action is not implemented in runtime yet' };
 }
 
+function executeDataMappingAction(node, context) {
+  if (node.type === 'set_variable') {
+    const values = configuredFieldMapping(node.config || {}, context);
+    return { action: node.type, values };
+  }
+  if (node.type === 'transform_value') {
+    const config = node.config || {};
+    const outputName = String(config.outputName || 'output').trim();
+    const source = config.sourceMode === 'fixed' ? config.sourceValue : resolveToken(config.sourceValue, context);
+    let transformed;
+    if (config.operation === 'uppercase') transformed = String(source ?? '').toUpperCase();
+    else if (config.operation === 'lowercase') transformed = String(source ?? '').toLowerCase();
+    else if (config.operation === 'number') {
+      transformed = Number(source);
+      if (!Number.isFinite(transformed)) throw new AppError('Transform Value could not convert the source to a number', 422);
+    } else if (config.operation === 'boolean') {
+      transformed = ['true', '1', 'yes', 'y', 'on'].includes(String(source ?? '').trim().toLowerCase());
+    } else if (config.operation === 'json_parse') {
+      try {
+        transformed = typeof source === 'string' ? JSON.parse(source) : source;
+      } catch (_error) {
+        throw new AppError('Transform Value received invalid JSON', 422);
+      }
+    } else transformed = String(source ?? '').trim();
+    return { action: node.type, operation: config.operation || 'trim', values: { [outputName]: transformed } };
+  }
+  return { action: node.type, skipped: true, reason: 'Data mapping action is not implemented in runtime yet' };
+}
+
+function resolvedUserId(rawValue, context) {
+  const value = resolveToken(rawValue || 'trigger.userId', context);
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+async function executeTaskNotificationAction(node, context) {
+  const config = node.config || {};
+  if (node.type === 'create_task') {
+    const title = String(resolveToken(config.title, context) || '').trim();
+    const dueValue = resolveToken(config.dueDate, context);
+    let dueAt = null;
+    if (dueValue) {
+      const dueDate = new Date(dueValue);
+      if (Number.isNaN(dueDate.getTime())) throw new AppError('Create Task needs a valid due date', 422);
+      dueAt = dueDate.toISOString().slice(0, 19).replace('T', ' ');
+    }
+    const taskId = await repository.createTask({
+      title,
+      description: resolveToken(config.description, context),
+      assigneeUserId: resolvedUserId(config.assignee, context),
+      dueAt,
+      priority: config.priority || 'normal',
+      sourceFlowId: context.flowId,
+      sourceExecutionId: context.executionId,
+      sourceNodeId: node.id,
+      createdBy: context.trigger.userId || null
+    });
+    return { action: node.type, taskId, title, assigneeUserId: resolvedUserId(config.assignee, context), dueAt, priority: config.priority || 'normal' };
+  }
+  if (node.type === 'send_notification') {
+    const recipientUserId = resolvedUserId(config.recipient, context);
+    if (!recipientUserId) throw new AppError('Notification needs a valid recipient', 422);
+    const title = String(resolveToken(config.title, context) || '').trim();
+    const message = String(resolveToken(config.message, context) || '').trim();
+    const notificationId = await repository.createNotification({
+      recipientUserId,
+      title,
+      message,
+      sourceFlowId: context.flowId,
+      sourceExecutionId: context.executionId,
+      sourceNodeId: node.id
+    });
+    return { action: node.type, notificationId, recipientUserId, title };
+  }
+  return { action: node.type, skipped: true, reason: 'Task or notification action is not implemented in runtime yet' };
+}
+
 async function executeNode(node, context) {
   if (node.category === 'record') return executeRecordAction(node, context);
+  if (node.category === 'data_mapping') return executeDataMappingAction(node, context);
+  if (node.category === 'task_notification') return executeTaskNotificationAction(node, context);
   if (node.type === 'condition') {
-    const matched = evaluateCondition(node.config?.condition, context);
-    return { action: node.type, matched, skipped: !matched };
+    const evaluation = evaluateStructuredCondition(node.config || {}, context);
+    return {
+      action: node.type,
+      matched: evaluation.matched,
+      selectedOutcome: evaluation.matched ? 'yes' : 'no',
+      combinator: evaluation.combinator || 'and',
+      rules: evaluation.rules
+    };
   }
   if (node.type === 'call_rest_api') return executeRestAction(node, context);
+  if (node.type === 'run_flow') {
+    const targetFlow = await repository.findPublishedFlowByKey(node.config?.flowKey);
+    if (!targetFlow) throw new AppError('Run Flow target must be published and enabled', 422);
+    const stack = [...(context.trigger._flowStack || []), context.flowKey].filter(Boolean);
+    if (stack.includes(targetFlow.flowKey) || stack.length >= 5) throw new AppError('Run Flow recursion limit reached', 422);
+    const record = configuredFieldMapping(node.config || {}, context);
+    const execution = await executeFlow(targetFlow, {
+      triggerType: 'manual',
+      moduleKey: targetFlow.triggerModule || context.trigger.moduleKey,
+      recordId: null,
+      record,
+      previousRecord: null,
+      userId: context.trigger.userId || null,
+      parentExecutionId: context.executionId,
+      _flowStack: stack
+    });
+    return { action: node.type, flowKey: targetFlow.flowKey, childExecutionId: execution.executionId, childStatus: execution.status, steps: execution.steps };
+  }
   if (node.category === 'end') return { action: node.type };
   return { action: node.type, skipped: true, reason: 'Action type is not implemented in runtime yet' };
+}
+
+function wait(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function executeNodeWithRetry(node, context) {
+  const maxAttempts = Math.min(Math.max(Number(node.config?.retryAttempts) || 1, 1), 5);
+  const delayMs = Math.min(Math.max(Number(node.config?.retryDelayMs) || 0, 0), 60000);
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const result = await executeNode(node, context);
+      if (result?.status === 'failed') {
+        const error = new AppError(result.error || 'Action Flow step failed', 422);
+        error.result = result;
+        throw error;
+      }
+      return { result, attempts: attempt };
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxAttempts && delayMs) await wait(delayMs);
+    }
+  }
+  lastError.attempts = maxAttempts;
+  throw lastError;
+}
+
+function appendStep(steps, node, startedAt, finishedAt, attempts, output) {
+  steps.push({
+    nodeId: node.id,
+    label: node.label || node.type,
+    category: node.category || '',
+    type: node.type,
+    status: output.status,
+    startedAt: startedAt.toISOString(),
+    finishedAt: finishedAt.toISOString(),
+    durationMs: finishedAt.getTime() - startedAt.getTime(),
+    attempts,
+    ...output
+  });
+}
+
+async function executePath(definition, initialNode, context, steps, visited = new Set()) {
+  let node = initialNode;
+  while (node && !visited.has(node.id)) {
+    visited.add(node.id);
+    if (node.type === 'loop') {
+      const startedAt = new Date();
+      let items = resolveToken(node.config?.sourceValue, context);
+      if (typeof items === 'string') {
+        try { items = JSON.parse(items); } catch (_error) { items = []; }
+      }
+      if (!Array.isArray(items)) throw new AppError('Loop source must resolve to an array', 422);
+      const limit = Math.min(Math.max(Number(node.config?.maxIterations) || 100, 1), 1000);
+      const bodyStart = nextNode(definition, node.id, 'body');
+      const iterationOutputs = [];
+      for (let index = 0; index < Math.min(items.length, limit); index += 1) {
+        const branchContext = { ...context, loop: { item: items[index], index, number: index + 1 }, outputs: { ...context.outputs } };
+        const branchSteps = [];
+        if (bodyStart) await executePath(definition, bodyStart, branchContext, branchSteps, new Set(visited));
+        steps.push(...branchSteps);
+        iterationOutputs.push({ index, item: items[index], outputs: branchContext.outputs });
+        Object.assign(context.outputs, branchContext.outputs);
+      }
+      const output = { status: 'success', action: node.type, iterations: Math.min(items.length, limit), truncated: items.length > limit, iterationOutputs };
+      context.outputs[node.id] = output;
+      appendStep(steps, node, startedAt, new Date(), 1, output);
+      node = nextNode(definition, node.id, 'done');
+      continue;
+    }
+    if (node.type === 'parallel_branch') {
+      const startedAt = new Date();
+      const branchEdges = (definition.edges || []).filter((edge) => edge.from === node.id && edgeOutcome(edge).startsWith('branch'));
+      const branchRuns = await Promise.all(branchEdges.map(async (edge) => {
+        const branchContext = { ...context, outputs: { ...context.outputs } };
+        const branchSteps = [];
+        const branchStart = (definition.nodes || []).find((item) => item.id === edge.to);
+        if (branchStart) await executePath(definition, branchStart, branchContext, branchSteps, new Set(visited));
+        return { outcome: edgeOutcome(edge), steps: branchSteps, outputs: branchContext.outputs };
+      }));
+      branchRuns.forEach((branch) => { steps.push(...branch.steps); Object.assign(context.outputs, branch.outputs); });
+      const output = { status: 'success', action: node.type, branches: branchRuns.map((branch) => ({ outcome: branch.outcome, steps: branch.steps.length })) };
+      context.outputs[node.id] = output;
+      appendStep(steps, node, startedAt, new Date(), 1, output);
+      node = nextNode(definition, node.id, 'done');
+      continue;
+    }
+
+    const stepStartedAt = new Date();
+    let result;
+    let attempts = 1;
+    try {
+      const execution = await executeNodeWithRetry(node, context);
+      result = execution.result;
+      attempts = execution.attempts;
+    } catch (error) {
+      const onError = node.config?.onError || 'stop';
+      const errorTarget = onError === 'error_branch' ? nextNode(definition, node.id, 'error') : null;
+      const handled = onError === 'continue' || Boolean(errorTarget);
+      const output = { ...(error.result || {}), status: 'failed', error: error.message || 'Action Flow step failed', attempts: error.attempts || attempts, handled };
+      appendStep(steps, node, stepStartedAt, new Date(), output.attempts, output);
+      context.outputs[node.id] = output;
+      if (!handled) throw error;
+      node = errorTarget || nextNode(definition, node.id);
+      continue;
+    }
+    const output = { status: result.status || (result.skipped ? 'skipped' : 'success'), ...result };
+    appendStep(steps, node, stepStartedAt, new Date(), attempts, output);
+    context.outputs[node.id] = output;
+    if (result.status === 'failed' || node.category === 'end') break;
+    node = nextNode(definition, node.id, node.type === 'condition' ? result.selectedOutcome : '');
+  }
 }
 
 async function executeFlow(flow, trigger) {
@@ -802,53 +1070,15 @@ async function executeFlow(flow, trigger) {
   const context = {
     trigger,
     currentRecord: recordValues(trigger.record),
-    outputs: {}
+    outputs: {},
+    flowKey: flow.flowKey,
+    flowId: flow.id,
+    executionId
   };
 
   try {
-    let node = start ? nextNode(definition, start.id) : null;
-    const visited = new Set();
-    while (node && !visited.has(node.id)) {
-      visited.add(node.id);
-      const stepStartedAt = new Date();
-      let result;
-      let stepFinishedAt;
-      try {
-        result = await executeNode(node, context);
-        stepFinishedAt = new Date();
-      } catch (error) {
-        stepFinishedAt = new Date();
-        steps.push({
-          nodeId: node.id,
-          label: node.label || node.type,
-          category: node.category || '',
-          type: node.type,
-          status: 'failed',
-          startedAt: stepStartedAt.toISOString(),
-          finishedAt: stepFinishedAt.toISOString(),
-          durationMs: stepFinishedAt.getTime() - stepStartedAt.getTime(),
-          error: error.message || 'Action Flow step failed'
-        });
-        throw error;
-      }
-      steps.push({
-        nodeId: node.id,
-        label: node.label || node.type,
-        category: node.category || '',
-        type: node.type,
-        status: result.skipped ? 'skipped' : 'success',
-        startedAt: stepStartedAt.toISOString(),
-        finishedAt: stepFinishedAt.toISOString(),
-        durationMs: stepFinishedAt.getTime() - stepStartedAt.getTime(),
-        ...result
-      });
-      context.outputs[node.id] = result;
-      if (result.status === 'failed') break;
-      if (result.skipped && node.type === 'condition') break;
-      if (node.category === 'end') break;
-      node = nextNode(definition, node.id);
-    }
-    const status = steps.some((step) => step.status === 'failed')
+    await executePath(definition, start ? nextNode(definition, start.id) : null, context, steps);
+    const status = steps.some((step) => step.status === 'failed' && !step.handled)
       ? 'failed'
       : (steps.some((step) => step.reason?.includes('not enabled yet')) ? 'skipped' : 'success');
     await repository.finishExecution(executionId, status, {
@@ -899,7 +1129,61 @@ async function runRecordTrigger(triggerType, payload) {
   return results;
 }
 
+const scheduledFlowLocks = new Set();
+let schedulerTimer = null;
+
+function scheduleIntervalMs(config = {}) {
+  const every = Math.min(Math.max(Number(config.scheduleEvery) || 1, 1), 1000);
+  const unitMs = { minutes: 60000, hours: 3600000, days: 86400000 }[config.scheduleUnit] || 3600000;
+  return every * unitMs;
+}
+
+async function runScheduledFlows(now = new Date()) {
+  const flows = await repository.listEnabledScheduledFlows();
+  const results = [];
+  for (const flow of flows) {
+    if (scheduledFlowLocks.has(flow.id)) continue;
+    const start = triggerNode(flow.definition || {});
+    const config = start?.config || {};
+    const startsAt = config.scheduleStartAt ? new Date(config.scheduleStartAt) : null;
+    if (startsAt && startsAt.getTime() > now.getTime()) continue;
+    const latest = await repository.findLatestScheduledExecution(flow.id);
+    const lastRunAt = latest ? new Date(latest.finishedAt || latest.createdAt) : null;
+    if (lastRunAt && lastRunAt.getTime() + scheduleIntervalMs(config) > now.getTime()) continue;
+    scheduledFlowLocks.add(flow.id);
+    try {
+      results.push(await executeFlow(flow, {
+        triggerType: 'scheduled',
+        moduleKey: flow.triggerModule || config.moduleKey || '',
+        recordId: null,
+        record: {},
+        previousRecord: null,
+        userId: null,
+        scheduledAt: now.toISOString()
+      }));
+    } catch (error) {
+      results.push({ flowKey: flow.flowKey, status: 'failed', error: error.message });
+    } finally {
+      scheduledFlowLocks.delete(flow.id);
+    }
+  }
+  return results;
+}
+
+function startScheduler(intervalMs = 30000) {
+  if (schedulerTimer) return schedulerTimer;
+  schedulerTimer = setInterval(() => {
+    runScheduledFlows().catch((error) => console.error('Action Flow scheduler failed:', error.message));
+  }, Math.max(Number(intervalMs) || 30000, 1000));
+  schedulerTimer.unref?.();
+  runScheduledFlows().catch((error) => console.error('Action Flow scheduler failed:', error.message));
+  return schedulerTimer;
+}
+
 module.exports = {
   runRecordTrigger,
-  debugConnectorRequest
+  debugConnectorRequest,
+  executeFlow,
+  runScheduledFlows,
+  startScheduler
 };

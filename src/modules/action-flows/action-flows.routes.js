@@ -13,7 +13,7 @@ const flowSchema = z.object({
   description: z.string().trim().max(255).optional(),
   status: z.enum(['draft', 'enabled', 'disabled']).default('draft'),
   triggerCategory: z.string().trim().max(80).default('record'),
-  triggerType: z.enum(['record_created', 'record_updated', 'status_changed', 'record_deleted', 'manual']).default('record_created'),
+  triggerType: z.enum(['record_created', 'record_updated', 'status_changed', 'record_deleted', 'manual', 'scheduled']).default('record_created'),
   triggerModule: z.string().trim().max(80).optional(),
   definition: z.object({}).passthrough().optional(),
   bumpVersion: z.boolean().optional()
@@ -43,6 +43,16 @@ const connectorDebugSchema = z.object({
   method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']).default('GET'),
   path: z.string().trim().min(1).max(1000),
   interfaceConfig: z.object({}).passthrough().optional()
+});
+
+const runOnceSchema = z.object({
+  recordId: z.coerce.number().int().positive().nullable().optional(),
+  record: z.record(z.string(), z.any()).default({}),
+  previousRecord: z.record(z.string(), z.any()).nullable().optional()
+});
+
+const flowVersionSchema = z.object({
+  remark: z.string().trim().max(255).optional()
 });
 
 actionFlowRoutes.use(requireAuth, requireRole('admin'));
@@ -108,6 +118,30 @@ actionFlowRoutes.put('/:flowKey', asyncHandler(async (req, res) => {
 
 actionFlowRoutes.post('/:flowKey/check', asyncHandler(async (req, res) => {
   res.json(await service.checkFlow(req.params.flowKey));
+}));
+
+actionFlowRoutes.get('/:flowKey/versions', asyncHandler(async (req, res) => {
+  res.json(await service.listFlowVersions(req.params.flowKey));
+}));
+
+actionFlowRoutes.post('/:flowKey/versions', asyncHandler(async (req, res) => {
+  const input = validate(flowVersionSchema, req.body || {});
+  res.status(201).json(await service.createFlowVersion(req.params.flowKey, input, req.user));
+}));
+
+actionFlowRoutes.post('/:flowKey/publish', asyncHandler(async (req, res) => {
+  const input = validate(flowVersionSchema, req.body || {});
+  res.json(await service.publishFlow(req.params.flowKey, input, req.user));
+}));
+
+actionFlowRoutes.post('/:flowKey/versions/:versionId/restore', asyncHandler(async (req, res) => {
+  const input = validate(flowVersionSchema, req.body || {});
+  res.json(await service.restoreFlowVersion(req.params.flowKey, req.params.versionId, input, req.user));
+}));
+
+actionFlowRoutes.post('/:flowKey/run-once', asyncHandler(async (req, res) => {
+  const input = validate(runOnceSchema, req.body || {});
+  res.json(await service.runFlowOnce(req.params.flowKey, input, req.user));
 }));
 
 actionFlowRoutes.delete('/:flowKey', asyncHandler(async (req, res) => {

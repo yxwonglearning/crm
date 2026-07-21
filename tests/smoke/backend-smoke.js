@@ -5,12 +5,15 @@ const XLSX = require('xlsx');
 const { createApp } = require('../../src/app');
 const { pool } = require('../../src/database/pool');
 const { config } = require('../../src/shared/config');
+const actionFlowRuntime = require('../../src/modules/action-flows/action-flows.runtime');
 
 const runId = `smoke_${Date.now()}`;
 const smokeAdminEmail = process.env.SMOKE_ADMIN_EMAIL || config.admin.email;
 const smokeAdminPassword = process.env.SMOKE_ADMIN_PASSWORD || config.admin.password;
 const createdCustomerIds = [];
 const createdRecordIds = [];
+const createdTaskIds = [];
+const createdNotificationIds = [];
 let createdModuleKey = '';
 const creationModeModuleKeys = [];
 let createdUserEmail = '';
@@ -122,6 +125,13 @@ async function cleanup() {
     if (createdCustomerIds.length) {
       await request('DELETE', '/api/customers', { json: { ids: createdCustomerIds } });
     }
+  } catch (_error) {
+    // Best-effort.
+  }
+
+  try {
+    if (createdTaskIds.length) await pool.query('DELETE FROM crm_tasks WHERE id IN (?)', [createdTaskIds]);
+    if (createdNotificationIds.length) await pool.query('DELETE FROM crm_notifications WHERE id IN (?)', [createdNotificationIds]);
   } catch (_error) {
     // Best-effort.
   }
@@ -843,6 +853,62 @@ async function main() {
       expectStatus(check, 200, 'check action flow');
       assert.equal(check.body.check.valid, true);
 
+      const structuredConditionDefinition = {
+        nodes: [
+          { id: 'trigger_1', category: 'trigger', type: 'record_created', label: 'When Created', config: { moduleKey: createdModuleKey } },
+          {
+            id: 'condition_1',
+            category: 'logic',
+            type: 'condition',
+            label: 'Amount and title match',
+            config: {
+              condition: 'current record.amount greater_than 10',
+              conditionCombinator: 'and',
+              conditionRules: [
+                { id: 'rule_1', left: 'current record.amount', operator: 'greater_than', value: '10' },
+                { id: 'rule_2', left: 'current record.title', operator: 'contains', value: 'Priority' }
+              ]
+            }
+          },
+          { id: 'api_1', category: 'restful_api', type: 'call_rest_api', label: 'Call REST API', config: { connectorKey, method: 'POST', endpointKey: 'extract', endpointPath: '/extract' } },
+          { id: 'delete_1', category: 'record', type: 'delete_record', label: 'Delete Record', config: { target: 'current_record', confirmDelete: true } }
+        ],
+        edges: [
+          { from: 'trigger_1', to: 'condition_1' },
+          { from: 'condition_1', to: 'api_1', outcome: 'yes' },
+          { from: 'condition_1', to: 'delete_1', outcome: 'no' }
+        ]
+      };
+      const saveStructuredCondition = await request('PUT', `/api/action-flows/${flowKey}`, {
+        json: { definition: structuredConditionDefinition, bumpVersion: true }
+      });
+      expectStatus(saveStructuredCondition, 200, 'save structured condition builder settings');
+      assert.equal(saveStructuredCondition.body.flow.definition.nodes[1].config.conditionRules.length, 2);
+      const structuredConditionCheck = await request('POST', `/api/action-flows/${flowKey}/check`);
+      expectStatus(structuredConditionCheck, 200, 'check structured conditions');
+      assert.equal(structuredConditionCheck.body.check.valid, true);
+
+      structuredConditionDefinition.nodes[1].config.conditionRules[1].value = '';
+      const saveIncompleteCondition = await request('PUT', `/api/action-flows/${flowKey}`, {
+        json: { definition: structuredConditionDefinition, bumpVersion: true }
+      });
+      expectStatus(saveIncompleteCondition, 200, 'save incomplete structured condition');
+      const incompleteConditionCheck = await request('POST', `/api/action-flows/${flowKey}/check`);
+      expectStatus(incompleteConditionCheck, 200, 'reject incomplete structured condition');
+      assert.equal(incompleteConditionCheck.body.check.valid, false);
+      assert.ok(incompleteConditionCheck.body.check.errors.some((error) => error.includes('needs a comparison value')));
+
+      structuredConditionDefinition.nodes[1].config.conditionRules[1].value = 'Priority';
+      structuredConditionDefinition.edges = structuredConditionDefinition.edges.filter((edge) => edge.outcome !== 'no');
+      const saveMissingNoBranch = await request('PUT', `/api/action-flows/${flowKey}`, {
+        json: { definition: structuredConditionDefinition, bumpVersion: true }
+      });
+      expectStatus(saveMissingNoBranch, 200, 'save condition missing No branch');
+      const missingNoBranchCheck = await request('POST', `/api/action-flows/${flowKey}/check`);
+      expectStatus(missingNoBranchCheck, 200, 'reject condition missing No branch');
+      assert.equal(missingNoBranchCheck.body.check.valid, false);
+      assert.ok(missingNoBranchCheck.body.check.errors.some((error) => error.includes('needs a No branch')));
+
       const list = await request('GET', `/api/action-flows?search=${encodeURIComponent(flowKey)}`);
       expectStatus(list, 200, 'list action flows');
       assert.ok(list.body.flows.some((flow) => flow.flowKey === flowKey));
@@ -866,6 +932,30 @@ async function main() {
         }
       });
       expectStatus(runtimeFlow, 201, 'create enabled runtime action flow');
+
+      const initialFlowVersions = await request('GET', `/api/action-flows/${runtimeFlowKey}/versions`);
+      expectStatus(initialFlowVersions, 200, 'list initial action flow versions');
+      assert.equal(initialFlowVersions.body.versions.length, 1);
+      const baselineFlowVersionId = initialFlowVersions.body.versions[0].id;
+      const checkpointFlowVersion = await request('POST', `/api/action-flows/${runtimeFlowKey}/versions`, {
+        json: { remark: 'Smoke draft checkpoint' }
+      });
+      expectStatus(checkpointFlowVersion, 201, 'save action flow version checkpoint');
+      assert.equal(checkpointFlowVersion.body.versions[0].action, 'checkpoint');
+      const publishFlowVersion = await request('POST', `/api/action-flows/${runtimeFlowKey}/publish`, {
+        json: { remark: 'Smoke published version' }
+      });
+      expectStatus(publishFlowVersion, 200, 'publish action flow version');
+      assert.equal(publishFlowVersion.body.flow.status, 'enabled');
+      assert.equal(publishFlowVersion.body.flow.publishedVersion, publishFlowVersion.body.flow.currentVersion);
+      const publishedVersionNumber = publishFlowVersion.body.flow.publishedVersion;
+      const restoreFlowVersion = await request('POST', `/api/action-flows/${runtimeFlowKey}/versions/${baselineFlowVersionId}/restore`, {
+        json: { remark: 'Smoke restore verification' }
+      });
+      expectStatus(restoreFlowVersion, 200, 'restore action flow version');
+      assert.equal(restoreFlowVersion.body.versions[0].action, 'restored');
+      assert.equal(restoreFlowVersion.body.flow.publishedVersion, publishedVersionNumber, 'restore should leave the published version live');
+      assert.ok(restoreFlowVersion.body.flow.currentVersion > publishedVersionNumber, 'restore should create a new draft version');
 
       const restRuntimeFlowKey = `${runId}_rest_runtime_flow`;
       const restRuntimeFlow = await request('POST', '/api/action-flows', {
@@ -906,6 +996,217 @@ async function main() {
         }
       });
       expectStatus(restErrorFlow, 201, 'create enabled REST error mapping flow');
+
+      const mappingFlowKey = `${runId}_mapping_flow`;
+      const mappingFlow = await request('POST', '/api/action-flows', {
+        json: {
+          flowKey: mappingFlowKey,
+          name: 'Smoke Previous Output Mapping Flow',
+          status: 'enabled',
+          triggerType: 'record_created',
+          triggerModule: createdModuleKey,
+          definition: {
+            nodes: [
+              { id: 'trigger_1', category: 'trigger', type: 'record_created', label: 'When Created', config: { moduleKey: createdModuleKey } },
+              {
+                id: 'set_1',
+                category: 'data_mapping',
+                type: 'set_variable',
+                label: 'Prepare values',
+                config: {
+                  fieldMappings: [
+                    { id: 'mapping_1', target: 'copiedAmount', mode: 'expression', value: 'current record.amount' },
+                    { id: 'mapping_2', target: 'sourceLabel', mode: 'fixed', value: 'mapped' }
+                  ],
+                  fieldMappingText: 'copiedAmount = {{ current record.amount }}\nsourceLabel = "mapped"'
+                }
+              },
+              {
+                id: 'condition_1',
+                category: 'logic',
+                type: 'condition',
+                label: 'Mapped amount exists',
+                config: {
+                  condition: 'outputs.set_1.values.copiedAmount greater_than 0',
+                  conditionRules: [{ id: 'mapped_rule', left: 'outputs.set_1.values.copiedAmount', operator: 'greater_than', value: '0' }]
+                }
+              },
+              { id: 'end_yes', category: 'end', type: 'end', label: 'Mapped', config: {} },
+              { id: 'end_no', category: 'end', type: 'end', label: 'Missing', config: {} }
+            ],
+            edges: [
+              { from: 'trigger_1', to: 'set_1' },
+              { from: 'set_1', to: 'condition_1' },
+              { from: 'condition_1', to: 'end_yes', outcome: 'yes' },
+              { from: 'condition_1', to: 'end_no', outcome: 'no' }
+            ]
+          }
+        }
+      });
+      expectStatus(mappingFlow, 201, 'create previous-output mapping flow');
+      const mappingFlowCheck = await request('POST', `/api/action-flows/${mappingFlowKey}/check`);
+      expectStatus(mappingFlowCheck, 200, 'check previous-output mapping flow');
+      assert.equal(mappingFlowCheck.body.check.valid, true);
+      const mappingRunOnce = await request('POST', `/api/action-flows/${mappingFlowKey}/run-once`, {
+        json: { recordId: 9001, record: { id: 9001, title: 'Run Once', amount: 8 } }
+      });
+      expectStatus(mappingRunOnce, 200, 'run action flow once');
+      assert.equal(mappingRunOnce.body.execution.status, 'success');
+      assert.ok(mappingRunOnce.body.execution.executionId);
+      assert.equal(mappingRunOnce.body.execution.trigger.runOnce, true);
+      assert.equal(mappingRunOnce.body.execution.steps.find((step) => step.nodeId === 'set_1').values.copiedAmount, 8);
+      assert.equal(mappingRunOnce.body.execution.steps.find((step) => step.nodeId === 'condition_1').selectedOutcome, 'yes');
+
+      const operationalFlowKey = `${runId}_operational_flow`;
+      const operationalFlow = await request('POST', '/api/action-flows', {
+        json: {
+          flowKey: operationalFlowKey,
+          name: 'Smoke Task Notification Transform Flow',
+          status: 'enabled',
+          triggerType: 'record_created',
+          triggerModule: createdModuleKey,
+          definition: {
+            nodes: [
+              { id: 'trigger_1', category: 'trigger', type: 'record_created', label: 'When Created', config: { moduleKey: createdModuleKey } },
+              { id: 'transform_1', category: 'data_mapping', type: 'transform_value', label: 'Normalize title', config: { outputName: 'cleanTitle', sourceValue: 'current record.title', operation: 'uppercase' } },
+              { id: 'task_1', category: 'task_notification', type: 'create_task', label: 'Create follow-up task', config: { title: 'Review {{ outputs.transform_1.values.cleanTitle }}', description: 'Created by action flow', assignee: String(createdUserId), priority: 'high' } },
+              { id: 'notification_1', category: 'task_notification', type: 'send_notification', label: 'Notify owner', config: { recipient: String(createdUserId), title: 'Task created', message: 'Review {{ outputs.transform_1.values.cleanTitle }}' } },
+              { id: 'end_1', category: 'end', type: 'end', label: 'End', config: {} }
+            ],
+            edges: [
+              { from: 'trigger_1', to: 'transform_1' },
+              { from: 'transform_1', to: 'task_1' },
+              { from: 'task_1', to: 'notification_1' },
+              { from: 'notification_1', to: 'end_1' }
+            ]
+          }
+        }
+      });
+      expectStatus(operationalFlow, 201, 'create task notification transform flow');
+      const operationalFlowCheck = await request('POST', `/api/action-flows/${operationalFlowKey}/check`);
+      expectStatus(operationalFlowCheck, 200, 'check task notification transform flow');
+      assert.equal(operationalFlowCheck.body.check.valid, true);
+
+      const recoveryFlowKey = `${runId}_recovery_flow`;
+      const recoveryFlow = await request('POST', '/api/action-flows', {
+        json: {
+          flowKey: recoveryFlowKey,
+          name: 'Smoke Retry Error Branch Flow',
+          status: 'enabled',
+          triggerType: 'record_created',
+          triggerModule: createdModuleKey,
+          definition: {
+            nodes: [
+              { id: 'trigger_1', category: 'trigger', type: 'record_created', label: 'When Created', config: { moduleKey: createdModuleKey } },
+              { id: 'api_fail', category: 'restful_api', type: 'call_rest_api', label: 'Retry failing API', config: { connectorKey, endpointKey: 'fail', method: 'POST', allowPrivateNetwork: true, retryAttempts: 2, retryDelayMs: 0, onError: 'error_branch' } },
+              { id: 'recover_1', category: 'data_mapping', type: 'set_variable', label: 'Recover', config: { fieldMappings: [{ id: 'recovered', target: 'recovered', mode: 'fixed', value: 'yes' }], onError: 'stop' } },
+              { id: 'end_1', category: 'end', type: 'end', label: 'End', config: {} }
+            ],
+            edges: [
+              { from: 'trigger_1', to: 'api_fail' },
+              { from: 'api_fail', to: 'recover_1', outcome: 'error' },
+              { from: 'recover_1', to: 'end_1' }
+            ]
+          }
+        }
+      });
+      expectStatus(recoveryFlow, 201, 'create retry error branch flow');
+      const recoveryFlowCheck = await request('POST', `/api/action-flows/${recoveryFlowKey}/check`);
+      expectStatus(recoveryFlowCheck, 200, 'check retry error branch flow');
+      assert.equal(recoveryFlowCheck.body.check.valid, true);
+
+      const scheduledFlowKey = `${runId}_scheduled_flow`;
+      const scheduledFlow = await request('POST', '/api/action-flows', {
+        json: {
+          flowKey: scheduledFlowKey,
+          name: 'Smoke Scheduled Flow',
+          status: 'enabled',
+          triggerType: 'scheduled',
+          triggerModule: createdModuleKey,
+          definition: {
+            nodes: [
+              { id: 'trigger_1', category: 'trigger', type: 'scheduled', label: 'Every hour', config: { moduleKey: createdModuleKey, scheduleEvery: 1, scheduleUnit: 'hours' } },
+              { id: 'set_1', category: 'data_mapping', type: 'set_variable', label: 'Scheduled value', config: { fieldMappings: [{ id: 'scheduled', target: 'scheduled', mode: 'fixed', value: 'yes' }] } },
+              { id: 'end_1', category: 'end', type: 'end', label: 'End', config: {} }
+            ],
+            edges: [{ from: 'trigger_1', to: 'set_1' }, { from: 'set_1', to: 'end_1' }]
+          }
+        }
+      });
+      expectStatus(scheduledFlow, 201, 'create scheduled flow');
+      const scheduledResults = await actionFlowRuntime.runScheduledFlows(new Date());
+      assert.ok(scheduledResults.some((result) => result.status === 'success'));
+      const scheduledRepeat = await actionFlowRuntime.runScheduledFlows(new Date());
+      assert.ok(!scheduledRepeat.some((result) => result.executionId === scheduledResults[0]?.executionId));
+
+      const loopFlowKey = `${runId}_loop_flow`;
+      const loopFlow = await request('POST', '/api/action-flows', { json: {
+        flowKey: loopFlowKey, name: 'Smoke Loop Flow', status: 'draft', triggerType: 'manual', triggerModule: createdModuleKey,
+        definition: {
+          nodes: [
+            { id: 'trigger_1', category: 'trigger', type: 'manual', label: 'Start', config: { moduleKey: createdModuleKey } },
+            { id: 'loop_1', category: 'logic', type: 'loop', label: 'For each item', config: { sourceValue: '["alpha","beta","gamma"]', maxIterations: 10 } },
+            { id: 'transform_1', category: 'data_mapping', type: 'transform_value', label: 'Read item', config: { sourceValue: 'loop.item', sourceMode: 'expression', operation: 'uppercase', outputName: 'item' } },
+            { id: 'body_end', category: 'end', type: 'end', label: 'Body end', config: {} },
+            { id: 'done_end', category: 'end', type: 'end', label: 'Done', config: {} }
+          ],
+          edges: [
+            { from: 'trigger_1', to: 'loop_1' }, { from: 'loop_1', to: 'transform_1', outcome: 'body' },
+            { from: 'transform_1', to: 'body_end' }, { from: 'loop_1', to: 'done_end', outcome: 'done' }
+          ]
+        }
+      } });
+      expectStatus(loopFlow, 201, 'create loop flow');
+      const loopRun = await request('POST', `/api/action-flows/${loopFlowKey}/run-once`, { json: { record: {} } });
+      expectStatus(loopRun, 200, 'run loop flow');
+      assert.equal(loopRun.body.execution.status, 'success');
+      assert.equal(loopRun.body.execution.steps.find((step) => step.nodeId === 'loop_1').iterations, 3);
+      assert.equal(loopRun.body.execution.steps.filter((step) => step.nodeId === 'transform_1').length, 3);
+
+      const parallelFlowKey = `${runId}_parallel_flow`;
+      const parallelFlow = await request('POST', '/api/action-flows', { json: {
+        flowKey: parallelFlowKey, name: 'Smoke Parallel Flow', status: 'draft', triggerType: 'manual', triggerModule: createdModuleKey,
+        definition: {
+          nodes: [
+            { id: 'trigger_1', category: 'trigger', type: 'manual', label: 'Start', config: { moduleKey: createdModuleKey } },
+            { id: 'parallel_1', category: 'logic', type: 'parallel_branch', label: 'Run together', config: {} },
+            { id: 'end_a', category: 'end', type: 'end', label: 'Branch A', config: {} },
+            { id: 'end_b', category: 'end', type: 'end', label: 'Branch B', config: {} }
+          ],
+          edges: [{ from: 'trigger_1', to: 'parallel_1' }, { from: 'parallel_1', to: 'end_a', outcome: 'branch_1' }, { from: 'parallel_1', to: 'end_b', outcome: 'branch_2' }]
+        }
+      } });
+      expectStatus(parallelFlow, 201, 'create parallel flow');
+      const parallelRun = await request('POST', `/api/action-flows/${parallelFlowKey}/run-once`, { json: { record: {} } });
+      expectStatus(parallelRun, 200, 'run parallel flow');
+      assert.equal(parallelRun.body.execution.status, 'success');
+      assert.equal(parallelRun.body.execution.steps.find((step) => step.nodeId === 'parallel_1').branches.length, 2);
+
+      const childFlowKey = `${runId}_child_flow`;
+      const childFlow = await request('POST', '/api/action-flows', { json: {
+        flowKey: childFlowKey, name: 'Smoke Child Flow', status: 'draft', triggerType: 'manual', triggerModule: createdModuleKey,
+        definition: { nodes: [
+          { id: 'trigger_1', category: 'trigger', type: 'manual', label: 'Start', config: { moduleKey: createdModuleKey } },
+          { id: 'end_1', category: 'end', type: 'end', label: 'End', config: {} }
+        ], edges: [{ from: 'trigger_1', to: 'end_1' }] }
+      } });
+      expectStatus(childFlow, 201, 'create child flow');
+      const publishChildFlow = await request('POST', `/api/action-flows/${childFlowKey}/publish`, { json: { remark: 'Publish child for orchestration' } });
+      expectStatus(publishChildFlow, 200, 'publish child flow');
+      const parentFlowKey = `${runId}_parent_flow`;
+      const parentFlow = await request('POST', '/api/action-flows', { json: {
+        flowKey: parentFlowKey, name: 'Smoke Parent Flow', status: 'draft', triggerType: 'manual', triggerModule: createdModuleKey,
+        definition: { nodes: [
+          { id: 'trigger_1', category: 'trigger', type: 'manual', label: 'Start', config: { moduleKey: createdModuleKey } },
+          { id: 'run_1', category: 'workflow', type: 'run_flow', label: 'Run child', config: { flowKey: childFlowKey, fieldMappings: [{ target: 'source', mode: 'fixed', value: 'parent' }] } },
+          { id: 'end_1', category: 'end', type: 'end', label: 'End', config: {} }
+        ], edges: [{ from: 'trigger_1', to: 'run_1' }, { from: 'run_1', to: 'end_1' }] }
+      } });
+      expectStatus(parentFlow, 201, 'create parent orchestration flow');
+      const parentRun = await request('POST', `/api/action-flows/${parentFlowKey}/run-once`, { json: { record: {} } });
+      expectStatus(parentRun, 200, 'run parent orchestration flow');
+      assert.equal(parentRun.body.execution.status, 'success');
+      assert.equal(parentRun.body.execution.steps.find((step) => step.nodeId === 'run_1').childStatus, 'success');
 
       const runtimeRecord = await request('POST', `/api/modules/${createdModuleKey}/records`, {
         json: {
@@ -949,6 +1250,127 @@ async function main() {
       assert.equal(restErrorStep.httpStatus, 400);
       assert.equal(restErrorStep.mappedValues.apiError, `Rejected ${runId} Runtime Record`);
 
+      const mappingExecutions = await request('GET', `/api/action-flows/executions?flowKey=${encodeURIComponent(mappingFlowKey)}`);
+      expectStatus(mappingExecutions, 200, 'list previous-output mapping executions');
+      const mappingExecution = mappingExecutions.body.executions.find((execution) => execution.status === 'success');
+      assert.ok(mappingExecution, 'previous-output mapping flow should record a successful execution');
+      const setValueStep = mappingExecution.result.steps.find((step) => step.nodeId === 'set_1');
+      const mappedConditionStep = mappingExecution.result.steps.find((step) => step.nodeId === 'condition_1');
+      assert.equal(setValueStep.values.copiedAmount, 1);
+      assert.equal(setValueStep.values.sourceLabel, 'mapped');
+      assert.equal(mappedConditionStep.selectedOutcome, 'yes');
+
+      const operationalExecutions = await request('GET', `/api/action-flows/executions?flowKey=${encodeURIComponent(operationalFlowKey)}`);
+      expectStatus(operationalExecutions, 200, 'list task notification transform executions');
+      const operationalExecution = operationalExecutions.body.executions.find((execution) => execution.status === 'success');
+      assert.ok(operationalExecution, 'task notification transform flow should record a successful execution');
+      const transformStep = operationalExecution.result.steps.find((step) => step.nodeId === 'transform_1');
+      const taskStep = operationalExecution.result.steps.find((step) => step.nodeId === 'task_1');
+      const notificationStep = operationalExecution.result.steps.find((step) => step.nodeId === 'notification_1');
+      assert.equal(transformStep.values.cleanTitle, `${runId} RUNTIME RECORD`.toUpperCase());
+      assert.ok(taskStep.taskId);
+      assert.ok(notificationStep.notificationId);
+      createdTaskIds.push(taskStep.taskId);
+      createdNotificationIds.push(notificationStep.notificationId);
+      const [taskRows] = await pool.execute('SELECT * FROM crm_tasks WHERE id = ?', [taskStep.taskId]);
+      const [notificationRows] = await pool.execute('SELECT * FROM crm_notifications WHERE id = ?', [notificationStep.notificationId]);
+      assert.equal(taskRows[0].title, `Review ${`${runId} Runtime Record`.toUpperCase()}`);
+      assert.equal(taskRows[0].priority, 'high');
+      assert.equal(Number(taskRows[0].assignee_user_id), createdUserId);
+      assert.equal(notificationRows[0].message, `Review ${`${runId} Runtime Record`.toUpperCase()}`);
+      assert.equal(Number(notificationRows[0].recipient_user_id), createdUserId);
+
+      const recoveryExecutions = await request('GET', `/api/action-flows/executions?flowKey=${encodeURIComponent(recoveryFlowKey)}`);
+      expectStatus(recoveryExecutions, 200, 'list retry error branch executions');
+      const recoveryExecution = recoveryExecutions.body.executions.find((execution) => execution.status === 'success');
+      assert.ok(recoveryExecution, 'handled Error branch should finish successfully');
+      const failedApiStep = recoveryExecution.result.steps.find((step) => step.nodeId === 'api_fail');
+      const recoveryStep = recoveryExecution.result.steps.find((step) => step.nodeId === 'recover_1');
+      assert.equal(failedApiStep.status, 'failed');
+      assert.equal(failedApiStep.handled, true);
+      assert.equal(failedApiStep.attempts, 2);
+      assert.equal(recoveryStep.values.recovered, 'yes');
+
+      const branchFlowKey = `${runId}_condition_branch_flow`;
+      const branchFlow = await request('POST', '/api/action-flows', {
+        json: {
+          flowKey: branchFlowKey,
+          name: 'Smoke Condition Branch Flow',
+          status: 'enabled',
+          triggerType: 'record_created',
+          triggerModule: createdModuleKey,
+          definition: {
+            nodes: [
+              { id: 'trigger_1', category: 'trigger', type: 'record_created', label: 'When Created', config: { moduleKey: createdModuleKey } },
+              {
+                id: 'condition_amount',
+                category: 'logic',
+                type: 'condition',
+                label: 'Amount is eligible',
+                config: {
+                  condition: 'current record.amount greater_than 10',
+                  conditionCombinator: 'and',
+                  conditionRules: [
+                    { id: 'amount_rule', left: 'current record.amount', operator: 'greater_than', value: '10' },
+                    { id: 'title_rule', left: 'current record.title', operator: 'not_empty', value: '' }
+                  ]
+                }
+              },
+              {
+                id: 'condition_priority',
+                category: 'logic',
+                type: 'condition',
+                label: 'Priority match',
+                config: {
+                  condition: 'current record.title contains VIP',
+                  conditionCombinator: 'or',
+                  conditionRules: [
+                    { id: 'vip_rule', left: 'current record.title', operator: 'contains', value: 'VIP' },
+                    { id: 'large_rule', left: 'current record.amount', operator: 'greater_than', value: '100' }
+                  ]
+                }
+              },
+              { id: 'yes_yes_action', category: 'record', type: 'update_record', label: 'VIP branch', config: { target: 'current_record', targetModule: createdModuleKey, fieldMappingText: 'amountDouble = 111' } },
+              { id: 'yes_no_action', category: 'record', type: 'update_record', label: 'Regular branch', config: { target: 'current_record', targetModule: createdModuleKey, fieldMappingText: 'amountDouble = 222' } },
+              { id: 'no_action', category: 'record', type: 'update_record', label: 'Ineligible branch', config: { target: 'current_record', targetModule: createdModuleKey, fieldMappingText: 'amountDouble = 333' } }
+            ],
+            edges: [
+              { from: 'trigger_1', to: 'condition_amount' },
+              { from: 'condition_amount', to: 'condition_priority', outcome: 'yes' },
+              { from: 'condition_amount', to: 'no_action', outcome: 'no' },
+              { from: 'condition_priority', to: 'yes_yes_action', outcome: 'yes' },
+              { from: 'condition_priority', to: 'yes_no_action', outcome: 'no' }
+            ]
+          }
+        }
+      });
+      expectStatus(branchFlow, 201, 'create enabled condition branch flow');
+      const branchCheck = await request('POST', `/api/action-flows/${branchFlowKey}/check`);
+      expectStatus(branchCheck, 200, 'check condition branch routing');
+      assert.equal(branchCheck.body.check.valid, true);
+
+      const branchCases = [
+        { title: `${runId} VIP`, amount: 20, outcomes: ['yes', 'yes'], actionId: 'yes_yes_action', excluded: ['yes_no_action', 'no_action'] },
+        { title: `${runId} Regular`, amount: 20, outcomes: ['yes', 'no'], actionId: 'yes_no_action', excluded: ['yes_yes_action', 'no_action'] },
+        { title: `${runId} Low`, amount: 2, outcomes: ['no'], actionId: 'no_action', excluded: ['yes_yes_action', 'yes_no_action', 'condition_priority'] }
+      ];
+      for (const branchCase of branchCases) {
+        const record = await request('POST', `/api/modules/${createdModuleKey}/records`, {
+          json: { title: branchCase.title, amount: branchCase.amount }
+        });
+        expectStatus(record, 201, `create ${branchCase.title} condition record`);
+        createdRecordIds.push(record.body.record.id);
+        const branchExecutions = await request('GET', `/api/action-flows/executions?flowKey=${encodeURIComponent(branchFlowKey)}`);
+        expectStatus(branchExecutions, 200, 'list condition branch executions');
+        const execution = branchExecutions.body.executions.find((item) => Number(item.result.recordId) === Number(record.body.record.id));
+        assert.ok(execution, `condition execution should exist for record ${record.body.record.id}`);
+        const conditionSteps = execution.result.steps.filter((step) => step.type === 'condition');
+        assert.deepEqual(conditionSteps.map((step) => step.selectedOutcome), branchCase.outcomes);
+        assert.ok(conditionSteps.every((step) => step.rules.every((rule) => typeof rule.matched === 'boolean')));
+        assert.ok(execution.result.steps.some((step) => step.nodeId === branchCase.actionId));
+        branchCase.excluded.forEach((nodeId) => assert.ok(!execution.result.steps.some((step) => step.nodeId === nodeId), `${nodeId} must not execute`));
+      }
+
       const deleteFlow = await request('DELETE', `/api/action-flows/${flowKey}`);
       expectStatus(deleteFlow, 200, 'delete action flow');
       const deleteRuntimeFlow = await request('DELETE', `/api/action-flows/${runtimeFlowKey}`);
@@ -957,6 +1379,20 @@ async function main() {
       expectStatus(deleteRestRuntimeFlow, 200, 'delete REST runtime action flow');
       const deleteRestErrorFlow = await request('DELETE', `/api/action-flows/${restErrorFlowKey}`);
       expectStatus(deleteRestErrorFlow, 200, 'delete REST error mapping flow');
+      const deleteMappingFlow = await request('DELETE', `/api/action-flows/${mappingFlowKey}`);
+      expectStatus(deleteMappingFlow, 200, 'delete previous-output mapping flow');
+      const deleteOperationalFlow = await request('DELETE', `/api/action-flows/${operationalFlowKey}`);
+      expectStatus(deleteOperationalFlow, 200, 'delete task notification transform flow');
+      const deleteRecoveryFlow = await request('DELETE', `/api/action-flows/${recoveryFlowKey}`);
+      expectStatus(deleteRecoveryFlow, 200, 'delete retry error branch flow');
+      const deleteScheduledFlow = await request('DELETE', `/api/action-flows/${scheduledFlowKey}`);
+      expectStatus(deleteScheduledFlow, 200, 'delete scheduled flow');
+      for (const advancedFlowKey of [loopFlowKey, parallelFlowKey, parentFlowKey, childFlowKey]) {
+        const deletedAdvancedFlow = await request('DELETE', `/api/action-flows/${advancedFlowKey}`);
+        expectStatus(deletedAdvancedFlow, 200, `delete advanced flow ${advancedFlowKey}`);
+      }
+      const deleteBranchFlow = await request('DELETE', `/api/action-flows/${branchFlowKey}`);
+      expectStatus(deleteBranchFlow, 200, 'delete condition branch flow');
       const deleteConnector = await request('DELETE', `/api/action-flows/connectors/${connectorKey}`);
       expectStatus(deleteConnector, 200, 'delete API connector');
       const deleteOauth1Connector = await request('DELETE', `/api/action-flows/connectors/${oauth1ConnectorKey}`);

@@ -384,6 +384,8 @@ async function main() {
       trigger_type VARCHAR(80) NOT NULL DEFAULT 'record_created',
       trigger_module VARCHAR(80) NULL,
       flow_json JSON NULL,
+      published_flow_json JSON NULL,
+      published_version INT NULL,
       created_by BIGINT UNSIGNED NULL,
       updated_by BIGINT UNSIGNED NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -396,6 +398,26 @@ async function main() {
       KEY crm_action_flows_updated_by_fk (updated_by),
       CONSTRAINT crm_action_flows_created_by_fk FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
       CONSTRAINT crm_action_flows_updated_by_fk FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await ensureColumn(connection, 'crm_action_flows', 'published_flow_json', '`published_flow_json` JSON NULL AFTER `flow_json`');
+  await ensureColumn(connection, 'crm_action_flows', 'published_version', '`published_version` INT NULL AFTER `published_flow_json`');
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_action_flow_versions (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      flow_id BIGINT UNSIGNED NOT NULL,
+      version_number INT NOT NULL,
+      action VARCHAR(40) NOT NULL,
+      summary VARCHAR(255) NULL,
+      snapshot_json JSON NOT NULL,
+      created_by BIGINT UNSIGNED NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY crm_action_flow_versions_number_unique (flow_id, version_number),
+      KEY crm_action_flow_versions_flow_id_idx (flow_id),
+      KEY crm_action_flow_versions_created_by_fk (created_by),
+      CONSTRAINT crm_action_flow_versions_flow_id_fk FOREIGN KEY (flow_id) REFERENCES crm_action_flows(id) ON DELETE CASCADE,
+      CONSTRAINT crm_action_flow_versions_created_by_fk FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
   );
   await connection.query(
@@ -412,6 +434,50 @@ async function main() {
       PRIMARY KEY (id),
       KEY crm_action_flow_executions_flow_id_idx (flow_id),
       CONSTRAINT crm_action_flow_executions_flow_id_fk FOREIGN KEY (flow_id) REFERENCES crm_action_flows(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_tasks (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      title VARCHAR(190) NOT NULL,
+      description TEXT NULL,
+      assignee_user_id BIGINT UNSIGNED NULL,
+      due_at DATETIME NULL,
+      priority ENUM('low', 'normal', 'high', 'urgent') NOT NULL DEFAULT 'normal',
+      task_status ENUM('open', 'in_progress', 'completed', 'cancelled') NOT NULL DEFAULT 'open',
+      source_flow_id BIGINT UNSIGNED NULL,
+      source_execution_id BIGINT UNSIGNED NULL,
+      source_node_id VARCHAR(120) NULL,
+      created_by BIGINT UNSIGNED NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY crm_tasks_assignee_idx (assignee_user_id),
+      KEY crm_tasks_source_execution_idx (source_execution_id),
+      CONSTRAINT crm_tasks_assignee_fk FOREIGN KEY (assignee_user_id) REFERENCES users(id) ON DELETE SET NULL,
+      CONSTRAINT crm_tasks_source_flow_fk FOREIGN KEY (source_flow_id) REFERENCES crm_action_flows(id) ON DELETE SET NULL,
+      CONSTRAINT crm_tasks_source_execution_fk FOREIGN KEY (source_execution_id) REFERENCES crm_action_flow_executions(id) ON DELETE SET NULL,
+      CONSTRAINT crm_tasks_created_by_fk FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_notifications (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      recipient_user_id BIGINT UNSIGNED NOT NULL,
+      title VARCHAR(190) NOT NULL,
+      message TEXT NOT NULL,
+      is_read TINYINT(1) NOT NULL DEFAULT 0,
+      source_flow_id BIGINT UNSIGNED NULL,
+      source_execution_id BIGINT UNSIGNED NULL,
+      source_node_id VARCHAR(120) NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      read_at TIMESTAMP NULL,
+      PRIMARY KEY (id),
+      KEY crm_notifications_recipient_idx (recipient_user_id, is_read, created_at),
+      KEY crm_notifications_source_execution_idx (source_execution_id),
+      CONSTRAINT crm_notifications_recipient_fk FOREIGN KEY (recipient_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      CONSTRAINT crm_notifications_source_flow_fk FOREIGN KEY (source_flow_id) REFERENCES crm_action_flows(id) ON DELETE SET NULL,
+      CONSTRAINT crm_notifications_source_execution_fk FOREIGN KEY (source_execution_id) REFERENCES crm_action_flow_executions(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
   );
   try {

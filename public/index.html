@@ -616,26 +616,100 @@
             </section>
 
             <section id="adminActionFlowSection" class="admin-section" hidden>
-              <div class="builder-layout">
-                <aside class="builder-list">
-                  <span class="status-pill">Phase 5</span>
-                  <div class="empty-state">
-                    <h3>Planned</h3>
-                    <p>Record-created, record-updated, and status-changed triggers.</p>
-                  </div>
-                </aside>
-
-                <div class="builder-main">
-                  <div class="section-heading">
-                    <div>
-                      <h2>Action Flow</h2>
-                      <p>Configure business logic with triggers, conditions, actions, scheduling, integrations, and logs.</p>
+              <div id="actionFlowManagement" class="action-flow-management">
+                <div class="action-flow-management-layout">
+                  <aside class="action-flow-management-rail" aria-label="Action Flow filters">
+                    <div class="action-flow-management-rail-heading">
+                      <strong>Flow Management</strong>
+                      <small>Browse by status</small>
                     </div>
+                    <div class="action-flow-filter-tabs" role="tablist" aria-label="Filter Action Flows">
+                      <button type="button" class="is-active" data-action-flow-filter="all"><span>All flows</span><strong id="actionFlowTotalCount">0</strong></button>
+                      <button type="button" data-action-flow-filter="enabled"><span>Enabled</span><strong id="actionFlowEnabledCount">0</strong></button>
+                      <button type="button" data-action-flow-filter="draft"><span>Draft</span><strong id="actionFlowDraftCount">0</strong></button>
+                      <button type="button" data-action-flow-filter="disabled"><span>Disabled</span><strong id="actionFlowDisabledCount">0</strong></button>
+                    </div>
+                  </aside>
+
+                  <main class="action-flow-management-main">
+                    <div class="action-flow-management-heading">
+                      <div>
+                        <span class="action-flow-management-kicker">Automation</span>
+                        <h2>Action Flow</h2>
+                        <p>Manage automations, review their status, and open the canvas when you are ready to build.</p>
+                      </div>
+                      <button type="button" id="createManagedActionFlowButton"><span aria-hidden="true">+</span> Create flow</button>
+                    </div>
+                    <div class="action-flow-management-panel">
+                      <div class="action-flow-management-tools">
+                        <span class="action-flow-result-label">Flows</span>
+                        <label class="action-flow-management-search"><span aria-hidden="true">⌕</span><input id="actionFlowManagementSearch" type="search" placeholder="Search name, trigger, or module"></label>
+                      </div>
+                      <div class="table-wrap action-flow-management-table-wrap">
+                        <table class="config-table action-flow-management-table">
+                          <thead><tr><th>Flow</th><th>Trigger</th><th>Module</th><th>Steps</th><th>Status</th><th>Updated</th><th>Actions</th></tr></thead>
+                          <tbody id="actionFlowManagementRows"></tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </main>
+                </div>
+              </div>
+
+              <div id="actionFlowStudio" class="action-flow-studio" hidden>
+                <header class="action-flow-toolbar">
+                  <div class="action-flow-title-block">
+                    <button type="button" class="action-flow-back-button" id="backToActionFlowManagement" aria-label="Back to Action Flow management">←</button>
+                    <span class="action-flow-kicker">Flow studio</span>
+                    <div><h2 id="actionFlowTitle">Action Flow</h2><span id="actionFlowSaveState">Select a flow to begin</span></div>
                   </div>
-                  <div class="empty-state">
-                    <h3>Automation Engine Planned</h3>
-                    <p>The first version will support record-created, record-updated, and status-changed triggers.</p>
+                  <div class="action-flow-toolbar-actions">
+                    <button type="button" class="secondary" id="actionFlowVersionsButton" disabled>Versions</button>
+                    <button type="button" class="secondary" id="publishActionFlowButton" disabled>Publish</button>
                   </div>
+                </header>
+
+                <div class="action-flow-context-toolbar">
+                  <div class="action-flow-context-status">
+                    <span id="actionFlowStatus" class="action-flow-status status-draft">Draft</span>
+                    <span>Canvas controls</span>
+                  </div>
+                  <div class="action-flow-toolbar-actions">
+                    <button type="button" class="action-flow-run-button" id="runActionFlowButton" disabled><span aria-hidden="true">▶</span> Run once</button>
+                    <button type="button" class="secondary action-flow-clear-run" id="clearActionFlowRunButton" hidden>Clear result</button>
+                    <button type="button" class="secondary" id="checkActionFlowButton" disabled>Check</button>
+                    <button type="button" id="saveActionFlowButton" disabled>Save changes</button>
+                  </div>
+                </div>
+
+                <div class="action-flow-workspace">
+                  <aside class="action-flow-library" aria-label="Action Flow library">
+                    <div class="action-flow-library-heading">
+                      <div><strong>Action flows</strong><small>Choose a flow to edit</small></div>
+                      <button type="button" class="action-flow-icon-button" id="newActionFlowButton" aria-label="Create action flow">+</button>
+                    </div>
+                    <label class="action-flow-search"><span aria-hidden="true">⌕</span><input id="actionFlowSearch" type="search" placeholder="Search flows"></label>
+                    <div id="actionFlowList" class="action-flow-list"></div>
+                    <div class="action-flow-palette-heading"><strong>Add a module</strong><small>Click to append to this flow</small></div>
+                    <div id="actionFlowPalette" class="action-flow-palette"></div>
+                  </aside>
+
+                  <main class="action-flow-canvas-shell">
+                    <div class="action-flow-canvas-tools" aria-label="Canvas controls">
+                      <button type="button" id="actionFlowZoomOut" aria-label="Zoom out">−</button>
+                      <output id="actionFlowZoomLabel">100%</output>
+                      <button type="button" id="actionFlowZoomIn" aria-label="Zoom in">+</button>
+                      <button type="button" id="actionFlowFit" aria-label="Fit flow">Fit</button>
+                    </div>
+                    <div id="actionFlowCanvasViewport" class="action-flow-canvas-viewport">
+                      <div id="actionFlowCanvas" class="action-flow-canvas" aria-label="Action Flow canvas"></div>
+                    </div>
+                    <div class="action-flow-canvas-legend" aria-hidden="true"><span><i class="legend-trigger"></i>Trigger</span><span><i class="legend-action"></i>Action</span><span><i class="legend-logic"></i>Logic</span></div>
+                  </main>
+
+                  <aside id="actionFlowInspector" class="action-flow-inspector" aria-label="Node configuration">
+                    <div class="action-flow-inspector-empty"><span>◎</span><strong>Select a module</strong><p>Choose a module on the canvas to review its role in this flow.</p></div>
+                  </aside>
                 </div>
               </div>
             </section>
@@ -1618,6 +1692,68 @@
           <button type="button" class="secondary" id="cancelConfirmationModal">Cancel</button>
         </div>
       </div>
+    </div>
+
+    <div id="actionFlowCreateModal" class="modal-backdrop" hidden>
+      <form id="actionFlowCreateForm" class="panel modal-card narrow-modal confirmation-modal-card action-flow-create-modal-card" role="dialog" aria-modal="true" aria-labelledby="actionFlowCreateTitle" aria-describedby="actionFlowCreateHelp">
+        <div class="modal-header">
+          <h2 id="actionFlowCreateTitle">Create Action Flow</h2>
+          <div class="modal-title-actions">
+            <button type="button" class="icon-button" id="closeActionFlowCreateModal" aria-label="Close">x</button>
+          </div>
+        </div>
+        <p id="actionFlowCreateHelp" class="muted">Name the automation. You can configure its trigger and modules in Flow Studio.</p>
+        <label class="action-flow-create-name">Flow name<input name="name" maxlength="160" placeholder="For example: New customer follow-up" autocomplete="off" required></label>
+        <div class="form-actions">
+          <button type="submit" id="confirmCreateActionFlow">Create flow</button>
+          <button type="button" class="secondary" id="cancelActionFlowCreateModal">Cancel</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="actionFlowRunModal" class="modal-backdrop" hidden>
+      <form id="actionFlowRunForm" class="panel modal-card narrow-modal action-flow-run-modal-card" role="dialog" aria-modal="true" aria-labelledby="actionFlowRunTitle">
+        <div class="modal-header">
+          <div><span class="action-flow-kicker">Test execution</span><h2 id="actionFlowRunTitle">Run this flow once</h2></div>
+          <div class="modal-title-actions"><button type="button" class="icon-button" id="closeActionFlowRunModal" aria-label="Close">x</button></div>
+        </div>
+        <p class="muted">Run the saved flow with sample trigger data. Actions such as record updates, tasks, notifications, and API calls will execute.</p>
+        <label>Record ID <span class="muted">(optional)</span><input name="recordId" type="number" min="1" placeholder="Existing record ID"></label>
+        <label>Trigger data<textarea name="recordJson" rows="10" spellcheck="false" required>{}</textarea></label>
+        <p class="action-flow-run-json-error" id="actionFlowRunJsonError" hidden></p>
+        <div class="form-actions">
+          <button type="submit" id="confirmRunActionFlow"><span aria-hidden="true">▶</span> Run once</button>
+          <button type="button" class="secondary" id="cancelActionFlowRunModal">Cancel</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="actionFlowVersionsDrawer" class="modal-backdrop drawer-backdrop" hidden>
+      <aside class="panel version-history-drawer" aria-label="Action Flow Version History">
+        <div class="modal-header">
+          <div>
+            <span class="eyebrow">Action Flow history</span>
+            <h2 id="actionFlowVersionsTitle">Version History</h2>
+            <p class="muted">Save named checkpoints, publish a tested version, or restore an earlier design safely.</p>
+          </div>
+          <div class="modal-title-actions">
+            <button type="button" class="icon-button fullscreen-button" data-modal-fullscreen aria-label="Enlarge to full screen" aria-pressed="false" title="Enlarge to full screen"></button>
+            <button type="button" class="icon-button" id="closeActionFlowVersionsDrawer" aria-label="Close">x</button>
+          </div>
+        </div>
+        <div class="version-history-body">
+          <section class="version-checkpoint-card">
+            <div><span class="eyebrow">New checkpoint</span><h3>Save current draft</h3><p class="muted">Add a remark that explains what changed in this version.</p></div>
+            <label>Remark<textarea id="actionFlowVersionRemark" rows="3" maxlength="255" placeholder="Example: Added retry handling and customer notification"></textarea></label>
+            <div class="form-actions end-actions"><button type="button" id="createActionFlowVersionButton">Save Version</button></div>
+          </section>
+          <section class="version-history-section">
+            <div class="section-heading-row"><div><span class="eyebrow">Saved versions</span><h3>Action Flow timeline</h3></div><span class="muted" id="actionFlowVersionsCount">0 versions</span></div>
+            <div class="version-timeline" id="actionFlowVersionsList"></div>
+          </section>
+        </div>
+        <div class="form-actions end-actions"><button type="button" class="secondary" id="closeActionFlowVersionsFooter">Close</button></div>
+      </aside>
     </div>
 
     <div id="departmentNodeModal" class="modal-backdrop" hidden>

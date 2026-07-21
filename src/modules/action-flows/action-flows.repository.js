@@ -18,6 +18,7 @@ function normalizeFlow(row) {
     description: row.description || '',
     status: row.flow_status,
     currentVersion: row.current_version,
+    publishedVersion: row.published_version || null,
     triggerCategory: row.trigger_category,
     triggerType: row.trigger_type,
     triggerModule: row.trigger_module || '',
@@ -25,6 +26,13 @@ function normalizeFlow(row) {
     updatedAt: row.updated_at,
     createdAt: row.created_at
   };
+}
+
+function normalizeRuntimeFlow(row) {
+  const flow = normalizeFlow(row);
+  flow.definition = parseJson(row.published_flow_json, flow.definition);
+  flow.currentVersion = row.published_version || row.current_version;
+  return flow;
 }
 
 function normalizeConnector(row) {
@@ -90,6 +98,14 @@ async function findFlowByKey(flowKey) {
   return rows[0] ? normalizeFlow(rows[0]) : null;
 }
 
+async function findPublishedFlowByKey(flowKey) {
+  const [rows] = await pool.execute(
+    "SELECT * FROM crm_action_flows WHERE flow_key = ? AND flow_status = 'enabled' AND published_flow_json IS NOT NULL LIMIT 1",
+    [flowKey]
+  );
+  return rows[0] ? normalizeRuntimeFlow(rows[0]) : null;
+}
+
 async function listEnabledFlowsForTrigger(triggerType, triggerModule) {
   const [rows] = await pool.execute(
     `SELECT *
@@ -100,7 +116,26 @@ async function listEnabledFlowsForTrigger(triggerType, triggerModule) {
      ORDER BY id ASC`,
     [triggerType, triggerModule || null]
   );
-  return rows.map(normalizeFlow);
+  return rows.map(normalizeRuntimeFlow);
+}
+
+async function listEnabledScheduledFlows() {
+  const [rows] = await pool.execute(
+    `SELECT * FROM crm_action_flows
+     WHERE flow_status = 'enabled' AND trigger_type = 'scheduled'
+     ORDER BY id ASC`
+  );
+  return rows.map(normalizeRuntimeFlow);
+}
+
+async function findLatestScheduledExecution(flowId) {
+  const [rows] = await pool.execute(
+    `SELECT * FROM crm_action_flow_executions
+     WHERE flow_id = ? AND JSON_UNQUOTE(JSON_EXTRACT(trigger_payload_json, '$.triggerType')) = 'scheduled'
+     ORDER BY created_at DESC, id DESC LIMIT 1`,
+    [flowId]
+  );
+  return rows[0] ? normalizeExecution(rows[0]) : null;
 }
 
 async function createFlow(flow, userId) {
@@ -149,10 +184,74 @@ async function updateFlow(flowKey, flow, userId) {
   if (flow.bumpVersion) {
     fields.push('current_version = current_version + 1');
   }
+  if (flow.currentVersion !== undefined) {
+    fields.push('current_version = ?');
+    values.push(flow.currentVersion);
+  }
   fields.push('updated_by = ?');
   values.push(userId || null);
   values.push(flowKey);
   await pool.execute(`UPDATE crm_action_flows SET ${fields.join(', ')} WHERE flow_key = ?`, values);
+  return findFlowByKey(flowKey);
+}
+
+async function createFlowVersion(flowKey, entry, userId) {
+  const flow = await findFlowByKey(flowKey);
+  if (!flow) return null;
+  const [rows] = await pool.execute(
+    'SELECT COALESCE(MAX(version_number), 0) AS latest_version FROM crm_action_flow_versions WHERE flow_id = ?',
+    [flow.id]
+  );
+  const versionNumber = Math.max(Number(rows[0]?.latest_version || 0), Number(flow.currentVersion || 0)) + (entry.useCurrentVersion ? 0 : 1);
+  const [result] = await pool.execute(
+    `INSERT INTO crm_action_flow_versions (flow_id, version_number, action, summary, snapshot_json, created_by)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [flow.id, versionNumber, entry.action, entry.summary || null, JSON.stringify(entry.snapshot), userId || null]
+  );
+  await pool.execute('UPDATE crm_action_flows SET current_version = ?, updated_by = ? WHERE id = ?', [versionNumber, userId || null, flow.id]);
+  return { id: result.insertId, versionNumber };
+}
+
+async function listFlowVersions(flowKey, limit = 30) {
+  const flow = await findFlowByKey(flowKey);
+  if (!flow) return null;
+  const safeLimit = Math.min(Math.max(Number(limit) || 30, 1), 100);
+  const [rows] = await pool.execute(
+    `SELECT versions.id, versions.version_number, versions.action, versions.summary, versions.created_at,
+            users.name AS created_by_name, users.email AS created_by_email
+     FROM crm_action_flow_versions versions
+     LEFT JOIN users ON users.id = versions.created_by
+     WHERE versions.flow_id = ? ORDER BY versions.version_number DESC LIMIT ${safeLimit}`,
+    [flow.id]
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    versionNumber: row.version_number,
+    action: row.action,
+    summary: row.summary || '',
+    createdAt: row.created_at,
+    createdBy: { name: row.created_by_name || '', email: row.created_by_email || '' }
+  }));
+}
+
+async function findFlowVersion(flowKey, versionId) {
+  const flow = await findFlowByKey(flowKey);
+  if (!flow) return null;
+  const [rows] = await pool.execute(
+    'SELECT * FROM crm_action_flow_versions WHERE flow_id = ? AND id = ? LIMIT 1',
+    [flow.id, versionId]
+  );
+  if (!rows[0]) return null;
+  return { id: rows[0].id, versionNumber: rows[0].version_number, snapshot: parseJson(rows[0].snapshot_json, {}) };
+}
+
+async function publishFlow(flowKey, versionNumber, userId) {
+  await pool.execute(
+    `UPDATE crm_action_flows
+     SET published_flow_json = flow_json, published_version = ?, current_version = ?, flow_status = 'enabled', updated_by = ?
+     WHERE flow_key = ?`,
+    [versionNumber, versionNumber, userId || null, flowKey]
+  );
   return findFlowByKey(flowKey);
 }
 
@@ -288,12 +387,56 @@ async function listExecutions(flowKey, limit = 50) {
   return rows.map(normalizeExecution);
 }
 
+async function createTask(task) {
+  const [result] = await pool.execute(
+    `INSERT INTO crm_tasks
+     (title, description, assignee_user_id, due_at, priority, source_flow_id, source_execution_id, source_node_id, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      task.title,
+      task.description || null,
+      task.assigneeUserId || null,
+      task.dueAt || null,
+      task.priority || 'normal',
+      task.sourceFlowId || null,
+      task.sourceExecutionId || null,
+      task.sourceNodeId || null,
+      task.createdBy || null
+    ]
+  );
+  return result.insertId;
+}
+
+async function createNotification(notification) {
+  const [result] = await pool.execute(
+    `INSERT INTO crm_notifications
+     (recipient_user_id, title, message, source_flow_id, source_execution_id, source_node_id)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [
+      notification.recipientUserId,
+      notification.title,
+      notification.message,
+      notification.sourceFlowId || null,
+      notification.sourceExecutionId || null,
+      notification.sourceNodeId || null
+    ]
+  );
+  return result.insertId;
+}
+
 module.exports = {
   listFlows,
   findFlowByKey,
+  findPublishedFlowByKey,
   listEnabledFlowsForTrigger,
+  listEnabledScheduledFlows,
+  findLatestScheduledExecution,
   createFlow,
   updateFlow,
+  createFlowVersion,
+  listFlowVersions,
+  findFlowVersion,
+  publishFlow,
   deleteFlow,
   listConnectors,
   listConnectorCategories,
@@ -305,5 +448,7 @@ module.exports = {
   deleteConnector,
   createExecution,
   finishExecution,
-  listExecutions
+  listExecutions,
+  createTask,
+  createNotification
 };

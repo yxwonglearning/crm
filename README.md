@@ -215,10 +215,11 @@ Admins should have a dedicated portal for configuring the CRM:
    - Custom module pages now support Excel template download, Excel import, and Excel export for main-table and detail-table fields.
    - Detail-table import/export uses separate Excel sheets linked to main records by `Record Ref`.
    - Generated-page smoke test passed for custom module creation, permissions, layouts, record CRUD, quick search, advanced filter, detail view data, Excel template, detail-table import/export, and cleanup.
-5. Phase 5: Action Flow - first management, builder, and runtime slice complete
+5. Phase 5: Action Flow - complete
    - Admin Portal has an `Action Flow` management page with All, Enable, Disable, and Draft filters.
    - Existing action flows can be previewed in a right-side drawer before opening the full builder.
-   - New and existing flows open in a full-screen low-code builder with a dotted canvas, categorized action palette, node configuration panel, Save, and Check controls.
+   - New and existing flows open in a full-screen Make.com-style low-code builder with a draggable dotted canvas, aligned dotted connectors, categorized action palette, node configuration panel, Save, and Check controls.
+   - The completed implementation includes: the visual canvas; structured conditions; real Yes/No runtime routing; n8n-style field mapping and previous-node outputs; task, notification, and transformation actions; Run Once testing and visual execution states; scheduling, error handlers, and retries; versioning and publishing; and loops, parallel branches, and cross-flow orchestration.
    - Action categories include Record, Task/Notification, Logic, RESTful API, and Data Mapping.
    - Record actions include add record, update record, delete record, assign owner, and change status.
    - RESTful API connector configuration is available as a dedicated Admin Portal API Connectors module with connection name/description, protocol and TLS version, certificate-bypass setting, domain/IP address, encoding, connection/response timeouts, and authentication.
@@ -229,16 +230,21 @@ Admins should have a dedicated portal for configuring the CRM:
    - Request and Response definitions use Params, Header, and Body tables with one-row-at-a-time editing plus batch field creation from pasted JSON or XML. Data-format selection is scoped to Body and reused by Batch Add; Params and Header batch input auto-detects JSON or XML.
    - Interface Debug executes through the backend and returns status, timing, headers, body, response size, and configured success-rule evaluation. Backend storage, validation, connector save/delete, and automated OAuth smoke coverage are available.
    - Persisted delete actions use one reusable confirmation template across customers, generated records, modules, fields, API connectors, and connector categories, with consistent destructive styling, right-aligned actions, backdrop dismissal, and Escape support.
-   - Action Flow configuration now has placeholder fields for form operation type, application/form selection, field mapping, basis value, classification, sync mode, permission checks, REST request/response mapping, data-source merge mode, and join conditions.
-   - First runtime slice is implemented for published custom module record triggers (`record_created`, `record_updated`, `record_deleted`, and `status_changed`) and local record actions such as add, update, delete, assign owner, and change status.
+   - The structured condition editor supports multiple rules, All/Any matching, field/operator/value selection, and saved Yes/No branches that route the runtime graph according to the evaluated result.
+   - n8n-style mapping supports fixed values and expressions sourced from trigger data, the current record, and previous-node outputs; transformed results can be named and reused by later modules.
+   - Published custom module record triggers (`record_created`, `record_updated`, `record_deleted`, and `status_changed`) and scheduled triggers execute local record actions such as add, update, delete, assign owner, and change status.
+   - Task creation, notifications, Set Value, Transform Value, and REST actions consume mapped inputs and expose execution results for subsequent modules.
    - Runtime executions are recorded in `crm_action_flow_executions`, admins can read recent execution/instance logs through the Action Flow API, and the Action Flow builder has Execution/Instance log views.
    - Execution results include step labels, categories, statuses, timestamps, durations, skip reasons, trigger metadata, and raw payload/result inspection.
    - Guarded REST nodes perform outbound calls with connector endpoint selection, request mapping, auth/header support, timeouts, private-network blocking unless explicitly allowed, bounded response capture, and HTTP response logging.
    - First visual mapping dialogs are available for record field mapping and REST request/response/error mapping while preserving the existing text mapping format.
    - REST response/error mappings are applied at runtime: mapped values are captured in execution logs, and matching main-table form fields on the triggered record are updated automatically.
    - Dynamic assignment picker is available for Action Flow value fields and mapping rows, with context/current-record/system/fixed-value choices and previous-node output tokens.
-   - Still pending: condition/query table builders, broader trigger/action runtime coverage, and workflow operation wiring.
-   - Later add scheduling, cross-module orchestration, external integrations, and advanced execution monitoring.
+   - Run Once executes draft flows for testing and displays node-level running, successful, skipped, and failed states with useful error details.
+   - Reliability settings support retry attempts, retry delays, stop-flow behavior, and dedicated error branches after retry exhaustion.
+   - Action Flow version history supports named checkpoints, remarks, safe restoration, and explicit publishing; production triggers and child-flow calls use published versions.
+   - Loop modules expose Body and Done paths, Parallel modules support user-added empty branches and wait for every path, and Run Flow invokes another published flow with mapped inputs and recursion protection.
+   - End modules explicitly finish individual paths, while execution and instance logs provide monitoring for completed and failed runs.
 6. Phase 6: Permissions - complete
    - Admin Portal has a `Permissions` section for module and field access.
    - Module permissions control view, create, edit, delete, import, export, and configuration access by role or specific user.

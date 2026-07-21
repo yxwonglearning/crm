@@ -61,6 +61,19 @@ const state = {
   activeApiDefinitionTabs: { request: 'params', response: 'params' },
   apiInterfaceBodyFormats: { request: 'application/json', response: 'application/json' },
   apiDefinitionBatchTarget: null,
+  actionFlows: [],
+  activeActionFlowKey: '',
+  actionFlowMode: 'management',
+  actionFlowStatusFilter: 'all',
+  selectedActionFlowNodeId: '',
+  actionFlowSearch: '',
+  actionFlowZoom: 1,
+  actionFlowDirty: false,
+  actionFlowDrag: null,
+  actionFlowPan: null,
+  actionFlowRun: null,
+  actionFlowVersions: null,
+  actionFlowVersionsLoading: false,
   permissionMatrix: null,
   fieldPermissionMatrix: null,
   activePermissionModule: 'customers',
@@ -2366,6 +2379,1239 @@ async function openBrowserLookup(button) {
   }
 }
 
+const actionFlowPaletteItems = [
+  { category: 'record', type: 'add_record', label: 'Add record', icon: 'A', help: 'Create a new record' },
+  { category: 'record', type: 'update_record', label: 'Update record', icon: 'U', help: 'Change fields on a record' },
+  { category: 'logic', type: 'condition', label: 'Condition', icon: '?', help: 'Split into Yes and No paths' },
+  { category: 'logic', type: 'loop', label: 'Loop', icon: 'L', help: 'Repeat steps for each item' },
+  { category: 'logic', type: 'parallel_branch', label: 'Parallel', icon: 'P', help: 'Run paths together' },
+  { category: 'task_notification', type: 'create_task', label: 'Create task', icon: 'T', help: 'Create follow-up work' },
+  { category: 'task_notification', type: 'send_notification', label: 'Notification', icon: 'N', help: 'Notify a person or role' },
+  { category: 'restful_api', type: 'call_rest_api', label: 'Call API', icon: '↗', help: 'Run a connector interface' },
+  { category: 'data_mapping', type: 'set_variable', label: 'Set value', icon: '=', help: 'Prepare data for later steps' },
+  { category: 'data_mapping', type: 'transform_value', label: 'Transform value', icon: 'ƒ', help: 'Clean or convert a value' },
+  { category: 'workflow', type: 'run_flow', label: 'Run flow', icon: 'R', help: 'Start another published flow' },
+  { category: 'end', type: 'end', label: 'End', icon: 'E', help: 'Finish this path' }
+];
+
+function activeActionFlow() {
+  return state.actionFlows.find((flow) => flow.flowKey === state.activeActionFlowKey) || null;
+}
+
+function actionFlowDefinition(flow = activeActionFlow()) {
+  if (!flow) return { nodes: [], edges: [] };
+  if (!flow.definition || typeof flow.definition !== 'object') flow.definition = {};
+  if (!Array.isArray(flow.definition.nodes)) flow.definition.nodes = [];
+  if (!Array.isArray(flow.definition.edges)) flow.definition.edges = [];
+  return flow.definition;
+}
+
+function actionFlowNodeGlyph(node) {
+  if (node.category === 'trigger') return '▶';
+  return actionFlowPaletteItems.find((item) => item.type === node.type)?.icon || String(node.label || node.type || 'A').slice(0, 1).toUpperCase();
+}
+
+function actionFlowNodeKind(node) {
+  if (node.category === 'trigger') return 'Trigger';
+  if (node.category === 'logic') return 'Logic';
+  return titleCaseMessage(String(node.category || 'action').replaceAll('_', ' '));
+}
+
+function actionFlowNodePosition(node, index) {
+  return {
+    x: Number.isFinite(Number(node.x)) ? Number(node.x) : 190 + (index * 210),
+    y: Number.isFinite(Number(node.y)) ? Number(node.y) : 380
+  };
+}
+
+function actionFlowCanvasBounds(definition = actionFlowDefinition()) {
+  const positions = (definition.nodes || []).map((node, index) => actionFlowNodePosition(node, index));
+  const farthestX = positions.length ? Math.max(...positions.map((position) => position.x)) : 0;
+  const farthestY = positions.length ? Math.max(...positions.map((position) => position.y)) : 0;
+  return {
+    width: Math.max(1400, Math.ceil((farthestX + 220) / 200) * 200),
+    height: Math.max(900, Math.ceil((farthestY + 190) / 150) * 150)
+  };
+}
+
+function actionFlowEdgePath(from, to) {
+  const bend = Math.max(70, Math.abs(to.x - from.x) * .46);
+  return `M ${from.x + 40} ${from.y} C ${from.x + bend} ${from.y}, ${to.x - bend} ${to.y}, ${to.x - 40} ${to.y}`;
+}
+
+function actionFlowEdgeLabel(edge, from, to) {
+  const outcome = String(edge.outcome || edge.label || '').toLowerCase();
+  if (!['yes', 'no', 'error', 'body', 'done'].includes(outcome) && !outcome.startsWith('branch')) return '';
+  const x = (from.x + to.x) / 2;
+  const y = (from.y + to.y) / 2 - 13;
+  const label = outcome === 'yes' ? 'Yes' : outcome === 'no' ? 'No' : outcome === 'error' ? 'Error' : outcome === 'body' ? 'Body' : outcome === 'done' ? 'Done' : titleCaseMessage(outcome.replace('_', ' '));
+  const width = Math.max(38, label.length * 7 + 14);
+  return `<g class="action-flow-edge-label is-${outcome}" transform="translate(${x} ${y})"><rect x="-${width / 2}" y="-10" width="${width}" height="20" rx="10"></rect><text y="4">${label}</text></g>`;
+}
+
+function actionFlowUpdatedLabel(value) {
+  const date = new Date(value || '');
+  if (Number.isNaN(date.getTime())) return 'Not available';
+  return new Intl.DateTimeFormat(undefined, { day: '2-digit', month: 'short', year: 'numeric' }).format(date);
+}
+
+function renderActionFlowManagement() {
+  const rows = $('#actionFlowManagementRows');
+  if (!rows) return;
+  const query = state.actionFlowSearch.trim().toLowerCase();
+  const filtered = state.actionFlows.filter((flow) => {
+    const statusMatches = state.actionFlowStatusFilter === 'all' || flow.status === state.actionFlowStatusFilter;
+    const searchMatches = !query || `${flow.name} ${flow.flowKey} ${flow.triggerType} ${flow.triggerModule}`.toLowerCase().includes(query);
+    return statusMatches && searchMatches;
+  });
+  $('#actionFlowTotalCount').textContent = state.actionFlows.length;
+  $('#actionFlowEnabledCount').textContent = state.actionFlows.filter((flow) => flow.status === 'enabled').length;
+  $('#actionFlowDraftCount').textContent = state.actionFlows.filter((flow) => flow.status === 'draft').length;
+  $('#actionFlowDisabledCount').textContent = state.actionFlows.filter((flow) => flow.status === 'disabled').length;
+  $$('.action-flow-filter-tabs [data-action-flow-filter]').forEach((button) => {
+    button.classList.toggle('is-active', button.dataset.actionFlowFilter === state.actionFlowStatusFilter);
+  });
+  rows.innerHTML = filtered.map((flow) => {
+    const definition = flow.definition && typeof flow.definition === 'object' ? flow.definition : {};
+    const stepCount = Array.isArray(definition.nodes) ? definition.nodes.length : 0;
+    return `<tr data-managed-action-flow="${escapeHtml(flow.flowKey)}">
+      <td><div class="action-flow-name-cell"><span class="action-flow-name-icon">↗</span><span><strong>${escapeHtml(flow.name)}</strong><small>${escapeHtml(flow.description || flow.flowKey)}</small></span></div></td>
+      <td><span class="action-flow-trigger-cell"><i></i>${escapeHtml(titleCaseMessage(flow.triggerType || 'manual'))}</span></td>
+      <td>${escapeHtml(titleCaseMessage(flow.triggerModule || 'Any module'))}</td>
+      <td>${stepCount}</td>
+      <td><span class="action-flow-management-status status-${escapeHtml(flow.status || 'draft')}">${escapeHtml(titleCaseMessage(flow.status || 'draft'))}</span></td>
+      <td>${escapeHtml(actionFlowUpdatedLabel(flow.updatedAt))}</td>
+      <td><div class="action-flow-management-actions"><button type="button" class="secondary" data-check-managed-flow="${escapeHtml(flow.flowKey)}">Check</button><button type="button" class="open-flow-canvas-button" data-open-flow-canvas="${escapeHtml(flow.flowKey)}">Open canvas →</button><button type="button" class="link-button danger-link" data-delete-managed-flow="${escapeHtml(flow.flowKey)}">Delete</button></div></td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="7" class="action-flow-management-empty"><strong>No Action Flows found</strong><span>Change the filter or create a new automation.</span></td></tr>';
+}
+
+function showActionFlowManagement() {
+  if (state.actionFlowDirty && !window.confirm('Leave the canvas without saving your changes?')) return;
+  state.actionFlowMode = 'management';
+  state.selectedActionFlowNodeId = '';
+  state.actionFlowDirty = false;
+  state.actionFlowRun = null;
+  $('#actionFlowManagement').hidden = false;
+  $('#actionFlowStudio').hidden = true;
+  renderActionFlowManagement();
+}
+
+function openActionFlowCanvas(flowKey) {
+  const flow = state.actionFlows.find((item) => item.flowKey === flowKey);
+  if (!flow) return;
+  state.activeActionFlowKey = flow.flowKey;
+  state.actionFlowMode = 'canvas';
+  state.selectedActionFlowNodeId = flow.definition?.nodes?.[0]?.id || '';
+  state.actionFlowDirty = false;
+  state.actionFlowRun = null;
+  $('#actionFlowManagement').hidden = true;
+  $('#actionFlowStudio').hidden = false;
+  renderActionFlowStudio();
+  requestAnimationFrame(() => {
+    const viewport = $('#actionFlowCanvasViewport');
+    if (viewport) viewport.scrollTo({ left: 100, top: 0 });
+  });
+}
+
+function renderActionFlowList() {
+  const list = $('#actionFlowList');
+  if (!list) return;
+  const query = state.actionFlowSearch.trim().toLowerCase();
+  const flows = state.actionFlows.filter((flow) => !query || `${flow.name} ${flow.flowKey}`.toLowerCase().includes(query));
+  list.innerHTML = flows.map((flow) => `
+    <button type="button" class="action-flow-list-button ${flow.flowKey === state.activeActionFlowKey ? 'is-active' : ''}" data-action-flow-key="${escapeHtml(flow.flowKey)}">
+      <span><strong>${escapeHtml(flow.name)}</strong><small>${escapeHtml(titleCaseMessage(flow.triggerType || 'manual'))}</small></span>
+      <i class="status-${escapeHtml(flow.status || 'draft')}" aria-label="${escapeHtml(flow.status || 'draft')}"></i>
+    </button>
+  `).join('') || '<div class="action-flow-list-empty">No matching flows</div>';
+}
+
+function renderActionFlowPalette() {
+  const palette = $('#actionFlowPalette');
+  if (!palette) return;
+  const disabled = !activeActionFlow();
+  palette.innerHTML = actionFlowPaletteItems.map((item) => `
+    <button type="button" class="action-flow-palette-button" data-flow-node-type="${item.type}" data-flow-node-category="${item.category}" ${disabled ? 'disabled' : ''}>
+      <i class="action-flow-palette-icon" aria-hidden="true">${item.icon}</i>
+      <span><strong>${item.label}</strong><small>${item.help}</small></span>
+    </button>
+  `).join('');
+}
+
+const actionFlowConditionOperatorLabels = {
+  equals: 'Equals',
+  not_equals: 'Does not equal',
+  contains: 'Contains',
+  starts_with: 'Starts with',
+  ends_with: 'Ends with',
+  greater_than: 'Greater than',
+  less_than: 'Less than',
+  empty: 'Is empty',
+  not_empty: 'Is not empty'
+};
+
+function actionFlowConditionOperators(type = 'text') {
+  if (['int', 'integer', 'decimal', 'decimals', 'number', 'date', 'datetime'].includes(type)) {
+    return ['equals', 'not_equals', 'greater_than', 'less_than', 'empty', 'not_empty'];
+  }
+  if (['checkbox', 'boolean'].includes(type)) return ['equals', 'not_equals'];
+  if (['select', 'dropdownbox', 'owner', 'browser_button'].includes(type)) {
+    return ['equals', 'not_equals', 'empty', 'not_empty'];
+  }
+  return ['equals', 'not_equals', 'contains', 'starts_with', 'ends_with', 'empty', 'not_empty'];
+}
+
+function actionFlowConditionSources(node) {
+  const flow = activeActionFlow();
+  const moduleKey = flow?.triggerModule || actionFlowDefinition().nodes.find((item) => item.category === 'trigger')?.config?.moduleKey || 'customers';
+  const fields = moduleFields(moduleKey).filter((field) => !field.archived && field.tableType !== 'detail');
+  const sources = [
+    { value: 'trigger.recordId', label: 'Trigger · Record ID', type: 'number', group: 'Trigger' },
+    { value: 'trigger.userId', label: 'Trigger · User ID', type: 'number', group: 'Trigger' },
+    ...fields.map((field) => ({
+      value: `current record.${field.fieldKey}`,
+      label: `Current record · ${field.label || titleCaseMessage(field.fieldKey)}`,
+      type: field.type || 'text',
+      group: 'Current record'
+    }))
+  ];
+  const nodes = actionFlowDefinition().nodes;
+  const selectedIndex = nodes.findIndex((item) => item.id === node.id);
+  nodes.slice(0, Math.max(0, selectedIndex)).filter((item) => item.category !== 'trigger').forEach((item) => {
+    const prefix = item.label || titleCaseMessage(item.type);
+    sources.push({ value: `outputs.${item.id}.status`, label: `${prefix} · Status`, type: 'text', group: 'Previous modules' });
+    if (item.type === 'condition') sources.push({ value: `outputs.${item.id}.matched`, label: `${prefix} · Matched`, type: 'boolean', group: 'Previous modules' });
+    if (['add_record', 'update_record'].includes(item.type)) sources.push({ value: `outputs.${item.id}.recordId`, label: `${prefix} · Record ID`, type: 'number', group: 'Previous modules' });
+    if (item.type === 'call_rest_api') sources.push({ value: `outputs.${item.id}.httpStatus`, label: `${prefix} · Response status`, type: 'number', group: 'Previous modules' });
+    if (item.type === 'transform_value' && item.config?.outputName) sources.push({ value: `outputs.${item.id}.values.${item.config.outputName}`, label: `${prefix} · ${titleCaseMessage(item.config.outputName)}`, type: 'text', group: 'Previous modules' });
+    if (item.type === 'create_task') sources.push({ value: `outputs.${item.id}.taskId`, label: `${prefix} · Task ID`, type: 'number', group: 'Previous modules' });
+    if (item.type === 'send_notification') sources.push({ value: `outputs.${item.id}.notificationId`, label: `${prefix} · Notification ID`, type: 'number', group: 'Previous modules' });
+  });
+  return sources;
+}
+
+const actionFlowMappingNodeTypes = new Set(['add_record', 'update_record', 'set_variable', 'call_rest_api', 'run_flow']);
+
+function actionFlowMappingSources(node) {
+  const sources = actionFlowConditionSources(node);
+  const nodes = actionFlowDefinition().nodes;
+  const selectedIndex = nodes.findIndex((item) => item.id === node.id);
+  nodes.slice(0, Math.max(0, selectedIndex)).filter((item) => item.category !== 'trigger').forEach((item) => {
+    const prefix = item.label || titleCaseMessage(item.type);
+    if (item.type === 'call_rest_api') {
+      sources.push({ value: `outputs.${item.id}.responseBody`, label: `${prefix} · Response body`, type: 'object', group: prefix });
+      sources.push({ value: `outputs.${item.id}.responseHeaders`, label: `${prefix} · Response headers`, type: 'object', group: prefix });
+    }
+    if (item.type === 'transform_value' && item.config?.outputName) {
+      sources.push({ value: `outputs.${item.id}.values.${item.config.outputName}`, label: `${prefix} · ${titleCaseMessage(item.config.outputName)}`, type: 'text', group: prefix });
+    }
+    if (item.type === 'create_task') sources.push({ value: `outputs.${item.id}.taskId`, label: `${prefix} · Task ID`, type: 'number', group: prefix });
+    if (item.type === 'send_notification') sources.push({ value: `outputs.${item.id}.notificationId`, label: `${prefix} · Notification ID`, type: 'number', group: prefix });
+    const mappings = Array.isArray(item.config?.fieldMappings) ? item.config.fieldMappings : [];
+    mappings.filter((mapping) => mapping.target).forEach((mapping) => {
+      sources.push({
+        value: `outputs.${item.id}.values.${mapping.target}`,
+        label: `${prefix} · ${titleCaseMessage(mapping.target)}`,
+        type: 'text',
+        group: prefix
+      });
+    });
+  });
+  return sources.filter((source, index, items) => items.findIndex((item) => item.value === source.value) === index);
+}
+
+function actionFlowMappingTextKey(node) {
+  return node.type === 'call_rest_api' ? 'requestMapping' : 'fieldMappingText';
+}
+
+function parseLegacyActionFlowMappings(node) {
+  const text = node.config?.[actionFlowMappingTextKey(node)] || '';
+  return String(text).split(/\r?\n/).map((line, index) => {
+    const separatorIndex = line.indexOf('=');
+    if (separatorIndex <= 0) return null;
+    const target = line.slice(0, separatorIndex).trim();
+    let value = line.slice(separatorIndex + 1).trim();
+    const expression = /^(trigger\.|current record\.|outputs\.|\{\{)/i.test(value);
+    if (!expression && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) value = value.slice(1, -1);
+    return { id: `mapping_legacy_${index + 1}`, target, mode: expression ? 'expression' : 'fixed', value };
+  }).filter(Boolean);
+}
+
+function actionFlowMappingState(node) {
+  const configured = Array.isArray(node.config?.fieldMappings) ? node.config.fieldMappings : [];
+  return (configured.length ? configured : parseLegacyActionFlowMappings(node)).map((mapping, index) => ({
+    id: mapping.id || `mapping_${index + 1}`,
+    target: mapping.target || '',
+    mode: mapping.mode === 'expression' ? 'expression' : 'fixed',
+    value: mapping.value ?? ''
+  }));
+}
+
+function serializeActionFlowMappings(mappings) {
+  return mappings.filter((mapping) => mapping.target).map((mapping) => {
+    const rawValue = String(mapping.value ?? '');
+    const value = mapping.mode === 'expression' ? rawValue : JSON.stringify(rawValue);
+    return `${mapping.target} = ${value}`;
+  }).join('\n');
+}
+
+function saveActionFlowMappingState(node, mappings) {
+  node.config = node.config || {};
+  node.config.fieldMappings = mappings;
+  node.config[actionFlowMappingTextKey(node)] = serializeActionFlowMappings(mappings);
+  state.actionFlowDirty = true;
+  $('#actionFlowSaveState').textContent = 'Unsaved canvas changes';
+  $('#saveActionFlowButton').disabled = false;
+}
+
+function selectedActionFlowMappingNode() {
+  const node = actionFlowDefinition().nodes.find((item) => item.id === state.selectedActionFlowNodeId);
+  return actionFlowMappingNodeTypes.has(node?.type) ? node : null;
+}
+
+function addActionFlowMapping() {
+  const node = selectedActionFlowMappingNode();
+  if (!node) return;
+  const mappings = actionFlowMappingState(node);
+  mappings.push({ id: `mapping_${Date.now().toString(36)}`, target: '', mode: 'expression', value: '' });
+  saveActionFlowMappingState(node, mappings);
+  renderActionFlowInspector();
+}
+
+function removeActionFlowMapping(mappingId) {
+  const node = selectedActionFlowMappingNode();
+  if (!node) return;
+  saveActionFlowMappingState(node, actionFlowMappingState(node).filter((mapping) => mapping.id !== mappingId));
+  renderActionFlowInspector();
+}
+
+function updateActionFlowMapping(mappingId, field, value, rerender = false) {
+  const node = selectedActionFlowMappingNode();
+  if (!node || !['target', 'mode', 'value', 'targetModule'].includes(field)) return;
+  if (field === 'targetModule') {
+    node.config = node.config || {};
+    node.config.targetModule = value;
+    node.config.target = 'current_record';
+    state.actionFlowDirty = true;
+    renderActionFlowInspector();
+    return;
+  }
+  const mappings = actionFlowMappingState(node);
+  const mapping = mappings.find((item) => item.id === mappingId);
+  if (!mapping) return;
+  mapping[field] = value;
+  saveActionFlowMappingState(node, mappings);
+  if (rerender) renderActionFlowInspector();
+}
+
+function renderActionFlowMappingBuilder(node) {
+  const mappings = actionFlowMappingState(node);
+  const sources = actionFlowMappingSources(node);
+  const sourceSuggestions = sources.map((source) => `<option value="${escapeHtml(source.value)}">${escapeHtml(`${source.group} · ${source.label}`)}</option>`).join('');
+  const targetModule = node.config?.targetModule || activeActionFlow()?.triggerModule || 'customers';
+  const targetFields = moduleFields(targetModule).filter((field) => !field.archived && field.tableType !== 'detail');
+  const targetControl = (mapping) => ['add_record', 'update_record'].includes(node.type)
+    ? `<select data-mapping-field="target" aria-label="Target field"><option value="">Choose target field</option>${targetFields.map((field) => `<option value="${escapeHtml(field.fieldKey)}" ${mapping.target === field.fieldKey ? 'selected' : ''}>${escapeHtml(field.label || titleCaseMessage(field.fieldKey))}</option>`).join('')}</select>`
+    : `<input data-mapping-field="target" value="${escapeHtml(mapping.target)}" placeholder="${node.type === 'call_rest_api' ? 'Request field' : 'Variable name'}">`;
+  const rows = mappings.map((mapping) => `<div class="action-flow-mapping-row" data-action-flow-mapping-id="${escapeHtml(mapping.id)}">
+    <div class="action-flow-mapping-row-heading"><strong>Map field</strong><button type="button" data-remove-action-flow-mapping="${escapeHtml(mapping.id)}" aria-label="Remove mapping">×</button></div>
+    ${targetControl(mapping)}
+    <div class="action-flow-mapping-mode" role="group" aria-label="Value mode"><button type="button" data-set-mapping-mode="fixed" class="${mapping.mode === 'fixed' ? 'is-active' : ''}">Fixed</button><button type="button" data-set-mapping-mode="expression" class="${mapping.mode === 'expression' ? 'is-active' : ''}">Expression</button></div>
+    ${mapping.mode === 'expression'
+      ? `<input data-mapping-field="value" list="actionFlowMappingSources_${escapeHtml(mapping.id)}" value="${escapeHtml(mapping.value)}" placeholder="Choose or type an output path" aria-label="Source value"><datalist id="actionFlowMappingSources_${escapeHtml(mapping.id)}">${sourceSuggestions}</datalist>`
+      : `<input data-mapping-field="value" value="${escapeHtml(mapping.value)}" placeholder="Enter a value">`}
+  </div>`).join('');
+  const moduleOptions = configModules.map((module) => `<option value="${escapeHtml(module.key)}" ${module.key === targetModule ? 'selected' : ''}>${escapeHtml(module.name)}</option>`).join('');
+  return `<div class="action-flow-inspector-section action-flow-mapping-builder">
+    <span>Field mapping</span>
+    ${['add_record', 'update_record'].includes(node.type) ? `<label>Target module<select data-mapping-field="targetModule">${moduleOptions}</select></label>` : ''}
+    <p class="action-flow-mapping-help">Map fixed values or data from the trigger, current record, and previous modules.</p>
+    <div class="action-flow-mapping-rows">${rows || '<div class="action-flow-mapping-empty">No mappings yet. Add one to pass data into this module.</div>'}</div>
+    <button type="button" class="secondary action-flow-add-mapping" id="addActionFlowMapping">+ Add mapping</button>
+    <details class="action-flow-mapping-preview"><summary>Expression preview</summary><code>${escapeHtml(serializeActionFlowMappings(mappings) || 'No mapping expressions')}</code></details>
+  </div>`;
+}
+
+function parseLegacyActionFlowCondition(condition = '') {
+  const match = String(condition).trim().match(/^(.+?)\s+(equals|is|not_equals|is_not|contains|starts_with|ends_with|empty|not_empty|greater_than|less_than|=|==|!=|<>)\s*(.*)$/i);
+  if (!match) return null;
+  const aliases = { is: 'equals', '=': 'equals', '==': 'equals', is_not: 'not_equals', '!=': 'not_equals', '<>': 'not_equals' };
+  let value = match[3] || '';
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
+  return { id: 'rule_legacy_1', left: match[1].trim(), operator: aliases[match[2].toLowerCase()] || match[2].toLowerCase(), value };
+}
+
+function actionFlowConditionState(node) {
+  const configuredRules = Array.isArray(node.config?.conditionRules) ? node.config.conditionRules : [];
+  const legacyRule = !configuredRules.length ? parseLegacyActionFlowCondition(node.config?.condition) : null;
+  const rules = (configuredRules.length ? configuredRules : (legacyRule ? [legacyRule] : []))
+    .map((rule, index) => ({ id: rule.id || `rule_${index + 1}`, left: rule.left || '', operator: rule.operator || 'equals', value: rule.value ?? '' }));
+  return { combinator: node.config?.conditionCombinator === 'or' ? 'or' : 'and', rules };
+}
+
+function serializeActionFlowConditionRule(rule) {
+  if (!rule?.left || !rule.operator) return '';
+  if (['empty', 'not_empty'].includes(rule.operator)) return `${rule.left} ${rule.operator}`;
+  const rawValue = String(rule.value ?? '').trim();
+  const value = /^-?\d+(\.\d+)?$/.test(rawValue) || ['true', 'false'].includes(rawValue.toLowerCase())
+    ? rawValue
+    : JSON.stringify(rawValue);
+  return `${rule.left} ${rule.operator} ${value}`;
+}
+
+function actionFlowConditionSummary(node, conditionState = actionFlowConditionState(node)) {
+  const sources = actionFlowConditionSources(node);
+  const summaries = conditionState.rules.map((rule) => {
+    const source = sources.find((item) => item.value === rule.left);
+    const operator = actionFlowConditionOperatorLabels[rule.operator] || titleCaseMessage(rule.operator);
+    const value = ['empty', 'not_empty'].includes(rule.operator) ? '' : ` “${rule.value ?? ''}”`;
+    return `${source?.label || rule.left || 'Choose a field'} ${operator.toLowerCase()}${value}`;
+  });
+  return summaries.length ? summaries.join(` ${conditionState.combinator.toUpperCase()} `) : 'Add a rule to define the Yes path.';
+}
+
+function saveActionFlowConditionState(node, conditionState) {
+  node.config = node.config || {};
+  node.config.conditionRules = conditionState.rules;
+  node.config.conditionCombinator = conditionState.combinator;
+  node.config.condition = serializeActionFlowConditionRule(conditionState.rules[0]);
+  state.actionFlowDirty = true;
+  $('#actionFlowSaveState').textContent = 'Unsaved canvas changes';
+  $('#saveActionFlowButton').disabled = false;
+}
+
+function selectedActionFlowConditionNode() {
+  const node = actionFlowDefinition().nodes.find((item) => item.id === state.selectedActionFlowNodeId);
+  return node?.type === 'condition' ? node : null;
+}
+
+function refreshActionFlowConditionSummary(node, conditionState) {
+  const summary = $('#actionFlowConditionSummary');
+  if (summary) summary.textContent = actionFlowConditionSummary(node, conditionState);
+}
+
+function addActionFlowConditionRule() {
+  const node = selectedActionFlowConditionNode();
+  if (!node) return;
+  const conditionState = actionFlowConditionState(node);
+  conditionState.rules.push({ id: `rule_${Date.now().toString(36)}_${conditionState.rules.length + 1}`, left: '', operator: 'equals', value: '' });
+  saveActionFlowConditionState(node, conditionState);
+  renderActionFlowInspector();
+}
+
+function removeActionFlowConditionRule(ruleId) {
+  const node = selectedActionFlowConditionNode();
+  if (!node) return;
+  const conditionState = actionFlowConditionState(node);
+  conditionState.rules = conditionState.rules.filter((rule) => rule.id !== ruleId);
+  saveActionFlowConditionState(node, conditionState);
+  renderActionFlowInspector();
+}
+
+function setActionFlowConditionCombinator(combinator) {
+  const node = selectedActionFlowConditionNode();
+  if (!node || !['and', 'or'].includes(combinator)) return;
+  const conditionState = actionFlowConditionState(node);
+  conditionState.combinator = combinator;
+  saveActionFlowConditionState(node, conditionState);
+  renderActionFlowInspector();
+}
+
+function updateActionFlowConditionRule(ruleId, field, value, rerender = false) {
+  const node = selectedActionFlowConditionNode();
+  if (!node) return;
+  const conditionState = actionFlowConditionState(node);
+  const rule = conditionState.rules.find((item) => item.id === ruleId);
+  if (!rule || !['left', 'operator', 'value'].includes(field)) return;
+  rule[field] = value;
+  if (field === 'left') {
+    const sourceType = actionFlowConditionSources(node).find((source) => source.value === value)?.type || 'text';
+    const operators = actionFlowConditionOperators(sourceType);
+    if (!operators.includes(rule.operator)) rule.operator = operators[0];
+    if (sourceType === 'boolean' && !['true', 'false'].includes(String(rule.value))) rule.value = 'true';
+  }
+  saveActionFlowConditionState(node, conditionState);
+  if (rerender) renderActionFlowInspector();
+  else refreshActionFlowConditionSummary(node, conditionState);
+}
+
+function renderActionFlowConditionBuilder(node) {
+  const conditionState = actionFlowConditionState(node);
+  const sources = actionFlowConditionSources(node);
+  const sourceGroups = [...new Set(sources.map((source) => source.group))];
+  const sourceOptions = (selectedValue) => sourceGroups.map((group) => `<optgroup label="${escapeHtml(group)}">${sources
+    .filter((source) => source.group === group)
+    .map((source) => `<option value="${escapeHtml(source.value)}" ${source.value === selectedValue ? 'selected' : ''}>${escapeHtml(source.label)}</option>`)
+    .join('')}</optgroup>`).join('');
+  const rows = conditionState.rules.map((rule, index) => {
+    const sourceType = sources.find((source) => source.value === rule.left)?.type || 'text';
+    const operators = actionFlowConditionOperators(sourceType);
+    const operator = operators.includes(rule.operator) ? rule.operator : operators[0];
+    const needsValue = !['empty', 'not_empty'].includes(operator);
+    const valueControl = sourceType === 'boolean'
+      ? `<select data-condition-rule-field="value"><option value="true" ${String(rule.value) === 'true' ? 'selected' : ''}>True</option><option value="false" ${String(rule.value) === 'false' ? 'selected' : ''}>False</option></select>`
+      : `<input data-condition-rule-field="value" type="${['int', 'integer', 'decimal', 'decimals', 'number'].includes(sourceType) ? 'number' : (['date', 'datetime'].includes(sourceType) ? 'date' : 'text')}" value="${escapeHtml(rule.value ?? '')}" placeholder="Comparison value">`;
+    return `<div class="action-flow-condition-rule" data-condition-rule-id="${escapeHtml(rule.id)}">
+      <div class="action-flow-condition-rule-heading"><strong>${index ? conditionState.combinator.toUpperCase() : 'IF'}</strong><button type="button" data-remove-condition-rule="${escapeHtml(rule.id)}" aria-label="Remove condition">×</button></div>
+      <select data-condition-rule-field="left" aria-label="Condition field"><option value="">Choose a field</option>${sourceOptions(rule.left)}</select>
+      <select data-condition-rule-field="operator" aria-label="Condition operator">${operators.map((item) => `<option value="${item}" ${item === operator ? 'selected' : ''}>${actionFlowConditionOperatorLabels[item]}</option>`).join('')}</select>
+      <div class="action-flow-condition-value" ${needsValue ? '' : 'hidden'}>${valueControl}</div>
+    </div>`;
+  }).join('');
+  return `<div class="action-flow-inspector-section action-flow-condition-builder">
+    <span>Condition rules</span>
+    <div class="action-flow-condition-match"><small>Match</small><div role="group" aria-label="Condition matching"><button type="button" data-condition-combinator="and" class="${conditionState.combinator === 'and' ? 'is-active' : ''}">All</button><button type="button" data-condition-combinator="or" class="${conditionState.combinator === 'or' ? 'is-active' : ''}">Any</button></div></div>
+    <div class="action-flow-condition-rules">${rows || '<div class="action-flow-condition-empty">No rules yet. Add one to configure this branch.</div>'}</div>
+    <button type="button" class="secondary action-flow-add-condition" id="addActionFlowConditionRule">+ Add condition</button>
+    <div class="action-flow-condition-summary"><small>Yes when</small><p id="actionFlowConditionSummary">${escapeHtml(actionFlowConditionSummary(node, conditionState))}</p></div>
+  </div>`;
+}
+
+function actionFlowUserOptions(selectedValue = '') {
+  const selected = String(selectedValue || '');
+  return [
+    `<option value="trigger.userId" ${selected === 'trigger.userId' ? 'selected' : ''}>User who triggered the flow</option>`,
+    ...state.users.map((user) => {
+      const value = String(user.id);
+      const label = user.name || user.fullName || user.email || `User ${user.id}`;
+      return `<option value="${escapeHtml(value)}" ${selected === value ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+    })
+  ].join('');
+}
+
+function renderActionFlowTriggerConfig(node) {
+  if (node.category !== 'trigger') return '';
+  const flow = activeActionFlow();
+  const triggerType = flow?.triggerType || node.type || 'record_created';
+  const triggerModule = flow?.triggerModule || node.config?.moduleKey || 'customers';
+  const triggerOptions = [
+    ['record_created', 'When a record is created'],
+    ['record_updated', 'When a record is updated'],
+    ['status_changed', 'When status changes'],
+    ['record_deleted', 'When a record is deleted'],
+    ['manual', 'Manually'],
+    ['scheduled', 'On a schedule']
+  ];
+  const moduleOptions = configModules.map((module) => `<option value="${escapeHtml(module.key)}" ${module.key === triggerModule ? 'selected' : ''}>${escapeHtml(module.name)}</option>`).join('');
+  return `<div class="action-flow-inspector-section action-flow-operation-config">
+    <span>Start settings</span>
+    <label>Start when<select data-trigger-config-field="triggerType">${triggerOptions.map(([value, label]) => `<option value="${value}" ${value === triggerType ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+    <label>Source module<select data-trigger-config-field="triggerModule">${moduleOptions}</select></label>
+    ${triggerType === 'scheduled' ? `<div class="action-flow-schedule-grid">
+      <label>Run every<input data-trigger-config-field="scheduleEvery" type="number" min="1" max="1000" value="${escapeHtml(node.config?.scheduleEvery || 1)}"></label>
+      <label>Interval<select data-trigger-config-field="scheduleUnit"><option value="minutes" ${node.config?.scheduleUnit === 'minutes' ? 'selected' : ''}>Minutes</option><option value="hours" ${!node.config?.scheduleUnit || node.config?.scheduleUnit === 'hours' ? 'selected' : ''}>Hours</option><option value="days" ${node.config?.scheduleUnit === 'days' ? 'selected' : ''}>Days</option></select></label>
+      <label class="action-flow-schedule-start">Start at <span class="muted">(optional)</span><input data-trigger-config-field="scheduleStartAt" type="datetime-local" value="${escapeHtml(node.config?.scheduleStartAt || '')}"></label>
+    </div>` : ''}
+    <p class="action-flow-config-help">This controls which event starts the entire flow.</p>
+  </div>`;
+}
+
+function renderActionFlowOperationalConfig(node) {
+  const config = node.config || {};
+  if (node.type === 'create_task') {
+    return `<div class="action-flow-inspector-section action-flow-operation-config">
+      <span>Task details</span>
+      <label>Title<input data-action-config-field="title" value="${escapeHtml(config.title || '')}" placeholder="Follow up with {{ current record.company }}"></label>
+      <label>Description<textarea data-action-config-field="description" rows="3" placeholder="What needs to be done">${escapeHtml(config.description || '')}</textarea></label>
+      <label>Assignee<select data-action-config-field="assignee">${actionFlowUserOptions(config.assignee)}</select></label>
+      <label>Due date<input data-action-config-field="dueDate" value="${escapeHtml(config.dueDate || '')}" placeholder="2026-07-30 or an expression"></label>
+      <label>Priority<select data-action-config-field="priority"><option value="low" ${config.priority === 'low' ? 'selected' : ''}>Low</option><option value="normal" ${!config.priority || config.priority === 'normal' ? 'selected' : ''}>Normal</option><option value="high" ${config.priority === 'high' ? 'selected' : ''}>High</option><option value="urgent" ${config.priority === 'urgent' ? 'selected' : ''}>Urgent</option></select></label>
+      <p class="action-flow-config-help">Text fields accept current-record and previous-module expressions.</p>
+    </div>`;
+  }
+  if (node.type === 'send_notification') {
+    return `<div class="action-flow-inspector-section action-flow-operation-config">
+      <span>Notification details</span>
+      <label>Recipient<select data-action-config-field="recipient">${actionFlowUserOptions(config.recipient)}</select></label>
+      <label>Title<input data-action-config-field="title" value="${escapeHtml(config.title || '')}" placeholder="Record needs attention"></label>
+      <label>Message<textarea data-action-config-field="message" rows="4" placeholder="Write the notification message">${escapeHtml(config.message || '')}</textarea></label>
+      <p class="action-flow-config-help">This creates an in-app notification for the selected user.</p>
+    </div>`;
+  }
+  if (node.type === 'transform_value') {
+    const sourceMode = config.sourceMode === 'fixed' ? 'fixed' : 'expression';
+    const sourceSuggestions = actionFlowMappingSources(node).map((source) => `<option value="${escapeHtml(source.value)}">${escapeHtml(source.label)}</option>`).join('');
+    const operations = [
+      ['trim', 'Trim spaces'], ['uppercase', 'Uppercase'], ['lowercase', 'Lowercase'],
+      ['number', 'Convert to number'], ['boolean', 'Convert to Yes/No'], ['json_parse', 'Parse JSON']
+    ];
+    return `<div class="action-flow-inspector-section action-flow-operation-config">
+      <span>Transformation</span>
+      <label>Source value</label>
+      <div class="action-flow-mapping-mode" role="group" aria-label="Source value mode"><button type="button" data-set-transform-source-mode="fixed" class="${sourceMode === 'fixed' ? 'is-active' : ''}">Fixed</button><button type="button" data-set-transform-source-mode="expression" class="${sourceMode === 'expression' ? 'is-active' : ''}">Expression</button></div>
+      ${sourceMode === 'expression'
+        ? `<input data-action-config-field="sourceValue" list="actionFlowTransformSources_${escapeHtml(node.id)}" value="${escapeHtml(config.sourceValue || '')}" placeholder="Choose or type an output path"><datalist id="actionFlowTransformSources_${escapeHtml(node.id)}">${sourceSuggestions}</datalist>`
+        : `<input data-action-config-field="sourceValue" value="${escapeHtml(config.sourceValue || '')}" placeholder="Enter a fixed value">`}
+      <label>Operation<select data-action-config-field="operation">${operations.map(([value, label]) => `<option value="${value}" ${config.operation === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+      <label>Save result as<input data-action-config-field="outputName" value="${escapeHtml(config.outputName || '')}" placeholder="cleanCompany"></label>
+      <div class="action-flow-transform-output"><small>Use in later modules</small><code>outputs.${escapeHtml(node.id)}.values.${escapeHtml(config.outputName || 'output')}</code></div>
+    </div>`;
+  }
+  if (node.type === 'loop') {
+    const sourceSuggestions = actionFlowMappingSources(node).map((source) => `<option value="${escapeHtml(source.value)}">${escapeHtml(source.label)}</option>`).join('');
+    return `<div class="action-flow-inspector-section action-flow-operation-config">
+      <span>Loop settings</span>
+      <label>Array source<input data-action-config-field="sourceValue" list="actionFlowLoopSources_${escapeHtml(node.id)}" value="${escapeHtml(config.sourceValue || '')}" placeholder="outputs.api_1.values.items"></label>
+      <datalist id="actionFlowLoopSources_${escapeHtml(node.id)}">${sourceSuggestions}</datalist>
+      <label>Maximum items<input data-action-config-field="maxIterations" type="number" min="1" max="1000" value="${escapeHtml(config.maxIterations || 100)}"></label>
+      <div class="action-flow-transform-output"><small>Available inside Body</small><code>loop.item · loop.index · loop.number</code></div>
+      <p class="action-flow-config-help">Body runs once per item. Done continues after every item finishes.</p>
+    </div>`;
+  }
+  if (node.type === 'parallel_branch') {
+    const definition = actionFlowDefinition();
+    const branches = definition.edges
+      .filter((edge) => edge.from === node.id && String(edge.outcome || '').toLowerCase().startsWith('branch'))
+      .sort((left, right) => String(left.outcome).localeCompare(String(right.outcome), undefined, { numeric: true }));
+    const branchCount = Math.max(2, Number(config.branchCount || 0), branches.length);
+    const branchRows = Array.from({ length: branchCount }, (_unused, index) => {
+      const branchNumber = index + 1;
+      const edge = branches.find((item) => String(item.outcome || '').toLowerCase() === `branch_${branchNumber}`);
+      const target = edge ? definition.nodes.find((item) => item.id === edge.to) : null;
+      return `<div class="action-flow-node-meta"><span>Branch ${branchNumber}</span><strong>${escapeHtml(target?.label || 'Empty')}</strong></div>`;
+    }).join('');
+    return `<div class="action-flow-inspector-section action-flow-operation-config">
+      <span>Parallel paths</span>
+      <div class="action-flow-parallel-branches">${branchRows || '<div class="action-flow-condition-empty">No branches added yet.</div>'}</div>
+      <button type="button" class="secondary action-flow-add-condition" id="addActionFlowParallelBranch">+ Add branch</button>
+      <p class="action-flow-config-help">Each Branch path starts together. This module waits until every path finishes.</p>
+    </div>`;
+  }
+  if (node.type === 'run_flow') {
+    const flowOptions = state.actionFlows
+      .filter((flow) => flow.flowKey !== activeActionFlow()?.flowKey && flow.publishedVersion)
+      .map((flow) => `<option value="${escapeHtml(flow.flowKey)}" ${config.flowKey === flow.flowKey ? 'selected' : ''}>${escapeHtml(flow.name)} · Published v${flow.publishedVersion}</option>`).join('');
+    return `<div class="action-flow-inspector-section action-flow-operation-config">
+      <span>Flow orchestration</span>
+      <label>Published flow<select data-action-config-field="flowKey"><option value="">Choose a flow</option>${flowOptions}</select></label>
+      <p class="action-flow-config-help">Mapped fields become the child flow's trigger data. Execution waits for that flow to finish.</p>
+    </div>`;
+  }
+  return '';
+}
+
+function renderActionFlowReliabilityConfig(node) {
+  if (node.category === 'trigger' || node.category === 'end') return '';
+  const config = node.config || {};
+  const attempts = Number(config.retryAttempts || 1);
+  const onError = config.onError || 'stop';
+  return `<div class="action-flow-inspector-section action-flow-operation-config">
+    <span>Reliability</span>
+    <div class="action-flow-retry-grid">
+      <label>Attempts<select data-action-config-field="retryAttempts">${[1, 2, 3, 4, 5].map((value) => `<option value="${value}" ${value === attempts ? 'selected' : ''}>${value}</option>`).join('')}</select></label>
+      <label>Delay (ms)<input data-action-config-field="retryDelayMs" type="number" min="0" max="60000" step="100" value="${escapeHtml(config.retryDelayMs || 0)}"></label>
+    </div>
+    <label>If all attempts fail<select data-action-config-field="onError"><option value="stop" ${onError === 'stop' ? 'selected' : ''}>Stop the flow</option><option value="continue" ${onError === 'continue' ? 'selected' : ''}>Continue to next module</option><option value="error_branch" ${onError === 'error_branch' ? 'selected' : ''}>Follow an Error branch</option></select></label>
+    ${onError === 'error_branch' ? '<p class="action-flow-error-branch-help">Connect the red Error path on the canvas to the recovery action.</p>' : ''}
+  </div>`;
+}
+
+function updateActionFlowOperationalConfig(field, value) {
+  const node = actionFlowDefinition().nodes.find((item) => item.id === state.selectedActionFlowNodeId);
+  if (!node || !field) return;
+  node.config = { ...(node.config || {}), [field]: value };
+  state.actionFlowDirty = true;
+  $('#actionFlowSaveState').textContent = 'Unsaved canvas changes';
+  $('#saveActionFlowButton').disabled = false;
+}
+
+function updateActionFlowTriggerConfig(field, value) {
+  const flow = activeActionFlow();
+  const node = actionFlowDefinition(flow).nodes.find((item) => item.id === state.selectedActionFlowNodeId && item.category === 'trigger');
+  if (!flow || !node || !['triggerType', 'triggerModule', 'scheduleEvery', 'scheduleUnit', 'scheduleStartAt'].includes(field)) return;
+  if (field === 'triggerType') {
+    flow.triggerType = value;
+    node.type = value;
+    if (value === 'scheduled') node.config = { scheduleEvery: 1, scheduleUnit: 'hours', ...(node.config || {}) };
+  } else if (field === 'triggerModule') {
+    flow.triggerModule = value;
+    node.config = { ...(node.config || {}), moduleKey: value };
+  } else {
+    node.config = { ...(node.config || {}), [field]: value };
+  }
+  state.actionFlowDirty = true;
+  $('#actionFlowSaveState').textContent = 'Unsaved canvas changes';
+  $('#saveActionFlowButton').disabled = false;
+  renderActionFlowCanvas();
+  renderActionFlowInspector();
+}
+
+function renderActionFlowInspector() {
+  const inspector = $('#actionFlowInspector');
+  if (!inspector) return;
+  const definition = actionFlowDefinition();
+  const node = definition.nodes.find((item) => item.id === state.selectedActionFlowNodeId);
+  if (!node) {
+    inspector.innerHTML = '<div class="action-flow-inspector-empty"><span>◎</span><strong>Select a module</strong><p>Choose a module on the canvas to review its role in this flow.</p></div>';
+    return;
+  }
+  inspector.innerHTML = `
+    <div class="action-flow-inspector-heading">
+      <i class="action-flow-palette-icon" aria-hidden="true">${escapeHtml(actionFlowNodeGlyph(node))}</i>
+      <div><strong>${escapeHtml(node.label || titleCaseMessage(node.type))}</strong><small>${escapeHtml(actionFlowNodeKind(node))}</small></div>
+    </div>
+    <div class="action-flow-inspector-section">
+      <span>Module details</span>
+      <label>Label<input id="actionFlowNodeLabel" value="${escapeHtml(node.label || '')}" maxlength="80"></label>
+      <div class="action-flow-node-meta"><span>Type</span><strong>${escapeHtml(titleCaseMessage(node.type || 'action'))}</strong></div>
+      <div class="action-flow-node-meta"><span>Node ID</span><strong>${escapeHtml(node.id)}</strong></div>
+    </div>
+    ${node.type === 'condition' ? renderActionFlowConditionBuilder(node) : ''}
+    ${renderActionFlowTriggerConfig(node)}
+    ${actionFlowMappingNodeTypes.has(node.type) ? renderActionFlowMappingBuilder(node) : ''}
+    ${renderActionFlowOperationalConfig(node)}
+    ${renderActionFlowReliabilityConfig(node)}
+    ${renderActionFlowExecutionResult(node)}
+    <div class="action-flow-inspector-section">
+      <span>Connection</span>
+      <div class="action-flow-node-meta"><span>Incoming</span><strong>${definition.edges.filter((edge) => edge.to === node.id).length}</strong></div>
+      <div class="action-flow-node-meta"><span>Outgoing</span><strong>${definition.edges.filter((edge) => edge.from === node.id).length}</strong></div>
+    </div>
+    ${node.category === 'trigger' ? '' : '<button type="button" class="secondary action-flow-remove-node" id="removeActionFlowNode">Remove module</button>'}
+  `;
+}
+
+function actionFlowNodeRunState(node) {
+  const run = state.actionFlowRun;
+  if (!run) return null;
+  if (node.category === 'trigger') return { status: run.status === 'running' ? 'running' : 'success', durationMs: 0 };
+  const step = (run.steps || []).find((item) => item.nodeId === node.id);
+  if (step) return step;
+  if (run.status === 'running') {
+    const start = actionFlowDefinition().nodes.find((item) => item.category === 'trigger');
+    const firstNodeId = actionFlowDefinition().edges.find((edge) => edge.from === start?.id)?.to;
+    return { status: node.id === firstNodeId ? 'running' : 'queued' };
+  }
+  return { status: 'not_run' };
+}
+
+function actionFlowRunStatusIcon(status) {
+  return { success: '✓', failed: '!', skipped: '–', running: '•', queued: '…', not_run: '–' }[status] || '';
+}
+
+function renderActionFlowExecutionResult(node) {
+  const result = actionFlowNodeRunState(node);
+  if (!result || state.actionFlowRun?.status === 'running') return '';
+  const output = { ...result };
+  delete output.startedAt;
+  delete output.finishedAt;
+  return `<div class="action-flow-inspector-section action-flow-execution-result is-${escapeHtml(result.status)}">
+    <span>Last test run</span>
+    <div class="action-flow-execution-summary"><i>${actionFlowRunStatusIcon(result.status)}</i><div><strong>${escapeHtml(titleCaseMessage(result.status || 'not_run'))}</strong><small>${Number.isFinite(Number(result.durationMs)) ? `${Number(result.durationMs)} ms` : 'This path did not run'}</small></div></div>
+    ${result.error ? `<p class="action-flow-execution-error">${escapeHtml(result.error)}</p>` : ''}
+    ${node.category === 'trigger' || result.status === 'not_run' ? '' : `<details class="action-flow-execution-output"><summary>View output</summary><pre>${escapeHtml(JSON.stringify(output, null, 2))}</pre></details>`}
+  </div>`;
+}
+
+function renderActionFlowCanvas() {
+  const canvas = $('#actionFlowCanvas');
+  if (!canvas) return;
+  const flow = activeActionFlow();
+  const definition = actionFlowDefinition(flow);
+  if (!flow) {
+    canvas.innerHTML = '<div class="action-flow-empty-canvas"><span>+</span><strong>Build your first automation</strong><p>Create a flow, then add modules from the library. Every connection uses the same dotted path language.</p></div>';
+    return;
+  }
+  const bounds = actionFlowCanvasBounds(definition);
+  const positions = new Map(definition.nodes.map((node, index) => [node.id, actionFlowNodePosition(node, index)]));
+  const edgeMarkup = definition.edges.map((edge) => {
+    const from = positions.get(edge.from);
+    const to = positions.get(edge.to);
+    if (!from || !to) return '';
+    const outcome = String(edge.outcome || edge.label || '').toLowerCase();
+    const targetRun = actionFlowNodeRunState(definition.nodes.find((node) => node.id === edge.to));
+    const runClass = targetRun && !['queued', 'not_run'].includes(targetRun.status) ? `is-run-${targetRun.status}` : '';
+    return `<path class="action-flow-edge ${['yes', 'no', 'error'].includes(outcome) ? `is-${outcome}` : ''} ${runClass}" d="${actionFlowEdgePath(from, to)}"></path>${actionFlowEdgeLabel(edge, from, to)}`;
+  }).join('');
+  const nodeMarkup = definition.nodes.map((node, index) => {
+    const position = positions.get(node.id);
+    const runState = actionFlowNodeRunState(node);
+    const classes = [node.category === 'trigger' ? 'is-trigger' : '', node.category === 'logic' ? 'is-logic' : '', node.category === 'end' ? 'is-end' : '', node.id === state.selectedActionFlowNodeId ? 'is-selected' : '', runState ? `run-${runState.status}` : ''].filter(Boolean).join(' ');
+    return `<div class="action-flow-node-wrap ${classes}" data-flow-node-wrap="${escapeHtml(node.id)}" style="left:${position.x}px;top:${position.y}px">
+      <span class="action-flow-port input" aria-hidden="true"></span>
+      <button type="button" class="action-flow-node" data-select-flow-node="${escapeHtml(node.id)}" aria-label="Configure ${escapeHtml(node.label || node.type)}"><span class="action-flow-node-glyph">${escapeHtml(actionFlowNodeGlyph(node))}</span></button>
+      <span class="action-flow-port output" aria-hidden="true"></span>
+      ${runState ? `<span class="action-flow-node-run-badge" aria-label="${escapeHtml(titleCaseMessage(runState.status))}">${actionFlowRunStatusIcon(runState.status)}</span>` : ''}
+      <strong class="action-flow-node-name">${escapeHtml(node.label || titleCaseMessage(node.type))}</strong>
+      <small class="action-flow-node-kind">${escapeHtml(actionFlowNodeKind(node))}</small>
+    </div>`;
+  }).join('');
+  const missingBranchMarkup = definition.nodes.filter((node) => node.type === 'condition').map((node) => {
+    const position = positions.get(node.id);
+    const connectedOutcomes = new Set(definition.edges
+      .filter((edge) => edge.from === node.id)
+      .map((edge) => String(edge.outcome || edge.label || '').toLowerCase()));
+    return ['yes', 'no'].filter((outcome) => !connectedOutcomes.has(outcome)).map((outcome) => {
+      const isYes = outcome === 'yes';
+      const offsetY = isYes ? -55 : 55;
+      const labelY = position.y + (isYes ? -43 : 43);
+      return {
+        line: `<path class="action-flow-edge is-${outcome}" d="M ${position.x + 40} ${position.y} C ${position.x + 72} ${position.y}, ${position.x + 66} ${position.y + offsetY}, ${position.x + 106} ${position.y + offsetY}"></path><g class="action-flow-edge-label is-${outcome}" transform="translate(${position.x + 72} ${labelY})"><rect x="-19" y="-10" width="38" height="20" rx="10"></rect><text y="4">${isYes ? 'Yes' : 'No'}</text></g>`,
+        button: `<button type="button" class="action-flow-add-step" data-flow-add-branch="${outcome}" data-flow-branch-node="${escapeHtml(node.id)}" style="left:${position.x + 118}px;top:${position.y + offsetY}px" aria-label="Add ${isYes ? 'Yes' : 'No'} step">+</button>`
+      };
+    });
+  }).flat();
+  const missingLoopBranchMarkup = definition.nodes.filter((node) => node.type === 'loop').map((node) => {
+    const position = positions.get(node.id);
+    const connected = new Set(definition.edges.filter((edge) => edge.from === node.id).map((edge) => String(edge.outcome || '').toLowerCase()));
+    return ['body', 'done'].filter((outcome) => !connected.has(outcome)).map((outcome) => {
+      const offsetY = outcome === 'body' ? -55 : 55;
+      return {
+        line: `<path class="action-flow-edge is-${outcome}" d="M ${position.x + 40} ${position.y} C ${position.x + 72} ${position.y}, ${position.x + 66} ${position.y + offsetY}, ${position.x + 106} ${position.y + offsetY}"></path><g class="action-flow-edge-label is-${outcome}" transform="translate(${position.x + 72} ${position.y + offsetY - 13})"><rect x="-22" y="-10" width="44" height="20" rx="10"></rect><text y="4">${titleCaseMessage(outcome)}</text></g>`,
+        button: `<button type="button" class="action-flow-add-step" data-flow-add-branch="${outcome}" data-flow-branch-node="${escapeHtml(node.id)}" style="left:${position.x + 118}px;top:${position.y + offsetY}px" aria-label="Add ${titleCaseMessage(outcome)} step">+</button>`
+      };
+    });
+  }).flat();
+  const missingParallelBranchMarkup = definition.nodes.filter((node) => node.type === 'parallel_branch').map((node) => {
+    const position = positions.get(node.id);
+    const connectedOutcomes = new Set(definition.edges
+      .filter((edge) => edge.from === node.id && String(edge.outcome || '').toLowerCase().startsWith('branch'))
+      .map((edge) => String(edge.outcome).toLowerCase()));
+    const branchCount = Math.max(2, Number(node.config?.branchCount || 0), connectedOutcomes.size);
+    return Array.from({ length: branchCount }, (_unused, index) => index + 1).filter((branchNumber) => (
+      !connectedOutcomes.has(`branch_${branchNumber}`)
+    )).map((branchNumber) => {
+      const outcome = `branch_${branchNumber}`;
+      const offsetY = (branchNumber - 1.5) * 110;
+      return {
+        line: `<path class="action-flow-edge" d="M ${position.x + 40} ${position.y} C ${position.x + 72} ${position.y}, ${position.x + 66} ${position.y + offsetY}, ${position.x + 106} ${position.y + offsetY}"></path><g class="action-flow-edge-label" transform="translate(${position.x + 72} ${position.y + offsetY - 13})"><rect x="-30" y="-10" width="60" height="20" rx="10"></rect><text y="4">Branch ${branchNumber}</text></g>`,
+        button: `<button type="button" class="action-flow-add-step" data-flow-add-branch="${outcome}" data-flow-branch-node="${escapeHtml(node.id)}" style="left:${position.x + 118}px;top:${position.y + offsetY}px" aria-label="Add Branch ${branchNumber} step">+</button>`
+      };
+    });
+  }).flat();
+  const missingErrorBranchMarkup = definition.nodes.filter((node) => (
+    node.category !== 'trigger'
+    && node.category !== 'end'
+    && node.config?.onError === 'error_branch'
+    && !definition.edges.some((edge) => edge.from === node.id && String(edge.outcome || edge.label || '').toLowerCase() === 'error')
+  )).map((node) => {
+    const position = positions.get(node.id);
+    const offsetY = node.type === 'condition' ? 115 : 78;
+    return {
+      line: `<path class="action-flow-edge is-error" d="M ${position.x + 40} ${position.y} C ${position.x + 72} ${position.y}, ${position.x + 66} ${position.y + offsetY}, ${position.x + 106} ${position.y + offsetY}"></path><g class="action-flow-edge-label is-error" transform="translate(${position.x + 73} ${position.y + offsetY - 13})"><rect x="-23" y="-10" width="46" height="20" rx="10"></rect><text y="4">Error</text></g>`,
+      button: `<button type="button" class="action-flow-add-step is-error" data-flow-add-branch="error" data-flow-branch-node="${escapeHtml(node.id)}" style="left:${position.x + 118}px;top:${position.y + offsetY}px" aria-label="Add Error step">+</button>`
+    };
+  });
+  const allMissingBranches = [...missingBranchMarkup, ...missingLoopBranchMarkup, ...missingParallelBranchMarkup, ...missingErrorBranchMarkup];
+  const branchLines = allMissingBranches.map((branch) => branch.line).join('');
+  const branchButtons = allMissingBranches.map((branch) => branch.button).join('');
+  canvas.style.width = `${bounds.width}px`;
+  canvas.style.height = `${bounds.height}px`;
+  canvas.innerHTML = `<svg class="action-flow-edges" width="${bounds.width}" height="${bounds.height}" viewBox="0 0 ${bounds.width} ${bounds.height}" preserveAspectRatio="xMinYMin meet" style="width:${bounds.width}px;height:${bounds.height}px" aria-hidden="true">${edgeMarkup}${branchLines}</svg>${nodeMarkup}${branchButtons}`;
+  canvas.style.transform = `scale(${state.actionFlowZoom})`;
+}
+
+function renderActionFlowStudio() {
+  const flow = activeActionFlow();
+  renderActionFlowList();
+  renderActionFlowPalette();
+  renderActionFlowCanvas();
+  renderActionFlowInspector();
+  $('#actionFlowTitle').textContent = flow?.name || 'Action Flow';
+  $('#actionFlowSaveState').textContent = flow
+    ? (state.actionFlowDirty
+      ? 'Unsaved draft changes'
+      : `Draft version ${flow.currentVersion || 1} saved · ${flow.publishedVersion ? `Published version ${flow.publishedVersion}` : 'Not published'}`)
+    : 'Select a flow to begin';
+  $('#actionFlowStatus').textContent = flow?.publishedVersion ? `Published v${flow.publishedVersion}` : titleCaseMessage(flow?.status || 'draft');
+  $('#actionFlowStatus').className = `action-flow-status status-${flow?.status || 'draft'}`;
+  $('#saveActionFlowButton').disabled = !flow || !state.actionFlowDirty;
+  $('#checkActionFlowButton').disabled = !flow;
+  $('#actionFlowVersionsButton').disabled = !flow;
+  $('#publishActionFlowButton').disabled = !flow;
+  $('#publishActionFlowButton').textContent = flow?.publishedVersion ? 'Publish new version' : 'Publish';
+  $('#runActionFlowButton').disabled = !flow || state.actionFlowRun?.status === 'running';
+  $('#clearActionFlowRunButton').hidden = !state.actionFlowRun;
+  $('#actionFlowZoomLabel').textContent = `${Math.round(state.actionFlowZoom * 100)}%`;
+}
+
+async function loadActionFlows() {
+  const result = await api('/api/action-flows');
+  state.actionFlows = result.flows || [];
+  if (!state.actionFlows.some((flow) => flow.flowKey === state.activeActionFlowKey)) {
+    state.activeActionFlowKey = state.actionFlows[0]?.flowKey || '';
+  }
+  state.selectedActionFlowNodeId = '';
+  state.actionFlowDirty = false;
+  state.actionFlowMode = 'management';
+  $('#actionFlowManagement').hidden = false;
+  $('#actionFlowStudio').hidden = true;
+  renderActionFlowManagement();
+}
+
+function closeActionFlowCreateModal() {
+  const modal = $('#actionFlowCreateModal');
+  if (!modal || modal.hidden) return;
+  modal.hidden = true;
+  $('#actionFlowCreateForm').reset();
+  if ($$('.modal-backdrop').every((item) => item.hidden)) document.body.classList.remove('modal-open');
+}
+
+function createActionFlow() {
+  const modal = $('#actionFlowCreateModal');
+  const form = $('#actionFlowCreateForm');
+  form.reset();
+  modal.hidden = false;
+  document.body.classList.add('modal-open');
+  requestAnimationFrame(() => form.elements.name.focus());
+}
+
+async function saveNewActionFlow(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const name = form.elements.name.value.trim();
+  if (!name) return form.elements.name.focus();
+  const submitButton = $('#confirmCreateActionFlow');
+  submitButton.disabled = true;
+  try {
+    const result = await api('/api/action-flows', {
+      method: 'POST',
+      body: JSON.stringify({ name, status: 'draft', triggerType: 'record_created', triggerModule: 'customers' })
+    });
+    closeActionFlowCreateModal();
+    state.actionFlows.unshift(result.flow);
+    state.activeActionFlowKey = result.flow.flowKey;
+    state.selectedActionFlowNodeId = result.flow.definition?.nodes?.[0]?.id || '';
+    state.actionFlowDirty = false;
+    openActionFlowCanvas(result.flow.flowKey);
+  } finally {
+    submitButton.disabled = false;
+  }
+}
+
+function addActionFlowNode(item, sourceNodeId = '', outcome = '') {
+  const flow = activeActionFlow();
+  if (!flow) return;
+  const definition = actionFlowDefinition(flow);
+  const source = definition.nodes.find((node) => node.id === sourceNodeId)
+    || definition.nodes.find((node) => node.id === state.selectedActionFlowNodeId)
+    || definition.nodes.at(-1);
+  if (source?.category === 'end') {
+    toast('End is the last module in a path. Select another module to continue.', 'error');
+    return;
+  }
+  const sourceIndex = Math.max(0, definition.nodes.indexOf(source));
+  const sourcePosition = source ? actionFlowNodePosition(source, sourceIndex) : { x: 190, y: 380 };
+  let edgeOutcome = outcome;
+  if (!edgeOutcome && source?.type === 'condition') {
+    edgeOutcome = definition.edges.some((edge) => edge.from === source.id && String(edge.outcome).toLowerCase() === 'yes') ? 'no' : 'yes';
+  }
+  if (!edgeOutcome && source?.type === 'loop') {
+    edgeOutcome = definition.edges.some((edge) => edge.from === source.id && String(edge.outcome).toLowerCase() === 'body') ? 'done' : 'body';
+  }
+  if (!edgeOutcome && source?.type === 'parallel_branch') {
+    const branchCount = definition.edges.filter((edge) => edge.from === source.id && String(edge.outcome || '').toLowerCase().startsWith('branch')).length;
+    edgeOutcome = `branch_${branchCount + 1}`;
+  }
+  const id = `${item.type}_${Date.now().toString(36)}`;
+  const branchNumber = edgeOutcome?.startsWith('branch_') ? Number(edgeOutcome.split('_')[1]) : 0;
+  const branchOffset = edgeOutcome === 'yes' || edgeOutcome === 'body' ? -125 : edgeOutcome === 'no' || edgeOutcome === 'done' ? 125 : edgeOutcome === 'error' ? 185 : branchNumber ? (branchNumber - 1.5) * 150 : 0;
+  const node = { id, category: item.category, type: item.type, label: item.label, x: sourcePosition.x + 220, y: Math.max(110, sourcePosition.y + branchOffset), config: {} };
+  definition.nodes.push(node);
+  if (source) definition.edges.push({ from: source.id, to: id, ...(edgeOutcome ? { outcome: edgeOutcome } : {}) });
+  state.selectedActionFlowNodeId = id;
+  state.actionFlowDirty = true;
+  renderActionFlowStudio();
+}
+
+function addActionFlowParallelBranch() {
+  const definition = actionFlowDefinition();
+  const parallel = definition.nodes.find((node) => node.id === state.selectedActionFlowNodeId && node.type === 'parallel_branch');
+  if (!parallel) return;
+  const connectedBranchCount = definition.edges.filter((edge) => edge.from === parallel.id && String(edge.outcome || '').toLowerCase().startsWith('branch')).length;
+  parallel.config = {
+    ...(parallel.config || {}),
+    branchCount: Math.max(2, Number(parallel.config?.branchCount || 0), connectedBranchCount) + 1
+  };
+  state.actionFlowDirty = true;
+  renderActionFlowStudio();
+}
+
+function removeSelectedActionFlowNode() {
+  const definition = actionFlowDefinition();
+  const id = state.selectedActionFlowNodeId;
+  const node = definition.nodes.find((item) => item.id === id);
+  if (!node || node.category === 'trigger') return;
+
+  const nodeIndex = definition.nodes.indexOf(node);
+  const removedPosition = actionFlowNodePosition(node, nodeIndex);
+  const incomingEdges = definition.edges.filter((edge) => edge.to === id);
+  const outgoingEdges = definition.edges.filter((edge) => edge.from === id);
+  const successorIds = [...new Set(outgoingEdges.map((edge) => edge.to))]
+    .filter((successorId) => definition.nodes.some((item) => item.id === successorId));
+
+  // Pull each continuing branch, including all of its downstream nodes, into
+  // the space left by the removed module so the canvas does not retain a gap.
+  const movedNodeIds = new Set();
+  successorIds.forEach((successorId, successorIndex) => {
+    const successor = definition.nodes.find((item) => item.id === successorId);
+    if (!successor) return;
+    const successorPosition = actionFlowNodePosition(successor, definition.nodes.indexOf(successor));
+    const targetY = removedPosition.y + ((successorIndex - ((successorIds.length - 1) / 2)) * 170);
+    const deltaX = removedPosition.x - successorPosition.x;
+    const deltaY = targetY - successorPosition.y;
+    const queue = [successorId];
+    const branchNodeIds = new Set();
+
+    while (queue.length) {
+      const currentId = queue.shift();
+      if (currentId === id || branchNodeIds.has(currentId)) continue;
+      branchNodeIds.add(currentId);
+      definition.edges
+        .filter((edge) => edge.from === currentId && edge.to !== id)
+        .forEach((edge) => queue.push(edge.to));
+    }
+
+    branchNodeIds.forEach((branchNodeId) => {
+      if (movedNodeIds.has(branchNodeId)) return;
+      const branchNode = definition.nodes.find((item) => item.id === branchNodeId);
+      if (!branchNode) return;
+      const position = actionFlowNodePosition(branchNode, definition.nodes.indexOf(branchNode));
+      branchNode.x = Math.max(90, position.x + deltaX);
+      branchNode.y = Math.max(90, position.y + deltaY);
+      movedNodeIds.add(branchNodeId);
+    });
+  });
+
+  const survivingEdges = definition.edges.filter((edge) => edge.from !== id && edge.to !== id);
+  const bridgedEdges = [];
+  incomingEdges.forEach((incomingEdge) => {
+    outgoingEdges.forEach((outgoingEdge) => {
+      if (incomingEdge.from === outgoingEdge.to) return;
+      const incomingOutcome = String(incomingEdge.outcome || incomingEdge.label || '').toLowerCase();
+      const outgoingOutcome = String(outgoingEdge.outcome || outgoingEdge.label || '').toLowerCase();
+      const outcome = ['yes', 'no', 'error'].includes(incomingOutcome)
+        ? incomingOutcome
+        : (['yes', 'no', 'error'].includes(outgoingOutcome) ? outgoingOutcome : '');
+      const duplicate = [...survivingEdges, ...bridgedEdges].some((edge) => (
+        edge.from === incomingEdge.from
+        && edge.to === outgoingEdge.to
+        && String(edge.outcome || edge.label || '').toLowerCase() === outcome
+      ));
+      if (!duplicate) {
+        bridgedEdges.push({ from: incomingEdge.from, to: outgoingEdge.to, ...(outcome ? { outcome } : {}) });
+      }
+    });
+  });
+
+  definition.nodes = definition.nodes.filter((item) => item.id !== id);
+  definition.edges = [...survivingEdges, ...bridgedEdges];
+  state.selectedActionFlowNodeId = successorIds[0] || incomingEdges[0]?.from || '';
+  state.actionFlowDirty = true;
+  renderActionFlowStudio();
+}
+
+async function saveActiveActionFlow() {
+  const flow = activeActionFlow();
+  if (!flow) return;
+  const result = await api(`/api/action-flows/${encodeURIComponent(flow.flowKey)}`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      triggerType: flow.triggerType,
+      triggerModule: flow.triggerModule,
+      definition: actionFlowDefinition(flow)
+    })
+  });
+  const index = state.actionFlows.findIndex((item) => item.flowKey === flow.flowKey);
+  state.actionFlows[index] = result.flow;
+  state.actionFlowDirty = false;
+  renderActionFlowStudio();
+  toast('Action Flow Saved.');
+}
+
+function renderActionFlowVersions() {
+  const flow = activeActionFlow();
+  const list = $('#actionFlowVersionsList');
+  if (!list) return;
+  $('#actionFlowVersionsTitle').textContent = `Version History - ${flow?.name || 'Action Flow'}`;
+  if (state.actionFlowVersionsLoading) {
+    list.innerHTML = '<div class="version-history-empty">Loading version history...</div>';
+    return;
+  }
+  const versions = state.actionFlowVersions?.versions || [];
+  $('#actionFlowVersionsCount').textContent = `${versions.length} version${versions.length === 1 ? '' : 's'}`;
+  list.innerHTML = versions.map((version) => {
+    const isPublished = Number(version.versionNumber) === Number(state.actionFlowVersions?.publishedVersion);
+    const isCurrent = Number(version.versionNumber) === Number(state.actionFlowVersions?.currentVersion);
+    const author = version.createdBy?.name || version.createdBy?.email || 'System';
+    return `<article class="version-timeline-item ${isCurrent ? 'is-current' : ''}">
+      <span class="version-timeline-marker" aria-hidden="true"></span>
+      <div class="version-timeline-card">
+        <div class="section-heading-row"><strong>Version ${version.versionNumber}</strong><span>${isPublished ? 'Published' : isCurrent ? 'Current draft' : titleCaseMessage(version.action || 'checkpoint')}</span></div>
+        <p>${escapeHtml(version.summary || 'Saved Action Flow checkpoint')}</p>
+        <div class="version-timeline-meta"><span>${escapeHtml(author)}</span><span>${escapeHtml(versionHistoryDate(version.createdAt))}</span></div>
+        ${isCurrent ? '' : `<div class="form-actions end-actions"><button type="button" class="secondary" data-restore-action-flow-version="${version.id}" data-version-number="${version.versionNumber}">Restore as New Version</button></div>`}
+      </div>
+    </article>`;
+  }).join('') || '<div class="version-history-empty"><strong>No saved versions yet.</strong><span>Save the current draft as your first checkpoint.</span></div>';
+}
+
+async function loadActionFlowVersions() {
+  const flow = activeActionFlow();
+  if (!flow) return;
+  state.actionFlowVersionsLoading = true;
+  renderActionFlowVersions();
+  try {
+    state.actionFlowVersions = await api(`/api/action-flows/${encodeURIComponent(flow.flowKey)}/versions`);
+  } finally {
+    state.actionFlowVersionsLoading = false;
+    renderActionFlowVersions();
+  }
+}
+
+async function openActionFlowVersionsDrawer() {
+  if (state.actionFlowDirty) await saveActiveActionFlow();
+  state.actionFlowVersions = null;
+  $('#actionFlowVersionRemark').value = '';
+  $('#actionFlowVersionsDrawer').hidden = false;
+  document.body.classList.add('modal-open');
+  await loadActionFlowVersions();
+}
+
+function closeActionFlowVersionsDrawer() {
+  $('#actionFlowVersionsDrawer').hidden = true;
+  if ($$('.modal-backdrop').every((item) => item.hidden)) document.body.classList.remove('modal-open');
+}
+
+async function createActionFlowVersion() {
+  const flow = activeActionFlow();
+  if (!flow) return;
+  if (state.actionFlowDirty) await saveActiveActionFlow();
+  const result = await api(`/api/action-flows/${encodeURIComponent(flow.flowKey)}/versions`, {
+    method: 'POST', body: JSON.stringify({ remark: $('#actionFlowVersionRemark').value.trim() })
+  });
+  state.actionFlowVersions = { ...state.actionFlowVersions, versions: result.versions, currentVersion: result.flow.currentVersion, publishedVersion: result.flow.publishedVersion };
+  const index = state.actionFlows.findIndex((item) => item.flowKey === flow.flowKey);
+  state.actionFlows[index] = result.flow;
+  $('#actionFlowVersionRemark').value = '';
+  renderActionFlowVersions();
+  renderActionFlowStudio();
+  toast('Action Flow Version Saved.');
+}
+
+async function publishActiveActionFlow() {
+  const flow = activeActionFlow();
+  if (!flow) return;
+  if (state.actionFlowDirty) await saveActiveActionFlow();
+  const confirmed = await showConfirmationModal({
+    title: flow.publishedVersion ? 'Publish New Version' : 'Publish Action Flow',
+    message: 'Publish this saved draft? The published version will be used for live and scheduled executions.',
+    confirmLabel: 'Publish'
+  });
+  if (!confirmed) return;
+  const result = await api(`/api/action-flows/${encodeURIComponent(flow.flowKey)}/publish`, { method: 'POST', body: '{}' });
+  const index = state.actionFlows.findIndex((item) => item.flowKey === flow.flowKey);
+  state.actionFlows[index] = result.flow;
+  state.actionFlowVersions = { versions: result.versions, currentVersion: result.flow.currentVersion, publishedVersion: result.flow.publishedVersion };
+  renderActionFlowStudio();
+  toast(`Action Flow Version ${result.flow.publishedVersion} Published.`);
+}
+
+async function restoreActionFlowVersion(versionId, versionNumber) {
+  const flow = activeActionFlow();
+  if (!flow) return;
+  const confirmed = await showConfirmationModal({ title: `Restore Version ${versionNumber}`, message: 'Restore this snapshot as a new draft version? The currently published version will remain live.', confirmLabel: 'Restore Version' });
+  if (!confirmed) return;
+  const result = await api(`/api/action-flows/${encodeURIComponent(flow.flowKey)}/versions/${encodeURIComponent(versionId)}/restore`, { method: 'POST', body: JSON.stringify({ remark: $('#actionFlowVersionRemark').value.trim() }) });
+  const index = state.actionFlows.findIndex((item) => item.flowKey === flow.flowKey);
+  state.actionFlows[index] = result.flow;
+  state.actionFlowVersions = { versions: result.versions, currentVersion: result.flow.currentVersion, publishedVersion: result.flow.publishedVersion };
+  state.selectedActionFlowNodeId = result.flow.definition?.nodes?.[0]?.id || '';
+  state.actionFlowDirty = false;
+  $('#actionFlowVersionRemark').value = '';
+  renderActionFlowVersions();
+  renderActionFlowStudio();
+  toast(`Version ${versionNumber} Restored As A New Draft.`);
+}
+
+function closeActionFlowRunModal() {
+  const modal = $('#actionFlowRunModal');
+  if (!modal || modal.hidden) return;
+  modal.hidden = true;
+  $('#actionFlowRunJsonError').hidden = true;
+  if ($$('.modal-backdrop').every((item) => item.hidden)) document.body.classList.remove('modal-open');
+}
+
+function openActionFlowRunModal() {
+  const flow = activeActionFlow();
+  if (!flow) return;
+  const form = $('#actionFlowRunForm');
+  form.reset();
+  form.elements.recordJson.value = '{}';
+  $('#actionFlowRunTitle').textContent = `Run ${flow.name} once`;
+  $('#actionFlowRunJsonError').hidden = true;
+  $('#actionFlowRunModal').hidden = false;
+  document.body.classList.add('modal-open');
+  requestAnimationFrame(() => form.elements.recordId.focus());
+}
+
+async function runActiveActionFlowOnce(event) {
+  event.preventDefault();
+  const flow = activeActionFlow();
+  if (!flow) return;
+  const form = event.currentTarget;
+  const errorElement = $('#actionFlowRunJsonError');
+  let record;
+  try {
+    record = JSON.parse(form.elements.recordJson.value || '{}');
+    if (!record || typeof record !== 'object' || Array.isArray(record)) throw new Error('Trigger data must be a JSON object.');
+  } catch (error) {
+    errorElement.textContent = error.message || 'Enter valid JSON trigger data.';
+    errorElement.hidden = false;
+    return;
+  }
+  errorElement.hidden = true;
+  const submitButton = $('#confirmRunActionFlow');
+  submitButton.disabled = true;
+  try {
+    if (state.actionFlowDirty) await saveActiveActionFlow();
+    closeActionFlowRunModal();
+    state.actionFlowRun = { status: 'running', steps: [] };
+    renderActionFlowStudio();
+    const recordId = Number(form.elements.recordId.value) || null;
+    const result = await api(`/api/action-flows/${encodeURIComponent(flow.flowKey)}/run-once`, {
+      method: 'POST',
+      body: JSON.stringify({ recordId, record: { ...(recordId ? { id: recordId } : {}), ...record } })
+    });
+    state.actionFlowRun = result.execution || { status: 'failed', steps: [], error: 'No execution result returned' };
+    const failedStep = state.actionFlowRun.steps?.find((step) => step.status === 'failed');
+    if (failedStep) state.selectedActionFlowNodeId = failedStep.nodeId;
+    renderActionFlowStudio();
+    toast(state.actionFlowRun.status === 'success' ? 'Test Run Completed.' : 'Test Run Failed.', state.actionFlowRun.status === 'success' ? 'success' : 'error');
+  } finally {
+    submitButton.disabled = false;
+  }
+}
+
+function clearActionFlowRun() {
+  state.actionFlowRun = null;
+  renderActionFlowStudio();
+}
+
+async function checkActiveActionFlow() {
+  const flow = activeActionFlow();
+  if (!flow) return;
+  if (state.actionFlowDirty) await saveActiveActionFlow();
+  const result = await api(`/api/action-flows/${encodeURIComponent(flow.flowKey)}/check`, { method: 'POST' });
+  if (result.check?.valid) return toast('Action Flow Check Passed.');
+  toast(titleCaseMessage(result.check?.errors?.[0] || 'Action Flow Needs Attention.'), 'error');
+}
+
+async function deleteManagedActionFlow(flowKey) {
+  const flow = state.actionFlows.find((item) => item.flowKey === flowKey);
+  if (!flow) return;
+  const confirmed = await showConfirmationModal({
+    title: 'Delete Action Flow',
+    message: `Delete ${flow.name}? This removes the automation and cannot be undone.`,
+    confirmLabel: 'Delete Action Flow'
+  });
+  if (!confirmed) return;
+  await api(`/api/action-flows/${encodeURIComponent(flowKey)}`, { method: 'DELETE' });
+  await loadActionFlows();
+  toast('Action Flow Deleted.');
+}
+
 function fieldValidationRulesFromForm(form) {
   return {
     minLength: form.elements.validationMinLength.value,
@@ -2383,6 +3629,7 @@ function showView(id) {
   closeCustomerModal();
   closeImportModal();
   closeConfirmationModal(false);
+  closeActionFlowCreateModal();
   closeUserModal();
   closeModuleRecordModal();
   closeApiConnectorModal();
@@ -4112,8 +5359,8 @@ function renderAdminModulePages() {
         <td>${publishedLayoutCount(module.key)} / ${formDesignTypes.length}</td>
         <td>
           <div class="table-action-group">
-            ${systemView ? `<button type="button" class="link-button" data-open-module-page="${escapeHtml(systemView)}">Open Page</button>` : ''}
-            ${runtimeModule ? `<button type="button" class="link-button" data-open-runtime-module="${escapeHtml(module.key)}">Open Page</button>` : ''}
+            ${systemView ? `<button type="button" class="link-button table-primary-action" data-open-module-page="${escapeHtml(systemView)}">Open Page</button>` : ''}
+            ${runtimeModule ? `<button type="button" class="link-button table-primary-action" data-open-runtime-module="${escapeHtml(module.key)}">Open Page</button>` : ''}
             <button type="button" class="link-button" data-edit-module-fields="${escapeHtml(module.key)}">Edit Form Fields</button>
             <button type="button" class="link-button" data-edit-page-permissions="${escapeHtml(module.key)}">Permissions</button>
             ${module.system ? '' : `<button type="button" class="link-button" data-edit-module="${escapeHtml(module.key)}">Publish Settings</button>`}
@@ -4752,7 +5999,7 @@ function renderDepartmentWorkspace() {
   const active = departmentNode(state.activeDepartmentNodeId) || organization;
   const visible = departmentChildren(active?.id);
   rows.innerHTML = visible.map((node) => `
-    <tr><td><strong>${escapeHtml(node.name)}</strong></td><td>${escapeHtml(titleCaseMessage(node.type))}</td><td>${escapeHtml(node.parentName || '—')}</td><td>${escapeHtml(node.description || '—')}</td><td><span class="status-pill ${node.enabled ? 'status-live' : 'status-draft'}">${node.enabled ? 'Enabled' : 'Disabled'}</span></td><td><button type="button" class="link-button" data-edit-department-node="${node.id}">Edit</button> <button type="button" class="link-button" data-delete-department-node="${node.id}">Delete</button></td></tr>`).join('') || '<tr><td colspan="6" class="muted">No child units yet.</td></tr>';
+    <tr><td><strong>${escapeHtml(node.name)}</strong></td><td>${escapeHtml(titleCaseMessage(node.type))}</td><td>${escapeHtml(node.parentName || '—')}</td><td>${escapeHtml(node.description || '—')}</td><td><span class="status-pill ${node.enabled ? 'status-live' : 'status-draft'}">${node.enabled ? 'Enabled' : 'Disabled'}</span></td><td><button type="button" class="link-button" data-edit-department-node="${node.id}">Edit</button> <button type="button" class="link-button danger-link" data-delete-department-node="${node.id}">Delete</button></td></tr>`).join('') || '<tr><td colspan="6" class="muted">No child units yet.</td></tr>';
   $('#newDepartmentNodeButton').disabled = active?.enabled === false;
   $('#newGroupNodeButton').disabled = active?.enabled === false;
 }
@@ -6151,7 +7398,282 @@ function bindEvents() {
           toast(titleCaseMessage(error.message), 'error');
         }
       }
+      if (button.dataset.adminSection === 'adminActionFlowSection') {
+        try {
+          await loadActionFlows();
+        } catch (error) {
+          toast(titleCaseMessage(error.message), 'error');
+        }
+      }
     });
+  });
+  $('#newActionFlowButton')?.addEventListener('click', createActionFlow);
+  $('#createManagedActionFlowButton')?.addEventListener('click', createActionFlow);
+  $('#actionFlowCreateForm')?.addEventListener('submit', (event) => saveNewActionFlow(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  $('#closeActionFlowCreateModal')?.addEventListener('click', closeActionFlowCreateModal);
+  $('#cancelActionFlowCreateModal')?.addEventListener('click', closeActionFlowCreateModal);
+  $('#actionFlowCreateModal')?.addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) closeActionFlowCreateModal();
+  });
+  $('#backToActionFlowManagement')?.addEventListener('click', showActionFlowManagement);
+  $('#actionFlowManagementSearch')?.addEventListener('input', (event) => {
+    state.actionFlowSearch = event.currentTarget.value;
+    renderActionFlowManagement();
+  });
+  $('.action-flow-filter-tabs')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-action-flow-filter]');
+    if (!button) return;
+    state.actionFlowStatusFilter = button.dataset.actionFlowFilter;
+    renderActionFlowManagement();
+  });
+  $('#actionFlowManagementRows')?.addEventListener('click', (event) => {
+    const openButton = event.target.closest('[data-open-flow-canvas]');
+    const checkButton = event.target.closest('[data-check-managed-flow]');
+    const deleteButton = event.target.closest('[data-delete-managed-flow]');
+    if (openButton) openActionFlowCanvas(openButton.dataset.openFlowCanvas);
+    if (deleteButton) {
+      deleteManagedActionFlow(deleteButton.dataset.deleteManagedFlow)
+        .catch((error) => toast(titleCaseMessage(error.message), 'error'));
+      return;
+    }
+    if (checkButton) {
+      api(`/api/action-flows/${encodeURIComponent(checkButton.dataset.checkManagedFlow)}/check`, { method: 'POST' })
+        .then((result) => {
+          if (result.check?.valid) toast('Action Flow Check Passed.');
+          else toast(titleCaseMessage(result.check?.errors?.[0] || 'Action Flow Needs Attention.'), 'error');
+        })
+        .catch((error) => toast(titleCaseMessage(error.message), 'error'));
+    }
+  });
+  $('#saveActionFlowButton')?.addEventListener('click', () => saveActiveActionFlow().catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  $('#checkActionFlowButton')?.addEventListener('click', () => checkActiveActionFlow().catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  $('#actionFlowVersionsButton')?.addEventListener('click', () => openActionFlowVersionsDrawer().catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  $('#publishActionFlowButton')?.addEventListener('click', () => publishActiveActionFlow().catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  $('#createActionFlowVersionButton')?.addEventListener('click', () => createActionFlowVersion().catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  $('#closeActionFlowVersionsDrawer')?.addEventListener('click', closeActionFlowVersionsDrawer);
+  $('#closeActionFlowVersionsFooter')?.addEventListener('click', closeActionFlowVersionsDrawer);
+  $('#actionFlowVersionsDrawer')?.addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) return closeActionFlowVersionsDrawer();
+    const restoreButton = event.target.closest('[data-restore-action-flow-version]');
+    if (restoreButton) restoreActionFlowVersion(restoreButton.dataset.restoreActionFlowVersion, restoreButton.dataset.versionNumber).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  });
+  $('#runActionFlowButton')?.addEventListener('click', openActionFlowRunModal);
+  $('#clearActionFlowRunButton')?.addEventListener('click', clearActionFlowRun);
+  $('#actionFlowRunForm')?.addEventListener('submit', (event) => runActiveActionFlowOnce(event).catch((error) => {
+    state.actionFlowRun = { status: 'failed', steps: [], error: error.message };
+    renderActionFlowStudio();
+    toast(titleCaseMessage(error.message), 'error');
+  }));
+  $('#closeActionFlowRunModal')?.addEventListener('click', closeActionFlowRunModal);
+  $('#cancelActionFlowRunModal')?.addEventListener('click', closeActionFlowRunModal);
+  $('#actionFlowSearch')?.addEventListener('input', (event) => {
+    state.actionFlowSearch = event.currentTarget.value;
+    renderActionFlowList();
+  });
+  $('#actionFlowList')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-action-flow-key]');
+    if (!button) return;
+    state.activeActionFlowKey = button.dataset.actionFlowKey;
+    state.selectedActionFlowNodeId = '';
+    state.actionFlowDirty = false;
+    state.actionFlowRun = null;
+    renderActionFlowStudio();
+  });
+  $('#actionFlowPalette')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-flow-node-type]');
+    if (!button) return;
+    const item = actionFlowPaletteItems.find((entry) => entry.type === button.dataset.flowNodeType);
+    if (item) addActionFlowNode(item);
+  });
+  $('#actionFlowCanvas')?.addEventListener('click', (event) => {
+    const nodeButton = event.target.closest('[data-select-flow-node]');
+    const addBranch = event.target.closest('[data-flow-add-branch]');
+    if (nodeButton) {
+      state.selectedActionFlowNodeId = nodeButton.dataset.selectFlowNode;
+      renderActionFlowStudio();
+    } else if (addBranch) {
+      state.selectedActionFlowNodeId = addBranch.dataset.flowBranchNode;
+      const item = actionFlowPaletteItems.find((entry) => entry.type === 'update_record');
+      addActionFlowNode(item, addBranch.dataset.flowBranchNode, addBranch.dataset.flowAddBranch);
+    }
+  });
+  $('#actionFlowCanvas')?.addEventListener('pointerdown', (event) => {
+    const button = event.target.closest('[data-select-flow-node]');
+    if (!button || event.button !== 0) return;
+    const definition = actionFlowDefinition();
+    const node = definition.nodes.find((item) => item.id === button.dataset.selectFlowNode);
+    if (!node) return;
+    const position = actionFlowNodePosition(node, definition.nodes.indexOf(node));
+    state.actionFlowDrag = {
+      nodeId: node.id,
+      startPointerX: event.clientX,
+      startPointerY: event.clientY,
+      startX: position.x,
+      startY: position.y,
+      moved: false
+    };
+    button.setPointerCapture?.(event.pointerId);
+  });
+  $('#actionFlowCanvasViewport')?.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0 || event.target.closest('button, input, select, textarea, a')) return;
+    const viewport = event.currentTarget;
+    state.actionFlowPan = {
+      pointerId: event.pointerId,
+      startPointerX: event.clientX,
+      startPointerY: event.clientY,
+      startScrollLeft: viewport.scrollLeft,
+      startScrollTop: viewport.scrollTop
+    };
+    viewport.classList.add('is-panning');
+    viewport.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  });
+  document.addEventListener('pointermove', (event) => {
+    const pan = state.actionFlowPan;
+    if (pan) {
+      const viewport = $('#actionFlowCanvasViewport');
+      if (!viewport) return;
+      viewport.scrollLeft = pan.startScrollLeft - (event.clientX - pan.startPointerX);
+      viewport.scrollTop = pan.startScrollTop - (event.clientY - pan.startPointerY);
+      return;
+    }
+    const drag = state.actionFlowDrag;
+    if (!drag) return;
+    const dx = (event.clientX - drag.startPointerX) / state.actionFlowZoom;
+    const dy = (event.clientY - drag.startPointerY) / state.actionFlowZoom;
+    if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+    const node = actionFlowDefinition().nodes.find((item) => item.id === drag.nodeId);
+    if (!node) return;
+    node.x = Math.max(80, Math.round(drag.startX + dx));
+    node.y = Math.max(80, Math.round(drag.startY + dy));
+    const wrap = $(`[data-flow-node-wrap="${drag.nodeId}"]`);
+    if (wrap) {
+      wrap.style.left = `${node.x}px`;
+      wrap.style.top = `${node.y}px`;
+    }
+  });
+  document.addEventListener('pointerup', () => {
+    if (state.actionFlowPan) {
+      state.actionFlowPan = null;
+      $('#actionFlowCanvasViewport')?.classList.remove('is-panning');
+    }
+    const drag = state.actionFlowDrag;
+    if (!drag) return;
+    state.actionFlowDrag = null;
+    if (!drag.moved) return;
+    state.selectedActionFlowNodeId = drag.nodeId;
+    state.actionFlowDirty = true;
+    renderActionFlowStudio();
+  });
+  document.addEventListener('pointercancel', () => {
+    state.actionFlowPan = null;
+    state.actionFlowDrag = null;
+    $('#actionFlowCanvasViewport')?.classList.remove('is-panning');
+  });
+  $('#actionFlowInspector')?.addEventListener('input', (event) => {
+    if (event.target.id === 'actionFlowNodeLabel') {
+      const node = actionFlowDefinition().nodes.find((item) => item.id === state.selectedActionFlowNodeId);
+      if (!node) return;
+      node.label = event.target.value;
+      state.actionFlowDirty = true;
+      renderActionFlowCanvas();
+      $('#actionFlowSaveState').textContent = 'Unsaved canvas changes';
+      $('#saveActionFlowButton').disabled = false;
+      return;
+    }
+    const actionConfigField = event.target.dataset.actionConfigField;
+    if (actionConfigField && ['INPUT', 'TEXTAREA'].includes(event.target.tagName)) {
+      updateActionFlowOperationalConfig(actionConfigField, event.target.value);
+      return;
+    }
+    const mappingField = event.target.dataset.mappingField;
+    const mappingRow = event.target.closest('[data-action-flow-mapping-id]');
+    if (mappingRow && ['target', 'value'].includes(mappingField) && event.target.tagName === 'INPUT') {
+      updateActionFlowMapping(mappingRow.dataset.actionFlowMappingId, mappingField, event.target.value);
+      return;
+    }
+    const ruleField = event.target.dataset.conditionRuleField;
+    const ruleRow = event.target.closest('[data-condition-rule-id]');
+    if (ruleField === 'value' && ruleRow && event.target.tagName === 'INPUT') {
+      updateActionFlowConditionRule(ruleRow.dataset.conditionRuleId, ruleField, event.target.value);
+    }
+  });
+  $('#actionFlowInspector')?.addEventListener('change', (event) => {
+    const triggerConfigField = event.target.dataset.triggerConfigField;
+    if (triggerConfigField) {
+      updateActionFlowTriggerConfig(triggerConfigField, event.target.value);
+      return;
+    }
+    const actionConfigField = event.target.dataset.actionConfigField;
+    if (actionConfigField) {
+      updateActionFlowOperationalConfig(actionConfigField, event.target.value);
+      if (actionConfigField === 'onError') renderActionFlowStudio();
+      else if (event.target.tagName === 'SELECT' && actionConfigField === 'operation') renderActionFlowInspector();
+      return;
+    }
+    const mappingField = event.target.dataset.mappingField;
+    const mappingRow = event.target.closest('[data-action-flow-mapping-id]');
+    if (mappingField === 'targetModule') {
+      updateActionFlowMapping('', mappingField, event.target.value, true);
+      return;
+    }
+    if (mappingRow && ['target', 'value'].includes(mappingField)) {
+      updateActionFlowMapping(mappingRow.dataset.actionFlowMappingId, mappingField, event.target.value);
+      return;
+    }
+    const ruleField = event.target.dataset.conditionRuleField;
+    const ruleRow = event.target.closest('[data-condition-rule-id]');
+    if (!ruleField || !ruleRow) return;
+    updateActionFlowConditionRule(
+      ruleRow.dataset.conditionRuleId,
+      ruleField,
+      event.target.value,
+      ['left', 'operator'].includes(ruleField)
+    );
+  });
+  $('#actionFlowInspector')?.addEventListener('click', (event) => {
+    if (event.target.closest('#removeActionFlowNode')) return removeSelectedActionFlowNode();
+    if (event.target.closest('#addActionFlowConditionRule')) return addActionFlowConditionRule();
+    if (event.target.closest('#addActionFlowParallelBranch')) return addActionFlowParallelBranch();
+    if (event.target.closest('#addActionFlowMapping')) return addActionFlowMapping();
+    const transformSourceMode = event.target.closest('[data-set-transform-source-mode]');
+    if (transformSourceMode) {
+      updateActionFlowOperationalConfig('sourceMode', transformSourceMode.dataset.setTransformSourceMode);
+      renderActionFlowInspector();
+      return;
+    }
+    const removeMapping = event.target.closest('[data-remove-action-flow-mapping]');
+    if (removeMapping) return removeActionFlowMapping(removeMapping.dataset.removeActionFlowMapping);
+    const mappingMode = event.target.closest('[data-set-mapping-mode]');
+    if (mappingMode) {
+      const mappingRow = mappingMode.closest('[data-action-flow-mapping-id]');
+      if (mappingRow) updateActionFlowMapping(mappingRow.dataset.actionFlowMappingId, 'mode', mappingMode.dataset.setMappingMode, true);
+      return;
+    }
+    const removeRule = event.target.closest('[data-remove-condition-rule]');
+    if (removeRule) return removeActionFlowConditionRule(removeRule.dataset.removeConditionRule);
+    const combinator = event.target.closest('[data-condition-combinator]');
+    if (combinator) setActionFlowConditionCombinator(combinator.dataset.conditionCombinator);
+  });
+  $('#actionFlowZoomIn')?.addEventListener('click', () => {
+    state.actionFlowZoom = Math.min(1.4, Number((state.actionFlowZoom + .1).toFixed(1)));
+    renderActionFlowCanvas();
+    $('#actionFlowZoomLabel').textContent = `${Math.round(state.actionFlowZoom * 100)}%`;
+  });
+  $('#actionFlowZoomOut')?.addEventListener('click', () => {
+    state.actionFlowZoom = Math.max(.4, Number((state.actionFlowZoom - .1).toFixed(1)));
+    renderActionFlowCanvas();
+    $('#actionFlowZoomLabel').textContent = `${Math.round(state.actionFlowZoom * 100)}%`;
+  });
+  $('#actionFlowFit')?.addEventListener('click', () => {
+    const viewport = $('#actionFlowCanvasViewport');
+    const bounds = actionFlowCanvasBounds();
+    const horizontalFit = (viewport.clientWidth - 80) / bounds.width;
+    const verticalFit = (viewport.clientHeight - 80) / bounds.height;
+    state.actionFlowZoom = Math.max(.4, Math.min(1, Number(Math.min(horizontalFit, verticalFit).toFixed(2))));
+    renderActionFlowCanvas();
+    $('#actionFlowZoomLabel').textContent = `${Math.round(state.actionFlowZoom * 100)}%`;
+    viewport.scrollTo({ left: 0, top: 0, behavior: 'smooth' });
   });
   $('#departmentTree')?.addEventListener('click', (event) => {
     const button = event.target.closest('[data-department-node]');
@@ -6789,6 +8311,10 @@ function bindEvents() {
   });
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
+    if (!$('#actionFlowCreateModal').hidden) {
+      closeActionFlowCreateModal();
+      return;
+    }
     if (!$('#confirmationModal').hidden) {
       closeConfirmationModal(false);
       return;
