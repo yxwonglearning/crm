@@ -1208,7 +1208,7 @@ async function listConfigHistory(moduleKey) {
   return { versions, auditLogs, currentVersionId: currentVersion?.id || versions[0]?.id || null };
 }
 
-async function rollbackConfigVersion(moduleKey, versionId, user = null) {
+async function rollbackConfigVersion(moduleKey, versionId, user = null, input = {}) {
   if (defaultModules.has(moduleKey)) {
     await ensureDefaultConfig(moduleKey);
   }
@@ -1216,15 +1216,26 @@ async function rollbackConfigVersion(moduleKey, versionId, user = null) {
   if (!version) throw new AppError('Config version not found', 404);
   const before = await configSnapshot(moduleKey);
   await repository.restoreConfigSnapshot(moduleKey, version.snapshot);
-  await recordConfigChange(moduleKey, {
-    versionId: version.id,
-    action: 'config.rollback',
+  const after = await configSnapshot(moduleKey);
+  const remark = String(input.remark || '').trim();
+  const summary = remark
+    ? `Restored version ${version.versionNumber}: ${remark}`
+    : `Restored version ${version.versionNumber}`;
+  const restoredVersion = await repository.createConfigVersion(moduleKey, {
+    action: 'version.restore',
+    summary,
+    snapshot: after,
+    userId: user?.id
+  });
+  await repository.createConfigAuditLog(moduleKey, {
+    versionId: restoredVersion.id,
+    action: 'version.restore',
     targetType: 'config_version',
     targetKey: String(version.versionNumber),
-    summary: `Rolled back to version ${version.versionNumber}`,
+    summary,
     before,
-    after: version.snapshot,
-    user
+    after,
+    userId: user?.id
   });
   return getModuleConfig(moduleKey);
 }

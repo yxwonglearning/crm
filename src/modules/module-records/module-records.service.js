@@ -152,11 +152,36 @@ function evaluateFormulaExpression(expression, values, customFunctionSource = ''
 function applyFormulaFields(input, fields) {
   const values = { ...input };
   orderedFormulaFields(fields)
-    .filter((field) => field.tableType !== 'detail')
     .forEach((field) => {
       values[field.fieldKey] = evaluateFormulaExpression(field.formulaExpression, values, field.formulaJs, field.formulaFunctionName, field.formulaFunctionBody, fields);
     });
   return values;
+}
+
+function applyDetailTableFormulaFields(detailTables, fields, mainValues) {
+  const result = {};
+  const detailFields = fields.filter((field) => field.tableType === 'detail' && field.detailTableName);
+  const tableNames = Array.from(new Set(detailFields.map((field) => field.detailTableName)));
+  const orderedFields = orderedFormulaFields(fields);
+
+  tableNames.forEach((tableName) => {
+    const tableFields = detailFields.filter((field) => field.detailTableName === tableName);
+    const tableFieldKeys = new Set(tableFields.map((field) => field.fieldKey));
+    const tableFormulaFields = orderedFields.filter((field) => tableFieldKeys.has(field.fieldKey));
+    const rows = Array.isArray(detailTables?.[tableName]) ? detailTables[tableName] : [];
+    result[tableName] = rows.map((row) => {
+      const values = {
+        ...mainValues,
+        ...customFieldsFromInput(row || {}, tableFields)
+      };
+      tableFormulaFields.forEach((field) => {
+        values[field.fieldKey] = evaluateFormulaExpression(field.formulaExpression, values, field.formulaJs, field.formulaFunctionName, field.formulaFunctionBody, fields);
+      });
+      return Object.fromEntries(tableFields.map((field) => [field.fieldKey, values[field.fieldKey]]));
+    });
+  });
+
+  return result;
 }
 
 async function validateFields(moduleKey, input, fields, excludeId = null) {
@@ -231,7 +256,8 @@ async function createRecord(moduleKey, input, user) {
   const customFields = applyFormulaFields(customFieldsFromInput(input, fields), fields);
   await validateFields(moduleKey, customFields, fields);
   const id = await repository.createRecord(moduleKey, customFields, user?.id);
-  await repository.replaceDetailRows(id, config.fields, input.__detailTables || {});
+  const detailTables = applyDetailTableFormulaFields(input.__detailTables || {}, config.fields, customFields);
+  await repository.replaceDetailRows(id, config.fields, detailTables);
   const record = await repository.findRecordById(moduleKey, id);
   await actionFlowRuntime.runRecordTrigger('record_created', {
     moduleKey,
@@ -254,7 +280,8 @@ async function updateRecord(moduleKey, id, input, user) {
   }, fields);
   await validateFields(moduleKey, customFields, fields, id);
   await repository.updateRecord(moduleKey, id, customFields, user?.id);
-  await repository.replaceDetailRows(id, config.fields, input.__detailTables || {});
+  const detailTables = applyDetailTableFormulaFields(input.__detailTables || {}, config.fields, customFields);
+  await repository.replaceDetailRows(id, config.fields, detailTables);
   const updated = await repository.findRecordById(moduleKey, id);
   await actionFlowRuntime.runRecordTrigger('record_updated', {
     moduleKey,

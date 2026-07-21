@@ -153,6 +153,9 @@ const modulePermissionMatrixSchema = z.object({
 const createConfigVersionSchema = z.object({
   remark: z.string().trim().max(255).optional()
 });
+const restoreConfigVersionSchema = z.object({
+  remark: z.string().trim().max(255).optional()
+});
 const standaloneFormFieldSchema = z.object({
   label: z.string().trim().min(1).max(120),
   fieldKey: z.string().trim().min(1).max(80),
@@ -241,7 +244,8 @@ sysadminRoutes.post('/modules/:moduleKey/config-history/versions', asyncHandler(
 }));
 
 sysadminRoutes.post('/modules/:moduleKey/config-history/:versionId/rollback', asyncHandler(async (req, res) => {
-  res.json(await service.rollbackConfigVersion(req.params.moduleKey, req.params.versionId, req.user));
+  const input = validate(restoreConfigVersionSchema, req.body);
+  res.json(await service.rollbackConfigVersion(req.params.moduleKey, req.params.versionId, req.user, input));
 }));
 
 sysadminRoutes.get('/modules/:moduleKey/field-permissions', asyncHandler(async (req, res) => {

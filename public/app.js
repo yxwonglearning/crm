@@ -64,6 +64,8 @@ const state = {
   activeBrowserSource: '',
   browserSourceSearch: '',
   formDesignLayouts: {},
+  configHistory: null,
+  configHistoryLoading: false,
   activeAdminSection: 'adminModulesSection',
   adminMenuCollapsed: false,
   activeConfigModule: 'customers',
@@ -276,12 +278,28 @@ function renderBrowserFieldInput(field, value = '', { detailField = false } = {}
 }
 
 function formulaFields() {
-  return activeConfigFields().filter((field) => field.tableType !== 'detail');
+  return activeConfigFields();
 }
 
 function formulaTargetFields() {
-  const fields = formulaFields().filter((field) => !field.locked);
-  return fields.length ? fields : formulaFields();
+  return formulaFields();
+}
+
+function formulaFieldGroups(fields = formulaFields()) {
+  const groups = [{ key: 'main', label: 'Main Table', fields: fields.filter((field) => field.tableType !== 'detail') }];
+  const detailTableNames = Array.from(new Set(
+    fields
+      .filter((field) => field.tableType === 'detail')
+      .map((field) => field.detailTableName || 'detail')
+  ));
+  detailTableNames.forEach((tableName, index) => {
+    groups.push({
+      key: tableName,
+      label: `DT${index + 1}`,
+      fields: fields.filter((field) => field.tableType === 'detail' && (field.detailTableName || 'detail') === tableName)
+    });
+  });
+  return groups.filter((group) => group.fields.length);
 }
 
 function insertAtCursor(input, text) {
@@ -1534,20 +1552,25 @@ function closeImportExportMappingModal() {
 function renderFormulaTargets(selectedFieldKey = '') {
   const select = $('#formulaBuilderForm')?.elements.targetField;
   if (!select) return;
-  const fields = formulaTargetFields();
-  select.innerHTML = fields.map((field) => (
-    `<option value="${escapeHtml(field.fieldKey)}" ${field.fieldKey === selectedFieldKey ? 'selected' : ''}>${escapeHtml(field.label)}</option>`
-  )).join('');
+  select.innerHTML = formulaFieldGroups(formulaTargetFields()).map((group) => `
+    <optgroup label="${escapeHtml(group.label)}">
+      ${group.fields.map((field) => `<option value="${escapeHtml(field.fieldKey)}" ${field.fieldKey === selectedFieldKey ? 'selected' : ''}>${escapeHtml(field.label)}</option>`).join('')}
+    </optgroup>
+  `).join('');
 }
 
 function renderFormulaVariables(targetFieldKey = '') {
   const container = $('#formulaVariableList');
   if (!container) return;
-  container.innerHTML = formulaFields()
-    .filter((field) => field.fieldKey !== targetFieldKey)
-    .map((field) => `
-      <button type="button" class="link-button" data-insert-formula="{${escapeHtml(field.fieldKey)}}">${escapeHtml(field.label)}</button>
-    `).join('') || '<p class="muted">No source fields available.</p>';
+  const groups = formulaFieldGroups(formulaFields().filter((field) => field.fieldKey !== targetFieldKey));
+  container.innerHTML = groups.map((group) => `
+    <section class="formula-variable-group">
+      <div class="formula-variable-group-label">${escapeHtml(group.label)}</div>
+      ${group.fields.map((field) => `
+        <button type="button" class="link-button" data-insert-formula="{${escapeHtml(field.fieldKey)}}">${escapeHtml(field.label)}</button>
+      `).join('')}
+    </section>
+  `).join('') || '<p class="muted">No source fields available.</p>';
 }
 
 function customFormulaFunctionNames(source = '', name = '', body = '') {
@@ -1668,7 +1691,7 @@ function showFormulaTab(paneId) {
 
 function openFormulaBuilderModal(fieldKey = '') {
   if (!formulaTargetFields().length) {
-    toast('Add A Custom Field Before Creating A Formula.', 'error');
+    toast('Add A Field Before Creating A Formula.', 'error');
     return;
   }
   renderFormulaTargets(fieldKey);
@@ -1691,7 +1714,7 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
 function setModalFullscreen(modal, enabled) {
-  const card = modal?.querySelector('.modal-card, .form-design-drawer, .page-permission-drawer, .api-connector-drawer, .api-interface-drawer');
+  const card = modal?.querySelector('.modal-card, .form-design-drawer, .version-history-drawer, .page-permission-drawer, .api-connector-drawer, .api-interface-drawer');
   const button = card?.querySelector('[data-modal-fullscreen]');
   if (!card || !button) return;
   modal.classList.toggle('is-fullscreen', enabled);
@@ -1707,7 +1730,7 @@ function resetModalFullscreen(modal) {
 
 function toggleModalFullscreen(button) {
   const modal = button.closest('.modal-backdrop');
-  const card = button.closest('.modal-card, .form-design-drawer, .page-permission-drawer, .api-connector-drawer, .api-interface-drawer');
+  const card = button.closest('.modal-card, .form-design-drawer, .version-history-drawer, .page-permission-drawer, .api-connector-drawer, .api-interface-drawer');
   if (!modal || !card) return;
   setModalFullscreen(modal, !card.classList.contains('is-fullscreen'));
 }
@@ -1759,6 +1782,30 @@ async function api(path, options = {}) {
     return null;
   }
   return response.json();
+}
+
+function initializeScrollableModalFrames() {
+  const cards = $$('.modal-card:not(.compact-modal):not(.success-prompt-card):not(.confirmation-modal-card)');
+  cards.forEach((card) => {
+    if (card.classList.contains('has-fixed-modal-regions')) return;
+
+    const header = Array.from(card.children).find((child) => child.classList?.contains('modal-header'));
+    if (!header) return;
+
+    const footer = Array.from(card.children).find((child) => child.classList?.contains('form-actions')) || null;
+    const body = document.createElement('div');
+    body.className = 'modal-scroll-body';
+
+    let current = header.nextElementSibling;
+    while (current && current !== footer) {
+      const next = current.nextElementSibling;
+      body.appendChild(current);
+      current = next;
+    }
+
+    card.insertBefore(body, footer);
+    card.classList.add('has-fixed-modal-regions');
+  });
 }
 
 let confirmationResolver = null;
@@ -2337,6 +2384,7 @@ function showView(id) {
   closeFormBuilderCreateModal();
   closeFieldConfigModal();
   closeFormDesignDrawer();
+  closeVersionHistoryDrawer();
   closeFormulaBuilderModal();
   $('#loginView').hidden = id !== 'loginView';
   $$('.view').forEach((view) => {
@@ -5278,6 +5326,104 @@ function closeFormDesignDrawer() {
   document.body.classList.remove('modal-open');
 }
 
+function versionHistoryDate(value) {
+  if (!value) return 'Unknown date';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+}
+
+function renderVersionHistory() {
+  const list = $('#versionHistoryList');
+  if (!list) return;
+  const module = configModules.find((item) => item.key === state.activeConfigModule);
+  $('#versionHistoryTitle').textContent = `Version History - ${module?.name || titleCaseMessage(state.activeConfigModule)}`;
+  if (state.configHistoryLoading) {
+    list.innerHTML = '<div class="version-history-empty">Loading version history...</div>';
+    return;
+  }
+  const versions = state.configHistory?.versions || [];
+  $('#versionHistoryCount').textContent = `${versions.length} version${versions.length === 1 ? '' : 's'}`;
+  list.innerHTML = versions.map((version, index) => {
+    const isLatest = index === 0;
+    const author = version.createdBy?.name || version.createdBy?.email || 'System';
+    return `
+      <article class="version-timeline-item ${isLatest ? 'is-current' : ''}">
+        <span class="version-timeline-marker" aria-hidden="true"></span>
+        <div class="version-timeline-card">
+          <div class="version-timeline-heading">
+            <div><strong>Version ${version.versionNumber}</strong>${isLatest ? '<span class="status-pill status-live">Latest</span>' : ''}</div>
+            <time>${escapeHtml(versionHistoryDate(version.createdAt))}</time>
+          </div>
+          <p>${escapeHtml(version.summary || 'Saved configuration checkpoint')}</p>
+          <div class="version-timeline-meta"><span>${escapeHtml(author)}</span><span>${escapeHtml(titleCaseMessage(String(version.action || 'version').replaceAll('.', ' ')))}</span></div>
+          ${isLatest ? '' : `<div class="form-actions end-actions"><button type="button" class="secondary" data-restore-config-version="${version.id}" data-version-number="${version.versionNumber}">Restore as New Version</button></div>`}
+        </div>
+      </article>`;
+  }).join('') || '<div class="version-history-empty"><strong>No saved versions yet.</strong><span>Add a remark and save the current configuration as your first checkpoint.</span></div>';
+}
+
+async function loadConfigHistory() {
+  state.configHistoryLoading = true;
+  renderVersionHistory();
+  try {
+    state.configHistory = await api(`/api/sysadmin/modules/${encodeURIComponent(state.activeConfigModule)}/config-history`);
+  } finally {
+    state.configHistoryLoading = false;
+    renderVersionHistory();
+  }
+}
+
+async function openVersionHistoryDrawer() {
+  state.configHistory = null;
+  $('#versionHistoryRemark').value = '';
+  $('#versionHistoryDrawer').hidden = false;
+  document.body.classList.add('modal-open');
+  await loadConfigHistory();
+}
+
+function closeVersionHistoryDrawer() {
+  const drawer = $('#versionHistoryDrawer');
+  if (!drawer) return;
+  resetModalFullscreen(drawer);
+  drawer.hidden = true;
+  document.body.classList.remove('modal-open');
+}
+
+async function createConfigVersionCheckpoint() {
+  const remark = $('#versionHistoryRemark').value.trim();
+  const button = $('#createConfigVersionButton');
+  button.disabled = true;
+  try {
+    state.configHistory = await api(`/api/sysadmin/modules/${encodeURIComponent(state.activeConfigModule)}/config-history/versions`, {
+      method: 'POST', body: JSON.stringify({ remark })
+    });
+    $('#versionHistoryRemark').value = '';
+    renderVersionHistory();
+    toast('Configuration Version Saved.');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function restoreConfigVersion(versionId, versionNumber) {
+  const confirmed = await showConfirmationModal({
+    title: `Restore Version ${versionNumber}`,
+    message: 'Restore this snapshot as a new version? Existing history will be kept.',
+    confirmLabel: 'Restore Version'
+  });
+  if (!confirmed) return;
+  const remark = $('#versionHistoryRemark').value.trim();
+  await api(`/api/sysadmin/modules/${encodeURIComponent(state.activeConfigModule)}/config-history/${encodeURIComponent(versionId)}/rollback`, {
+    method: 'POST', body: JSON.stringify({ remark })
+  });
+  await refreshAdminModules();
+  renderFieldConfig();
+  await loadConfigHistory();
+  $('#versionHistoryRemark').value = '';
+  toast(`Version ${versionNumber} Restored As A New Version.`);
+}
+
 function activeConfigFields() {
   if (state.activeConfigModule === 'users') return state.userFields;
   if (state.activeConfigModule === 'customers') return state.customerFields;
@@ -6454,6 +6600,9 @@ function bindEvents() {
     if (!$('#formDesignDrawer').hidden) {
       closeFormDesignDrawer();
     }
+    if (!$('#versionHistoryDrawer').hidden) {
+      closeVersionHistoryDrawer();
+    }
     if (!$('#formulaBuilderModal').hidden) {
       closeFormulaBuilderModal();
     }
@@ -6495,6 +6644,7 @@ function bindEvents() {
     if (actionButton.id === 'addFieldButton') openFieldConfigModal();
     if (actionButton.id === 'formulaButton') openFormulaBuilderModal();
     if (actionButton.id === 'formDesignButton') openFormDesignDrawer();
+    if (actionButton.id === 'versionHistoryButton') openVersionHistoryDrawer().catch((error) => toast(error.message, 'error'));
     if (actionButton.id === 'fieldLinkageButton') openDefaultFieldLinkage();
     if (actionButton.id === 'batchAddFieldsButton') openBatchFieldModal();
     if (actionButton.id === 'fieldPropertiesButton') openFieldPropertiesModal();
@@ -6503,6 +6653,10 @@ function bindEvents() {
   $('#formDesignButton')?.addEventListener('click', (event) => {
     event.stopPropagation();
     openFormDesignDrawer();
+  });
+  $('#versionHistoryButton')?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    openVersionHistoryDrawer().catch((error) => toast(error.message, 'error'));
   });
   $('#exportCustomersButton').addEventListener('click', downloadCustomerExport);
   $('#closeSuccessPrompt').addEventListener('click', closeSuccessPrompt);
@@ -6704,6 +6858,22 @@ function bindEvents() {
   $('#cancelFormDesignButton').addEventListener('click', closeFormDesignDrawer);
   $('#saveFormDesignDraftButton').addEventListener('click', saveFormDesignDraft);
   $('#publishFormDesignButton').addEventListener('click', publishFormDesign);
+  $('#closeVersionHistoryDrawer').addEventListener('click', closeVersionHistoryDrawer);
+  $('#closeVersionHistoryFooter').addEventListener('click', closeVersionHistoryDrawer);
+  $('#createConfigVersionButton').addEventListener('click', () => {
+    createConfigVersionCheckpoint().catch((error) => toast(error.message, 'error'));
+  });
+  $('#versionHistoryDrawer').addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) {
+      closeVersionHistoryDrawer();
+      return;
+    }
+    const restoreButton = event.target.closest('[data-restore-config-version]');
+    if (restoreButton) {
+      restoreConfigVersion(restoreButton.dataset.restoreConfigVersion, restoreButton.dataset.versionNumber)
+        .catch((error) => toast(error.message, 'error'));
+    }
+  });
   $('#copyFormDesignButton').addEventListener('click', () => {
     copyFormDesignLayout($('#copyFormDesignSource').value);
   });
@@ -7485,6 +7655,7 @@ async function init() {
   } catch (error) {
     toast(titleCaseMessage(error.message), 'error');
   }
+  initializeScrollableModalFrames();
   bindEvents();
   configureAuthUi();
 

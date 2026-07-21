@@ -84,6 +84,7 @@ The sections below serve as the detailed project log, implementation notes, feat
 - Field validation rules for length, numeric range, regex, conditional required, and unique values.
 - Formula workspace with formula expressions, reusable custom helper functions, and SQL capture storage.
 - Backend-backed Form Design drawer for per-form-type visual field ordering with draft/publish controls; newly created fields are reconciled into each form design automatically.
+- Form Builder Version History drawer with remark-backed configuration checkpoints, author/time metadata, an immutable timeline, and safe restore-as-new-version recovery.
 - Page-level Permissions drawer for configuring role and specific-user access without leaving Module Pages.
 - Page View permissions support Organization, Department, and Group access with inheritance to users assigned to descendant units.
 - All pop-out modals include a fullscreen/enlarge button.
@@ -192,6 +193,8 @@ Admins should have a dedicated portal for configuring the CRM:
    - `Formula` opens the Formula Builder for formula expressions, reusable custom functions, and SQL capture notes.
    - `Form Design` opens a right-side visual drawer for Add, Edit, and Detail form layouts. Draft and published layouts are stored in module configuration.
    - Newly added fields are automatically included in the applicable form-design draft, so they are immediately available for layout configuration.
+   - `Batch Edit`, `Field Properties`, and `Import/Export Mapping` use the same right-side drawer pattern as Form Design, with a fixed header and action footer around a scrollable working area.
+   - Large centered pop-outs use a shared fixed-region layout: title/fullscreen/close controls stay visible at the top, action buttons stay visible at the bottom, and only the middle content scrolls. Compact confirmation and success dialogs remain unchanged.
    - `Batch Edit` can duplicate selected configurable fields, delete unused configurable fields, and archive configurable fields that should be hidden without dropping existing data.
    - `Browser Buttons` stores reusable master-data lookup definitions. Browser Button fields can reference these definitions through field lookup metadata.
    - Browser Buttons are managed from a module-first workspace: select a module, then choose the main or detail table when creating or editing browser definitions.
@@ -281,7 +284,7 @@ Admins should have a dedicated portal for configuring the CRM:
 - Low-code dashboard builder with SQL view/query data sources and reusable chart widgets.
 - Report builder and dashboard widgets.
 - Field-level and record-level permissions.
-- Backup, restore, and version history for low-code configuration.
+- Full-database backup and verified disaster-recovery restore procedures. Form Builder configuration version history and snapshot recovery are implemented.
 
 ### Dashboard Builder Direction
 
@@ -564,6 +567,8 @@ Keep maintaining these user fields in MySQL:
 - Added formula database columns and server-side formula evaluation for customer saves.
 - Added formula dependency validation, unknown field reference checks, circular-reference blocking, and dependency-order formula evaluation.
 - Added fullscreen/enlarge controls to pop-out modals.
+- Standardized large pop-out scrolling so headers and action footers remain fixed while the middle content scrolls, including fullscreen mode.
+- Converted Batch Edit, Field Properties, and Import/Export Mapping from centered pop-outs to consistent right-side Form Builder drawers.
 - Added module and field permission matrices with role/user grants and runtime enforcement for customer access and imports.
 - Added Import/Export Mapping controls for mapped Excel import headers, export headers, export visibility, and customer export downloads.
 

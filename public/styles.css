@@ -1039,6 +1039,43 @@ td {
   overflow: auto;
 }
 
+.modal-card.has-fixed-modal-regions {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.modal-card.has-fixed-modal-regions > .modal-header {
+  position: relative;
+  z-index: 2;
+  margin: 0;
+  padding: var(--panel-pad);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.modal-card.has-fixed-modal-regions > .modal-scroll-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  display: grid;
+  align-content: start;
+  gap: clamp(10px, 0.97vh, 14px);
+  padding: var(--panel-pad);
+}
+
+.modal-card.has-fixed-modal-regions > .form-actions {
+  position: relative;
+  z-index: 2;
+  justify-content: flex-end;
+  margin: 0;
+  padding: var(--panel-pad);
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
 .modal-card.is-fullscreen {
   width: 100%;
   height: 100%;
@@ -1051,7 +1088,8 @@ td {
 .modal-card.is-fullscreen > .table-wrap,
 .modal-card.is-fullscreen > [id$="FormFields"],
 .modal-card.is-fullscreen > .field-config-grid,
-.modal-card.is-fullscreen > .formula-builder-grid {
+.modal-card.is-fullscreen > .formula-builder-grid,
+.modal-card.is-fullscreen > .modal-scroll-body {
   flex: 1;
   min-height: 0;
 }
@@ -1248,6 +1286,60 @@ td {
 
 .import-export-mapping-modal-card {
   width: min(100%, 980px);
+}
+
+.form-builder-tool-drawer {
+  width: min(100%, clamp(900px, 62vw, 1180px));
+  height: 100vh;
+  border-radius: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  box-shadow: -16px 0 34px rgba(15, 23, 42, 0.22);
+  animation: drawer-in 180ms ease-out;
+}
+
+.form-builder-tool-drawer.is-fullscreen {
+  width: 100%;
+  box-shadow: none;
+}
+
+.form-builder-tool-drawer > .modal-header,
+.form-builder-tool-drawer > .form-actions {
+  margin: 0;
+  padding: 18px 22px;
+  background: #fff;
+}
+
+.form-builder-tool-drawer > .modal-header {
+  border-bottom: 1px solid var(--line);
+}
+
+.form-builder-tool-drawer > .form-actions {
+  border-top: 1px solid var(--line);
+}
+
+.form-builder-tool-body {
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  padding: 20px 22px 32px;
+  background: #f4f7fa;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 14px;
+}
+
+.form-builder-tool-body > .table-wrap {
+  margin: 0;
+  background: #fff;
+}
+
+.batch-field-drawer {
+  width: min(100%, clamp(1080px, 68vw, 1320px));
 }
 
 .drawer-backdrop {
@@ -2171,7 +2263,7 @@ td {
 }
 
 .batch-table-wrap {
-  min-height: 360px;
+  min-height: 0;
 }
 
 .batch-field-table {
@@ -2209,7 +2301,7 @@ td {
 }
 
 .field-properties-wrap {
-  min-height: 360px;
+  min-height: 0;
 }
 
 .field-properties-table {
@@ -2227,7 +2319,7 @@ td {
 }
 
 .import-export-mapping-wrap {
-  min-height: 420px;
+  min-height: 0;
 }
 
 .import-export-mapping-table {
@@ -3200,6 +3292,107 @@ td {
   padding: 16px;
 }
 
+.version-history-drawer {
+  width: min(100%, clamp(620px, 44vw, 820px));
+  height: 100vh;
+  border-radius: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  box-shadow: -16px 0 34px rgba(15, 23, 42, 0.22);
+  animation: drawer-in 180ms ease-out;
+}
+
+.version-history-drawer.is-fullscreen {
+  width: 100%;
+  box-shadow: none;
+}
+
+.version-history-drawer > .modal-header,
+.version-history-drawer > .form-actions {
+  padding: 18px 22px;
+  margin: 0;
+  background: #fff;
+}
+
+.version-history-drawer > .modal-header { border-bottom: 1px solid var(--line); }
+.version-history-drawer > .form-actions { border-top: 1px solid var(--line); }
+
+.version-history-body {
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  padding: 20px 22px 32px;
+  background: #f4f7fa;
+}
+
+.version-checkpoint-card,
+.version-history-section {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+  padding: 18px;
+}
+
+.version-checkpoint-card {
+  display: grid;
+  gap: 14px;
+  border-left: 4px solid var(--primary);
+}
+
+.version-checkpoint-card h3,
+.version-history-section h3 { margin: 2px 0 3px; }
+.version-history-section { margin-top: 16px; }
+
+.section-heading-row,
+.version-timeline-heading,
+.version-timeline-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.version-timeline { display: grid; margin-top: 16px; }
+.version-timeline-item { position: relative; display: grid; grid-template-columns: 22px minmax(0, 1fr); }
+.version-timeline-item::before {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 14px;
+  bottom: -14px;
+  width: 2px;
+  background: #d8e2ea;
+}
+.version-timeline-item:last-child::before { display: none; }
+.version-timeline-marker {
+  position: relative;
+  z-index: 1;
+  width: 16px;
+  height: 16px;
+  margin-top: 12px;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  background: #8ba0b2;
+  box-shadow: 0 0 0 1px #b9c6d1;
+}
+.version-timeline-item.is-current .version-timeline-marker { background: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+.version-timeline-card {
+  margin: 0 0 14px 4px;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+.version-timeline-heading > div { display: flex; align-items: center; gap: 8px; }
+.version-timeline-heading time,
+.version-timeline-meta { color: var(--muted); font-size: 12px; }
+.version-timeline-card p { margin: 10px 0; }
+.version-timeline-card .form-actions { margin-top: 12px; }
+.version-history-empty { display: grid; gap: 4px; padding: 28px 16px; color: var(--muted); text-align: center; }
+
 .page-permission-intro {
   margin: 0;
 }
@@ -3697,6 +3890,24 @@ td {
   text-align: left;
 }
 
+.formula-variable-group {
+  display: grid;
+  gap: 6px;
+}
+
+.formula-variable-group + .formula-variable-group {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.formula-variable-group-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .formula-badge {
   display: inline-flex;
   align-items: center;
@@ -3858,7 +4069,9 @@ td {
 }
 
 .modal-card.is-fullscreen .fullscreen-button::before,
+.form-builder-tool-drawer.is-fullscreen .fullscreen-button::before,
 .form-design-drawer.is-fullscreen .fullscreen-button::before,
+.version-history-drawer.is-fullscreen .fullscreen-button::before,
 .page-permission-drawer.is-fullscreen .fullscreen-button::before,
 .api-connector-drawer.is-fullscreen .fullscreen-button::before,
 .api-interface-drawer.is-fullscreen .fullscreen-button::before {
@@ -3868,7 +4081,9 @@ td {
 }
 
 .modal-card.is-fullscreen .fullscreen-button::after,
+.form-builder-tool-drawer.is-fullscreen .fullscreen-button::after,
 .form-design-drawer.is-fullscreen .fullscreen-button::after,
+.version-history-drawer.is-fullscreen .fullscreen-button::after,
 .page-permission-drawer.is-fullscreen .fullscreen-button::after,
 .api-connector-drawer.is-fullscreen .fullscreen-button::after,
 .api-interface-drawer.is-fullscreen .fullscreen-button::after {

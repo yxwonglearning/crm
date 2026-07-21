@@ -403,6 +403,7 @@
                       <p>Configure module fields, table columns, forms, and import columns.</p>
                     </div>
                     <div class="toolbar-actions">
+                      <button type="button" class="secondary" id="versionHistoryButton">Version History</button>
                       <button type="button" class="secondary" id="addFormBuilderButton">Add Form</button>
                     </div>
                   </div>
@@ -1054,32 +1055,37 @@
             </form>
           </div>
 
-          <div id="batchFieldModal" class="modal-backdrop" hidden>
-            <form id="batchFieldForm" class="panel modal-card batch-field-modal-card">
+          <div id="batchFieldModal" class="modal-backdrop drawer-backdrop" hidden>
+            <form id="batchFieldForm" class="panel form-builder-tool-drawer batch-field-drawer" aria-label="Batch Edit Fields">
               <div class="modal-header">
-                <h2>Batch Edit Fields</h2>
+                <div>
+                  <span class="eyebrow">Form Builder</span>
+                  <h2>Batch Edit Fields</h2>
+                  <p class="muted">Add and maintain fields one table at a time.</p>
+                </div>
                 <div class="modal-title-actions">
                   <button type="button" class="icon-button fullscreen-button" data-modal-fullscreen aria-label="Enlarge to full screen" aria-pressed="false" title="Enlarge to full screen"></button>
                   <button type="button" class="icon-button" id="closeBatchFieldModal" aria-label="Close">x</button>
                 </div>
               </div>
-              <div class="batch-tabs">
-                <div id="batchTableTabs" class="tab-strip"></div>
-                <button type="button" class="icon-button" id="addDetailTableTab" aria-label="Add detail table">+</button>
-              </div>
-              <div class="batch-toolbar">
-                <strong id="batchActiveTableLabel">Main Table</strong>
-                <div class="toolbar-actions">
-                  <button type="button" class="secondary" id="showArchivedBatchFields">Archived</button>
-                  <button type="button" class="secondary" id="restoreSelectedBatchFields" hidden disabled>Restore</button>
-                  <button type="button" class="secondary" id="duplicateSelectedBatchFields" disabled>Duplicate</button>
-                  <button type="button" class="secondary" id="archiveSelectedBatchFields" disabled>Archive</button>
-                  <button type="button" class="danger-button" id="deleteSelectedBatchFields" disabled>Delete</button>
-                  <button type="button" class="secondary" id="addBatchFieldRow">Add Row</button>
+              <div class="form-builder-tool-body">
+                <div class="batch-tabs">
+                  <div id="batchTableTabs" class="tab-strip"></div>
+                  <button type="button" class="icon-button" id="addDetailTableTab" aria-label="Add detail table">+</button>
                 </div>
-              </div>
-              <div class="table-wrap batch-table-wrap">
-                <table class="batch-field-table">
+                <div class="batch-toolbar">
+                  <strong id="batchActiveTableLabel">Main Table</strong>
+                  <div class="toolbar-actions">
+                    <button type="button" class="secondary" id="showArchivedBatchFields">Archived</button>
+                    <button type="button" class="secondary" id="restoreSelectedBatchFields" hidden disabled>Restore</button>
+                    <button type="button" class="secondary" id="duplicateSelectedBatchFields" disabled>Duplicate</button>
+                    <button type="button" class="secondary" id="archiveSelectedBatchFields" disabled>Archive</button>
+                    <button type="button" class="danger-button" id="deleteSelectedBatchFields" disabled>Delete</button>
+                    <button type="button" class="secondary" id="addBatchFieldRow">Add Row</button>
+                  </div>
+                </div>
+                <div class="table-wrap batch-table-wrap">
+                  <table class="batch-field-table">
                   <thead>
                     <tr>
                       <th class="batch-select-column">
@@ -1097,26 +1103,32 @@
                     </tr>
                   </thead>
                   <tbody id="batchFieldRows"></tbody>
-                </table>
+                  </table>
+                </div>
               </div>
-              <div class="form-actions">
+              <div class="form-actions end-actions">
                 <button type="submit" id="saveBatchFieldsButton">Save Changes</button>
                 <button type="button" class="secondary" id="cancelBatchFieldsButton">Cancel</button>
               </div>
             </form>
           </div>
 
-          <div id="fieldPropertiesModal" class="modal-backdrop" hidden>
-            <form id="fieldPropertiesForm" class="panel modal-card field-properties-modal-card">
+          <div id="fieldPropertiesModal" class="modal-backdrop drawer-backdrop" hidden>
+            <form id="fieldPropertiesForm" class="panel form-builder-tool-drawer" aria-label="Field Read and Write Properties">
               <div class="modal-header">
-                <h2>Field Read/Write Properties</h2>
+                <div>
+                  <span class="eyebrow">Form Builder</span>
+                  <h2>Field Read/Write Properties</h2>
+                  <p class="muted">Control how each field appears and accepts input.</p>
+                </div>
                 <div class="modal-title-actions">
                   <button type="button" class="icon-button fullscreen-button" data-modal-fullscreen aria-label="Enlarge to full screen" aria-pressed="false" title="Enlarge to full screen"></button>
                   <button type="button" class="icon-button" id="closeFieldPropertiesModal" aria-label="Close">x</button>
                 </div>
               </div>
-              <div class="table-wrap field-properties-wrap">
-                <table class="field-properties-table">
+              <div class="form-builder-tool-body">
+                <div class="table-wrap field-properties-wrap">
+                  <table class="field-properties-table">
                   <thead>
                     <tr>
                       <th>Field Name</th>
@@ -1128,7 +1140,8 @@
                     </tr>
                   </thead>
                   <tbody id="fieldPropertiesRows"></tbody>
-                </table>
+                  </table>
+                </div>
               </div>
               <div class="form-actions end-actions">
                 <button type="submit" id="saveFieldPropertiesButton">Save</button>
@@ -1137,17 +1150,22 @@
             </form>
           </div>
 
-          <div id="importExportMappingModal" class="modal-backdrop" hidden>
-            <form id="importExportMappingForm" class="panel modal-card import-export-mapping-modal-card">
+          <div id="importExportMappingModal" class="modal-backdrop drawer-backdrop" hidden>
+            <form id="importExportMappingForm" class="panel form-builder-tool-drawer" aria-label="Import and Export Mapping">
               <div class="modal-header">
-                <h2>Import/Export Mapping</h2>
+                <div>
+                  <span class="eyebrow">Form Builder</span>
+                  <h2>Import/Export Mapping</h2>
+                  <p class="muted">Choose included fields and define their external column names.</p>
+                </div>
                 <div class="modal-title-actions">
                   <button type="button" class="icon-button fullscreen-button" data-modal-fullscreen aria-label="Enlarge to full screen" aria-pressed="false" title="Enlarge to full screen"></button>
                   <button type="button" class="icon-button" id="closeImportExportMappingModal" aria-label="Close">x</button>
                 </div>
               </div>
-              <div class="table-wrap import-export-mapping-wrap">
-                <table class="import-export-mapping-table">
+              <div class="form-builder-tool-body">
+                <div class="table-wrap import-export-mapping-wrap">
+                  <table class="import-export-mapping-table">
                   <thead>
                     <tr>
                       <th>Field</th>
@@ -1158,7 +1176,8 @@
                     </tr>
                   </thead>
                   <tbody id="importExportMappingRows"></tbody>
-                </table>
+                  </table>
+                </div>
               </div>
               <div class="form-actions end-actions">
                 <button type="submit" id="saveImportExportMappingButton">Save</button>
@@ -1308,6 +1327,51 @@
                 <button type="button" class="secondary" id="cancelFormulaButton">Cancel</button>
               </div>
             </form>
+          </div>
+
+          <div id="versionHistoryDrawer" class="modal-backdrop drawer-backdrop" hidden>
+            <aside class="panel version-history-drawer" aria-label="Configuration Version History">
+              <div class="modal-header">
+                <div>
+                  <span class="eyebrow">Configuration history</span>
+                  <h2 id="versionHistoryTitle">Version History</h2>
+                  <p class="muted">Save named checkpoints and recover an earlier configuration safely.</p>
+                </div>
+                <div class="modal-title-actions">
+                  <button type="button" class="icon-button fullscreen-button" data-modal-fullscreen aria-label="Enlarge to full screen" aria-pressed="false" title="Enlarge to full screen"></button>
+                  <button type="button" class="icon-button" id="closeVersionHistoryDrawer" aria-label="Close">x</button>
+                </div>
+              </div>
+              <div class="version-history-body">
+                <section class="version-checkpoint-card">
+                  <div>
+                    <span class="eyebrow">New checkpoint</span>
+                    <h3>Save current configuration</h3>
+                    <p class="muted">Add a remark that explains what changed in this version.</p>
+                  </div>
+                  <label>
+                    Remark
+                    <textarea id="versionHistoryRemark" rows="3" maxlength="255" placeholder="Example: Added billing fields and updated the Edit form"></textarea>
+                  </label>
+                  <div class="form-actions end-actions">
+                    <button type="button" id="createConfigVersionButton">Save Version</button>
+                  </div>
+                </section>
+                <section class="version-history-section">
+                  <div class="section-heading-row">
+                    <div>
+                      <span class="eyebrow">Saved versions</span>
+                      <h3>Configuration timeline</h3>
+                    </div>
+                    <span class="muted" id="versionHistoryCount">0 versions</span>
+                  </div>
+                  <div class="version-timeline" id="versionHistoryList"></div>
+                </section>
+              </div>
+              <div class="form-actions end-actions">
+                <button type="button" class="secondary" id="closeVersionHistoryFooter">Close</button>
+              </div>
+            </aside>
           </div>
 
           <div id="fieldLinkageModal" class="modal-backdrop" hidden>

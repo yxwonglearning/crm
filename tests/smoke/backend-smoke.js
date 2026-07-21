@@ -363,6 +363,19 @@ async function main() {
     detailTableName = findField(configResponse.body, 'lineNote').detailTableName;
     assert.ok(detailTableName, 'Detail field should create a detail table');
 
+    configResponse = await request('POST', `/api/sysadmin/modules/${createdModuleKey}/fields`, {
+      json: {
+        label: 'Line Amount Double',
+        type: 'decimals',
+        tableType: 'detail',
+        detailTableName,
+        formulaExpression: '{amount} * 2',
+        formulaEnabled: true,
+        disableManualInput: true
+      }
+    });
+    expectStatus(configResponse, 201, 'create detail formula field');
+
     const layout = {
       order: ['title', 'amount', 'amountDouble', 'lineNote'],
       hidden: [],
@@ -373,6 +386,34 @@ async function main() {
     expectStatus(draft, 200, 'save draft layout');
     const published = await request('POST', `/api/sysadmin/modules/${createdModuleKey}/form-layouts/publish/add`, { json: layout });
     expectStatus(published, 200, 'publish layout');
+
+    const versionHistory = await request('GET', `/api/sysadmin/modules/${createdModuleKey}/config-history`);
+    expectStatus(versionHistory, 200, 'list configuration versions');
+    assert.ok(versionHistory.body.versions.length >= 1, 'Configuration history should include a baseline');
+    const savedVersion = await request('POST', `/api/sysadmin/modules/${createdModuleKey}/config-history/versions`, {
+      json: { remark: 'Smoke checkpoint before title update' }
+    });
+    expectStatus(savedVersion, 201, 'save configuration version');
+    assert.equal(savedVersion.body.versions[0].summary, 'Smoke checkpoint before title update');
+    const savedVersionId = savedVersion.body.versions[0].id;
+    const savedVersionNumber = savedVersion.body.versions[0].versionNumber;
+
+    const changedTitle = await request('PATCH', `/api/sysadmin/modules/${createdModuleKey}/fields/title`, {
+      json: { label: 'Changed Title' }
+    });
+    expectStatus(changedTitle, 200, 'change field after version checkpoint');
+    assert.equal(findField(changedTitle.body, 'title').label, 'Changed Title');
+
+    const restoredConfig = await request('POST', `/api/sysadmin/modules/${createdModuleKey}/config-history/${savedVersionId}/rollback`, {
+      json: { remark: 'Smoke restore verification' }
+    });
+    expectStatus(restoredConfig, 200, 'restore configuration version');
+    assert.equal(findField(restoredConfig.body, 'title').label, 'Title');
+    const historyAfterRestore = await request('GET', `/api/sysadmin/modules/${createdModuleKey}/config-history`);
+    expectStatus(historyAfterRestore, 200, 'list history after restore');
+    assert.equal(historyAfterRestore.body.versions[0].action, 'version.restore');
+    assert.equal(historyAfterRestore.body.versions[0].summary, `Restored version ${savedVersionNumber}: Smoke restore verification`);
+    assert.notEqual(historyAfterRestore.body.versions[0].id, savedVersionId, 'Restore should create a new immutable version');
 
     const browsers = await request('GET', '/api/browser-buttons');
     expectStatus(browsers, 200, 'browser buttons list');
@@ -460,6 +501,7 @@ async function main() {
     createdRecordIds.push(recordId);
     assert.equal(create.body.record.customFields.amountDouble, 25);
     assert.equal(create.body.record.detailTables[detailTableName][0].lineNote, 'Detail row smoke');
+    assert.equal(Number(create.body.record.detailTables[detailTableName][0].lineAmountDouble), 25);
 
     const detail = await request('GET', `/api/modules/${createdModuleKey}/records/${recordId}`);
     expectStatus(detail, 200, 'get module record detail');
@@ -476,6 +518,7 @@ async function main() {
     });
     expectStatus(update, 200, 'update module record');
     assert.equal(update.body.record.customFields.amountDouble, 40);
+    assert.equal(Number(update.body.record.detailTables[detailTableName][0].lineAmountDouble), 40);
 
     const search = await request('GET', `/api/modules/${createdModuleKey}/records?search=${encodeURIComponent(runId)}`);
     expectStatus(search, 200, 'generated module quick search');
