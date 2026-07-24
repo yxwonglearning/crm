@@ -278,7 +278,15 @@ Admins should have a dedicated portal for configuring the CRM:
    - Track workflow approvals with decision, comments, and audit trail.
    - Keep product roadmap and other entity data in their own modules (customers, roadmap items, etc.).
    - Use shared form-builder metadata for workflow form UI and validation.
-   - Later add branching conditions, conditional approvers, escalation, and SLA tracking.
+   - Make Approval Workflow module-independent so the same engine can govern CRM, HCM, payroll, finance, procurement, and other future ERP records.
+   - Support sequential and parallel approval steps, role/user/manager-based approvers, conditional approvers, and approval-authority limits.
+   - Support approve, reject, return for correction, resubmit, withdraw, cancel, delegate, and substitute-approver actions.
+   - Support approval comments, attachments, reminders, escalation, due dates, SLA tracking, and controlled reassignment.
+   - Version workflow definitions so in-flight and historical instances retain the exact steps, rules, and approvers that applied when they started.
+   - Lock or restrict protected record changes while approval is pending and define controlled behavior when the source record is amended.
+   - Preserve an immutable decision history containing the workflow version, step, actor, delegated actor, decision, comment, timestamp, and relevant record snapshot.
+   - Publish workflow lifecycle events that Automation Flow can consume for notifications, task creation, integrations, status updates, and other follow-up actions.
+   - Keep the responsibility boundary explicit: Approval Workflow decides whether a business action is authorized; it does not replace leave entitlement, attendance evaluation, benefit eligibility, or payroll calculation engines.
 9. Phase 9: AI Agent Assistant - planned
    - Add an AI assistant panel to the admin portal for form and workflow generation.
    - Support natural-language prompts to suggest form fields, workflow steps, and validation rules.
@@ -287,6 +295,110 @@ Admins should have a dedicated portal for configuring the CRM:
    - Parse and validate AI output strictly against existing schema before persistence.
    - Start with prompt-driven suggestions; add fine-tuning or templates if needed later.
    - Later add domain examples, knowledge base integration, and user feedback loops.
+10. Phase 10: HCM Foundation and Core HR - planned
+   - Expand the CRM toward an ERP by introducing Human Capital Management as a separate product domain, with payroll as the primary business focus.
+   - Keep system user accounts and employee records separate but linkable. An employee may exist without login access, and a system user may exist without an employment relationship.
+   - Add an effective-dated employee master covering legal and preferred identity, contact and emergency-contact details, employment status, employment type, hire and service dates, probation, confirmation, transfer, promotion, termination, rehire, and employment history.
+   - Link employees to company/legal entity, organization unit, department, position, job, grade, work location, cost centre, reporting manager, and workforce hierarchy.
+   - Store bank-payment instructions, tax identifiers, statutory-registration details, dependants, beneficiaries, and employee documents with appropriate masking and expiry reminders.
+   - Provide HR administrator, employee self-service, and manager self-service experiences with role-appropriate visibility and actions.
+   - Reuse the existing organization hierarchy, Form Builder, approval workflows, permissions, automation, audit logging, dashboards, import/export, and `staff_id` linkage where appropriate.
+   - Use Approval Workflow for controlled hire, employee-data change, transfer, promotion, probation confirmation, termination, rehire, document exception, and other organization-defined HR decisions.
+   - Apply effective dating to employment and compensation changes so payroll and compliance reports reproduce the facts that were valid for a historical pay period.
+11. Phase 11: Time, Attendance, Scheduling, and Leave - planned
+   - Configure work calendars, workweeks, shifts, rosters, rest days, public-holiday calendars, and employee schedule assignments by company and location.
+   - Capture clock-in/out events, timesheets, breaks, lateness, early departure, absence, overtime, attendance corrections, and manager approvals.
+   - Support leave types, eligibility, entitlement, accrual, proration, carry-forward, expiry, encashment, half-day or hourly leave, attachments, and approval workflows.
+   - Maintain leave balances and attendance exceptions with complete adjustment history rather than overwriting prior balances.
+   - Use Approval Workflow for leave, overtime, timesheet, attendance-correction, roster-change, and period-reopening requests, including conditional HR or payroll approval where policy requires it.
+   - Lock approved attendance and leave inputs by payroll period while providing a controlled correction and reopening process.
+   - Keep external biometric devices, scheduling systems, and attendance providers behind reusable integration interfaces.
+12. Phase 12: HCM Payroll - planned and prioritized
+   - Select one initial payroll jurisdiction before implementation and document its tax, statutory contributions, mandatory leave, payslip, payment, reporting, rounding, retention, and year-end requirements.
+   - Build a country-extensible payroll engine with separately versioned jurisdiction rule packs rather than embedding country rules directly in the shared calculation engine.
+   - Configure legal entities, pay groups, payroll calendars, pay frequencies, cut-off dates, currencies, rounding rules, and employee payroll assignments.
+   - Maintain effective-dated salary and compensation history, recurring and one-off earnings, allowances, bonuses, commissions, overtime, reimbursements, benefits in kind, deductions, loans, advances, garnishments, employer contributions, and taxable treatments.
+   - Calculate proration for joiners, leavers, salary changes, unpaid leave, and mid-period transfers.
+   - Support gross-to-net calculation, retroactive pay, back pay, adjustments, off-cycle payroll, final pay, termination payments, and controlled recalculation.
+   - Provide payroll input validation, exception reporting, variance analysis, control totals, employee-level calculation explanations, and pre-payroll reconciliation.
+   - Use Approval Workflow for payroll input exceptions, payroll run review, final approval, release, reopening, off-cycle runs, and sensitive configuration changes.
+   - Enforce maker-checker segregation and approval-authority limits between payroll preparation, review, approval, release, reopening, and configuration.
+   - Lock finalized payroll periods and preserve immutable calculation results, rule versions, inputs, overrides, approvals, and audit history.
+   - Generate payslips, bank or payment files, statutory reports, accounting journals, cost-centre postings, payroll registers, and year-end outputs.
+   - Support secure employee payslip access and controlled bulk delivery without exposing one employee's payroll information to another.
+13. Phase 13: Benefits and Compensation - planned
+   - Configure benefit plans, providers, eligibility rules, coverage levels, enrolment windows, employer and employee contributions, waiting periods, and effective dates.
+   - Support medical, insurance, pension, flexible-benefit, allowance, and other organization-defined plans.
+   - Maintain dependant and beneficiary coverage, life-event changes, enrolment history, and payroll deduction or taxable-benefit integration.
+   - Use Approval Workflow for benefit enrolment and change requests, eligibility exceptions, claims where implemented, and compensation-review proposals.
+   - Add benefits claims directly or through provider integrations after core enrolment is stable.
+   - Configure job grades, salary structures, pay ranges, compensation components, increment cycles, salary-review budgets, proposals, approvals, and employee statements.
+14. Phase 14: Recruitment, Onboarding, Probation, and Offboarding - planned
+   - Add manpower requisitions, position and budget approval, job postings, candidate profiles, applicant tracking, interview scheduling, assessments, selection decisions, and offer approval.
+   - Convert an accepted candidate into an employee record without duplicate data entry while retaining appropriate recruitment history and consent controls.
+   - Use Approval Workflow for manpower requisitions, position and budget approval, candidate selection, offer approval, onboarding exceptions, probation outcomes, resignation or termination, and offboarding clearance.
+   - Configure pre-employment checks, document collection, onboarding checklists, orientation, policy acknowledgement, equipment, workspace, account provisioning, and assigned owners.
+   - Track probation objectives, reviews, extensions, confirmation decisions, and reminders.
+   - Support resignation, termination, final-day changes, clearance, access removal, asset return, knowledge transfer, exit interviews, final payroll inputs, and rehire eligibility.
+15. Phase 15: Learning, Performance, Skills, and Talent - planned
+   - Maintain skills, competencies, proficiency levels, certifications, licences, expiry dates, and employee development profiles.
+   - Configure course catalogues, sessions, trainers, enrolment, attendance, completion, assessment, cost, learning history, and mandatory-training reminders.
+   - Use Approval Workflow for employee training requests, manager or budget approval, certification exceptions, performance-review moderation, and development-plan approval where required.
+   - Support goals, competencies, review cycles, self-assessment, manager assessment, moderation, acknowledgement, development plans, and performance history.
+   - Add succession planning, talent pools, career paths, and workforce planning after the core learning and performance records are stable.
+
+### HCM And Payroll Delivery Principles
+
+- Payroll is the priority, but Core HR, effective-dated employment, compensation, attendance, and leave provide the trusted inputs required for correct payroll.
+- Use the existing low-code Module Builder, Form Builder, generated pages, permissions, import/export, dashboards, and Automation Flow for configurable HCM records and administrative processes wherever they meet the requirement.
+- Use the Phase 8 Approval Workflow as the shared decision engine for Core HR, recruitment, onboarding, offboarding, training, benefits, performance, compensation, leave, attendance, overtime, and payroll approvals instead of creating separate approval runtimes for each HCM module.
+- Keep responsibilities separated: HCM modules own business records, Approval Workflow owns human decisions and decision history, Automation Flow owns follow-up actions and integrations, and specialist engines own entitlement, eligibility, attendance, and payroll calculations.
+- Start with one country-complete payroll implementation. Confirm the initial jurisdiction during discovery instead of assuming statutory rules, then add other countries through versioned rule packs.
+- Treat employee identity, employment, job assignment, compensation, benefits, attendance, leave, and payroll results as related but separate domains with explicit effective dates and ownership.
+- Apply privacy by design: field masking, least-privilege access, consent where applicable, retention controls, audit trails, encryption, and segregation of HR, payroll preparer, approver, payment releaser, employee, and manager duties.
+- Never silently overwrite finalized payroll results. Corrections must use controlled reopening, adjustment, retroactive, or off-cycle processes with reasons and audit history.
+- Reconcile payroll through input totals, gross-to-net totals, variance thresholds, payment totals, statutory liabilities, and accounting journals before release.
+- Make statutory rules and rates configurable, versioned, testable, and attributable to their effective dates and source authority.
+- Include multi-company, multi-location, multi-currency, localization, and integration boundaries in the architecture even when the first release supports only one jurisdiction.
+
+### HCM Low-Code, Approval Workflow, And Specialist-Engine Boundaries
+
+Recommended shared processing model:
+
+```text
+Low-code HCM module and form
+        |
+        v
+Approval Workflow: human decision, authority, comments, and audit history
+        |
+        v
+Automation Flow: notifications, tasks, record updates, and integrations
+        |
+        v
+Specialist HCM engine where required: entitlement, eligibility, attendance, or payroll calculation
+```
+
+- `Core HR`: low-code can manage employee-facing forms, supporting records, checklists, documents, and configurable HR requests. Approval Workflow governs hire, change, transfer, promotion, confirmation, termination, and rehire decisions. The effective-dated employee and employment system of record remains a dedicated HCM domain.
+- `Recruitment`: low-code can manage candidates, applications, interviews, assessments, offers, and hiring stages. Approval Workflow governs requisitions, position or budget approval, selection, and offers. Automation Flow sends reminders and creates onboarding work.
+- `Onboarding and offboarding`: low-code can manage checklists, documents, equipment, accounts, owners, deadlines, clearance, and status. Approval Workflow governs exceptions, probation outcomes, resignation or termination, and final clearance. Automation Flow assigns tasks and invokes downstream integrations.
+- `Training and learning`: low-code can manage courses, sessions, enrolment, attendance, certifications, expiry, and learning history. Approval Workflow governs training requests, budgets, exceptions, and required acknowledgements.
+- `Benefits`: low-code can manage plans, enrolment requests, dependants, beneficiaries, evidence, and employee selections. Approval Workflow governs enrolment changes and exceptions; a specialist benefits service determines complex eligibility, contributions, taxable treatment, and claims.
+- `Performance and compensation`: low-code can manage goals, review forms, ratings, comments, development plans, salary proposals, and review-cycle records. Approval Workflow governs moderation, acknowledgement, budgets, salary proposals, and final decisions. Dedicated effective-dated compensation records feed payroll.
+- `Leave, attendance, timesheets, and overtime`: low-code can manage requests, manual inputs, corrections, evidence, and status. Approval Workflow governs requests and exceptions. Dedicated engines calculate accruals, balances, schedules, qualifying hours, premiums, and payroll-period locks.
+- `Payroll`: low-code can manage input collection, exception queues, review screens, approvals, dashboards, and controlled output access. Approval Workflow governs review, approval, release, reopening, off-cycle runs, and configuration changes. A dedicated payroll engine performs gross-to-net, statutory, proration, retroactive, reconciliation, finalization, payment, and year-end processing.
+
+### Recommended Payroll-First HCM Delivery Order
+
+1. Confirm the initial country, legal entities, workforce policies, statutory obligations, payroll controls, and accounting requirements.
+2. Implement the Core HR employee master, employment lifecycle, organization/job assignments, sensitive-data permissions, and effective dating.
+3. Implement payroll configuration, compensation components, employee payroll assignments, and versioned country rule packs.
+4. Implement leave, attendance, overtime, timesheets, and approved payroll-input cut-offs.
+5. Implement gross-to-net calculation, proration, retroactive pay, off-cycle pay, final pay, and employee-level calculation explanations.
+6. Implement validation, exception handling, variance reporting, maker-checker approval, locking, reopening, and immutable audit history.
+7. Implement payslips, payment files, accounting journals, payroll registers, statutory reports, reconciliation, and year-end processing.
+8. Implement employee and manager self-service, notifications, dashboards, secure document delivery, and operational reporting.
+9. Add benefits and compensation-review capabilities.
+10. Add recruitment, onboarding, probation, offboarding, learning, performance, skills, succession, and workforce planning.
 
 ### Extra Platform Features To Add
 
