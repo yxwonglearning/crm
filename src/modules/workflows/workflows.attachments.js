@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const path = require('path');
+const net = require('net');
 const { AppError } = require('../../shared/errors');
 
 const safeMimeTypes = new Set([
@@ -40,8 +41,51 @@ function validateFiles(files = [], policy = {}, purpose) {
   });
 }
 
+function scanWithClamAv(data, options = {}) {
+  const host = options.host || process.env.WORKFLOW_CLAMAV_HOST || '127.0.0.1';
+  const port = Number(options.port || process.env.WORKFLOW_CLAMAV_PORT || 3310);
+  const timeoutMs = Number(options.timeoutMs || process.env.WORKFLOW_CLAMAV_TIMEOUT_MS || 15000);
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection({ host, port });
+    const chunks = [];
+    socket.setTimeout(timeoutMs);
+    socket.on('connect', () => {
+      socket.write('zINSTREAM\0');
+      for (let offset = 0; offset < data.length; offset += 65536) {
+        const chunk = data.subarray(offset, offset + 65536);
+        const length = Buffer.alloc(4); length.writeUInt32BE(chunk.length); socket.write(length); socket.write(chunk);
+      }
+      socket.end(Buffer.alloc(4));
+    });
+    socket.on('data', (chunk) => chunks.push(chunk));
+    socket.on('timeout', () => socket.destroy(new Error('Malware scanner timed out')));
+    socket.on('error', reject);
+    socket.on('close', () => {
+      const response = Buffer.concat(chunks).toString('utf8').replace(/\0/g, '').trim();
+      if (/\bOK$/.test(response)) resolve({ status: 'clean', engine: 'clamav', result: response });
+      else if (/FOUND$/.test(response)) resolve({ status: 'infected', engine: 'clamav', result: response });
+      else reject(new Error(response || 'Malware scanner returned no result'));
+    });
+  });
+}
+
+async function validateAndScanFiles(files = [], policy = {}, purpose, options = {}) {
+  const validated = validateFiles(files, policy, purpose);
+  if (!policy.malwareScanRequired) return validated.map((file) => ({ ...file, scanStatus: 'not_required', scanEngine: null, scanResult: null, scannedAt: null }));
+  const scan = options.scan || scanWithClamAv;
+  const results = [];
+  for (const file of validated) {
+    let verdict;
+    try { verdict = await scan(file.data, options); }
+    catch (error) { throw attachmentError('Attachment remains quarantined because malware scanning is unavailable.', 'WORKFLOW_ATTACHMENT_SCAN_UNAVAILABLE', { reason: error.message }); }
+    if (verdict.status !== 'clean') throw attachmentError('Attachment was quarantined because malware was detected.', 'WORKFLOW_ATTACHMENT_INFECTED', { result: verdict.result });
+    results.push({ ...file, scanStatus: 'clean', scanEngine: verdict.engine || 'configured', scanResult: verdict.result || 'OK', scannedAt: new Date() });
+  }
+  return results;
+}
+
 function submissionPolicy(version) {
   return version?.snapshot?.builderGraph?.nodes?.find((node) => node.type === 'start')?.attachmentPolicy || { mode: 'disabled' };
 }
 
-module.exports = { cleanFileName, policyAllows, safeMimeTypes, submissionPolicy, validateFiles };
+module.exports = { cleanFileName, policyAllows, safeMimeTypes, scanWithClamAv, submissionPolicy, validateAndScanFiles, validateFiles };

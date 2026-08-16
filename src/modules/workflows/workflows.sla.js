@@ -45,6 +45,21 @@ async function processStage(stage, now, repo = repository) {
         payload: eventPayload(stage, { escalationMode: policy.escalationMode || 'notify', overdueAt: now })
       });
     }
+    const recurring = policy.recurringOverdueReminder || {};
+    if (recurring.enabled) {
+      const repeatScale = unitMs[recurring.unit] || unitMs.hours;
+      const elapsed = now.getTime() - new Date(stage.dueAt).getTime();
+      const occurrence = Math.floor(elapsed / (Math.max(1, Number(recurring.every)) * repeatScale)) + 1;
+      const maxOccurrences = Math.min(Math.max(Number(recurring.maxOccurrences) || 1, 1), 100);
+      for (let index = 1; index <= Math.min(occurrence, maxOccurrences); index += 1) {
+        const created = await appendEventOnce(repo, {
+          eventKey: `workflow-sla-overdue-reminder:${stage.id}:${index}`,
+          eventType: 'workflow.reminder_due', instanceId: stage.instanceId, instanceStageId: stage.id,
+          payload: eventPayload(stage, { overdue: true, recurring: true, occurrence: index })
+        });
+        if (created) reminders += 1;
+      }
+    }
   }
   return { reminders, escalated };
 }

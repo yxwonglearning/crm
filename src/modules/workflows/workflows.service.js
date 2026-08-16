@@ -23,6 +23,7 @@ const safeAttachmentTypes = new Set([
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 ]);
 const selfApprovalPolicies = new Set(['error', 'auto_approve']);
+const approvalModes = new Set(['all', 'any', 'quorum']);
 const allowedEvents = new Set([
   'workflow.submitted', 'workflow.stage.started', 'workflow.stage.skipped',
   'workflow.stage.auto_approved', 'workflow.stage.approved', 'workflow.approved', 'workflow.rejected',
@@ -90,7 +91,8 @@ function normalizeAttachmentPolicy(policy = {}) {
     maxFileCount: Number(policy.maxFileCount || 0),
     actions: Array.isArray(policy.actions)
       ? [...new Set(policy.actions.map((value) => String(value).trim().toLowerCase()).filter(Boolean))]
-      : []
+      : [],
+    malwareScanRequired: Boolean(policy.malwareScanRequired)
   };
 }
 
@@ -108,7 +110,8 @@ function normalizeStage(stage = {}, index = 0) {
     decisionPolicy: {
       approvalRemark: stage.decisionPolicy?.approvalRemark === 'required' ? 'required' : 'optional',
       rejectionRemark: 'required',
-      returnRemark: 'required'
+      returnRemark: 'required',
+      quorum: Math.max(1, Number(stage.decisionPolicy?.quorum || stage.quorum || 1))
     },
     attachmentPolicy: normalizeAttachmentPolicy(stage.attachmentPolicy),
     slaPolicy: {
@@ -119,7 +122,20 @@ function normalizeStage(stage = {}, index = 0) {
         ? stage.slaPolicy.reminderOffsets.map(Number)
         : [],
       escalationMode: ['none', 'notify'].includes(stage.slaPolicy?.escalationMode) ? stage.slaPolicy.escalationMode : 'notify',
-      escalationApproverRule: stage.slaPolicy?.escalationApproverRule || null
+      escalationApproverRule: stage.slaPolicy?.escalationApproverRule || null,
+      recurringOverdueReminder: {
+        enabled: Boolean(stage.slaPolicy?.recurringOverdueReminder?.enabled),
+        every: Math.max(1, Number(stage.slaPolicy?.recurringOverdueReminder?.every || 1)),
+        unit: ['minutes', 'hours', 'days'].includes(stage.slaPolicy?.recurringOverdueReminder?.unit) ? stage.slaPolicy.recurringOverdueReminder.unit : 'hours',
+        maxOccurrences: Math.min(100, Math.max(1, Number(stage.slaPolicy?.recurringOverdueReminder?.maxOccurrences || 3)))
+      },
+      businessCalendar: {
+        enabled: Boolean(stage.slaPolicy?.businessCalendar?.enabled),
+        weekdays: Array.isArray(stage.slaPolicy?.businessCalendar?.weekdays) ? stage.slaPolicy.businessCalendar.weekdays.map(Number) : [1, 2, 3, 4, 5],
+        startTime: String(stage.slaPolicy?.businessCalendar?.startTime || '09:00'),
+        endTime: String(stage.slaPolicy?.businessCalendar?.endTime || '17:00'),
+        holidays: Array.isArray(stage.slaPolicy?.businessCalendar?.holidays) ? stage.slaPolicy.businessCalendar.holidays.map(String) : []
+      }
     },
     emailPolicy: {
       enabled: Boolean(stage.emailPolicy?.enabled),
@@ -173,7 +189,7 @@ function normalizeConfig(input = {}) {
                   type: String(field.type || 'textbox').trim(),
                   options: Array.isArray(field.options) ? field.options.slice(0, 200) : [],
                   required: Boolean(field.required),
-                  storage: field.storage === 'source' ? 'source' : 'decision',
+                  storage: ['source', 'detail'].includes(field.storage) ? field.storage : 'decision',
                   targetFieldKey: String(field.targetFieldKey || field.fieldKey || '').trim(),
                   exposeToAutomation: Boolean(field.exposeToAutomation)
                 })).filter((field) => field.fieldKey) : []
@@ -402,6 +418,7 @@ async function validateConfiguration(definition) {
         if (!availableFields.has(field.fieldKey) || responseKeys.has(field.fieldKey)) findings.push(errorFinding('WORKFLOW_CONFIG_RESPONSE_FIELD_INVALID', `${responsePath}.fields`, `Response field ${field.fieldKey} is unavailable or duplicated.`, 'Choose unique fields from a compatible source-module form.'));
         responseKeys.add(field.fieldKey);
         if (field.storage === 'source' && !fields.some((sourceField) => sourceField.fieldKey === field.targetFieldKey && sourceField.tableType !== 'detail')) findings.push(errorFinding('WORKFLOW_CONFIG_RESPONSE_MAPPING_INVALID', `${responsePath}.fields.${field.fieldKey}.targetFieldKey`, `Mapped source field ${field.targetFieldKey} does not exist or is not a main field.`, 'Choose an existing main source-module field.'));
+        if (field.storage === 'detail' && !fields.some((sourceField) => sourceField.fieldKey === field.targetFieldKey && sourceField.tableType === 'detail' && sourceField.detailTableName)) findings.push(errorFinding('WORKFLOW_CONFIG_RESPONSE_DETAIL_MAPPING_INVALID', `${responsePath}.fields.${field.fieldKey}.targetFieldKey`, `Mapped detail field ${field.targetFieldKey} is unavailable.`, 'Choose an existing detail-table field.'));
       }
     }
   }
@@ -449,9 +466,8 @@ async function validateConfiguration(definition) {
       findings.push(errorFinding('WORKFLOW_CONFIG_STAGE_ORDER_DUPLICATE', `${stagePath}.order`, `Stage order ${stage.order} is duplicated.`, 'Give every stage a unique order.'));
     }
     stageOrders.add(stage.order);
-    if (stage.approvalMode !== 'all') {
-      findings.push(errorFinding('WORKFLOW_CONFIG_APPROVAL_MODE_UNSUPPORTED', `${stagePath}.approvalMode`, 'Initial Phase 8 supports only all-approver stages.', 'Use all or defer this workflow until the later mode is implemented.'));
-    }
+    if (!approvalModes.has(stage.approvalMode)) findings.push(errorFinding('WORKFLOW_CONFIG_APPROVAL_MODE_UNSUPPORTED', `${stagePath}.approvalMode`, 'Approval mode must be all, any, or quorum.', 'Select a supported approval mode.'));
+    if (stage.approvalMode === 'quorum' && (!Number.isInteger(stage.decisionPolicy.quorum) || stage.decisionPolicy.quorum < 1 || stage.decisionPolicy.quorum > 100)) findings.push(errorFinding('WORKFLOW_CONFIG_QUORUM_INVALID', `${stagePath}.decisionPolicy.quorum`, 'Quorum must be between 1 and 100.', 'Choose a positive approval threshold; submission also verifies it against resolved approvers.'));
     if (!selfApprovalPolicies.has(stage.selfApprovalPolicy)) {
       findings.push(errorFinding('WORKFLOW_CONFIG_SELF_APPROVAL_INVALID', `${stagePath}.selfApprovalPolicy`, 'Self-approval policy is invalid.', 'Select error or auto_approve.'));
     }
@@ -506,6 +522,10 @@ async function validateConfiguration(definition) {
       }
       if (stage.slaPolicy.reminderOffsets.some((offset) => !Number.isFinite(offset) || offset < 0 || offset >= stage.slaPolicy.duration)) {
         findings.push(errorFinding('WORKFLOW_CONFIG_SLA_REMINDER_INVALID', `${stagePath}.slaPolicy.reminderOffsets`, 'Reminder offsets must be non-negative and less than the SLA duration.', 'Adjust reminder offsets.'));
+      }
+      const calendar = stage.slaPolicy.businessCalendar;
+      if (calendar?.enabled && (!calendar.weekdays.length || calendar.weekdays.some((day) => !Number.isInteger(day) || day < 0 || day > 6) || !/^\d{2}:\d{2}$/.test(calendar.startTime) || !/^\d{2}:\d{2}$/.test(calendar.endTime) || calendar.startTime >= calendar.endTime)) {
+        findings.push(errorFinding('WORKFLOW_CONFIG_SLA_CALENDAR_INVALID', `${stagePath}.slaPolicy.businessCalendar`, 'Business calendar needs working weekdays and a valid opening time before closing time.', 'Choose weekdays and working hours such as 09:00-17:00.'));
       }
     }
     for (const [eventIndex, eventName] of stage.eventPolicy.events.entries()) {

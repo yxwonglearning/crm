@@ -317,7 +317,7 @@ Admins should have a dedicated portal for configuring the CRM:
      - Existing instances retain their starting workflow version when a new version is published. Workflow decisions, skips, automatic approvals, snapshots, actors, remarks, attachments, timestamps, and lifecycle events form an immutable audit history.
      - Workflow lifecycle events are published for Automation Flow follow-up actions. Notification or follow-up failure is logged and retryable but does not invalidate an authorized approval decision.
      - Initial approver resolution covers specific users, roles, reporting managers, organization/HR responsibility, and user references stored in source-record fields. Missing, inactive, duplicate, and self-approver results must be validated explicitly.
-     - Delegation, substitute approvers, controlled administrative reassignment, any-one parallel approval, and quorum approval are deferred enhancements and are not required for initial Phase 8 completion.
+     - Delegation, multi-hop substitute approvers, controlled administrative reassignment, any-one parallel approval, and quorum approval are supported as optional stage behavior.
      - The reference acceptance scenario is a leave-style request: requester submission, supervisor approval, an optional conditional HR stage, approval/rejection/return, amendment and resubmission, withdrawal, SLA handling, immutable history, and Automation Flow notifications. The workflow engine remains module-independent; a future Leave module owns entitlement and balance calculations.
    - Phase 8 workflow state-machine baseline:
      - Request states are `draft`, `pending`, `returned`, `approved`, `rejected`, `withdrawn`, and `cancelled`. Submission is an audited transition from `draft` to `pending`, not a long-lived state.
@@ -340,7 +340,7 @@ Admins should have a dedicated portal for configuring the CRM:
      - `entryCondition` and stage `condition` use a structured, allowlisted rule model with nested all/any groups, stable field data keys, typed operators, and typed comparison values. Arbitrary JavaScript, SQL, and executable expressions are prohibited.
      - `recordPolicy` identifies approval-relevant fields, whether the full record or only those fields are locked while pending, which fields appear in the immutable snapshot, and whether cancellation is permitted for authorized actors.
      - A definition contains an ordered `stages` array. Every stage has a stable `stageKey`, name, order, enabled flag, optional condition, `skipWhenConditionFalse`, approver rules, self-approval policy, decision/comment policy, attachment policy, SLA policy, and escalation-notification policy.
-     - Phase 8 stage `approvalMode` is `all`. Sequential processing comes from stage order; multiple resolved approvers within one active stage operate in parallel and every assignment must approve.
+     - Stage `approvalMode` may be `all`, `any`, or `quorum`. Sequential processing comes from stage order; multiple resolved approvers within one active stage operate in parallel. Quorum stages require an explicit reachable approval count.
      - Each approver rule has a stable key and one allowlisted type: `user`, `role`, `reporting_manager`, `organization_responsibility`, or `record_user_field`. One approval stage can mix multiple users, roles, departments (stored as organization responsibilities), and dynamic resolvers; duplicate resolved users count once and every resolved approver must approve.
      - `selfApprovalPolicy` is either `error` or `auto_approve`. Automatic self-approval is allowed only when the requester is the sole resolved approver and is always recorded in history.
      - `decisionPolicy` controls whether approval remarks are optional or required. Rejection and return remarks are always required. Return resumes from the returning stage; withdrawal is requester-only while pending.
@@ -349,7 +349,7 @@ Admins should have a dedicated portal for configuring the CRM:
      - `eventPolicy` enables allowlisted Workflow lifecycle events for Automation Flow and may attach only approved workflow, stage, actor, source-record, decision, and snapshot-reference fields. Secrets and fields hidden by permission rules are excluded.
      - Configuration validation checks stable and unique keys, a published source module/form, at least one enabled reachable stage, valid stage order, valid typed conditions, at least one approver rule per reachable stage, resolver references, self-approval policy, attachment bounds, SLA bounds, record-lock fields, permission references, and event payload allowlists.
      - A valid draft may be checked and versioned before publishing. Publishing creates one immutable snapshot atomically; running instances never read mutable draft configuration.
-     - Reserved extension fields may support future delegation, substitution, reassignment, `any` approval, and quorum, but Phase 8 validation rejects those modes until their later implementation is explicitly delivered.
+     - Delegation and substitution chains are bounded, loop-checked, scope-checked at every hop, and retained in assignment authority evidence. Reassignment remains an explicit audited administrator command.
    - Phase 8 validation and error-handling baseline:
      - Check and publish responses use structured findings with stable `code`, `severity`, configuration `path`, safe user-facing `message`, and recommended `remediation`. Errors block publishing; warnings require review but do not block it.
      - Publishing is blocked for invalid or duplicate keys, unpublished or incompatible module/form references, no reachable enabled stage, invalid stage order or condition types, a reachable stage without an approver rule, invalid resolver or authority references, unsupported approval modes, invalid self-approval policy, invalid lock fields, attachment/SLA bounds, permission references, or event payload fields.
@@ -531,7 +531,7 @@ Admins should have a dedicated portal for configuring the CRM:
      - Files are stored in the protected workflow attachment table rather than source-record JSON. They never update the source module unless a separate authorized Automation Flow or SQL process is explicitly configured to do so.
      - Only administrators, the original requester, and assigned workflow participants who retain source-module visibility can list or download files. Downloads are instance-scoped, force attachment disposition, and disable MIME sniffing.
      - The requester and decision modals expose policy-aware multi-file controls, and request detail lists authorized evidence with direct downloads. The real Playwright requester-to-approver journey verifies required submission/approval files and download behavior.
-     - Executable and active-content formats are rejected; malware scanning and quarantine remain a future hardening option when an approved scanning service is available.
+     - Executable and active-content formats are rejected. Each Start or Approval node may additionally require ClamAV malware scanning; scanning fails closed, infected or unscanned data is never downloadable, and the verdict is retained with the attachment.
    - Phase 8 optional SLA reminders, escalation, and workflow monitoring - complete:
      - SLA remains disabled by default and is configured independently on each Approval node. Enabled stages define a duration in minutes, hours, or days, one or more reminder offsets before the deadline, and whether overdue work is only marked or also emits an escalation notification.
      - `src/modules/workflows/workflows.sla.js` periodically scans active due stages. Deterministic event keys make every configured reminder and overdue escalation idempotent across polling, restarts, and concurrent attempts.
@@ -539,7 +539,7 @@ Admins should have a dedicated portal for configuring the CRM:
      - When a deadline passes, the active stage receives its first `overdue_at` timestamp and pending assignments receive `escalated_at`. The immutable timeline records `workflow.reminder_due` and configured `workflow.escalated` events.
      - Administrators have a dedicated responsive Workflow Monitoring page showing open routes, due-soon work, overdue work, current stage, requester, approvers, source reference, deadline, and elapsed urgency. Search and request/SLA filters support operational review without opening every request.
      - Monitoring can open the protected request detail, queue an idempotent manual reminder, refresh current data, or request an immediate deadline scan. Non-administrators cannot access the organization-wide monitoring APIs or page.
-     - The monitoring page uses the workflow request key as the support reference and never changes source-record data. Business-calendar deadlines, recurring post-overdue reminders, quorum approval, and multi-hop substitution remain future extensions.
+     - The monitoring page uses the workflow request key as the support reference and never changes source-record data. Optional business-hour calendars exclude configured non-working weekdays and holiday dates, while bounded recurring overdue reminders use idempotent occurrence keys.
      - The admin-only Workflow Monitoring page separates `Live monitoring` from `History & reports`. History can be filtered by workflow, request status, requester, approver, requester department, submitted date range, and free-text request/workflow search.
      - Every report row opens the protected request detail and its immutable decision/event timeline, including reminders, escalation, delegation, reassignment, remarks, and recorded responses subject to the existing visibility rules.
      - Administrators can export the current filtered result set through the protected CSV endpoint. The export is generated from the same monitoring query as the screen and is capped at 500 requests per export.
@@ -591,7 +591,14 @@ Admins should have a dedicated portal for configuring the CRM:
      - `crm_workflow_decisions.response_json` stores the immutable structured response. The migration adds the JSON column idempotently to existing installations.
      - Requesters and unrelated approvers do not receive protected decision-response values in request timelines. The administrator and the approver who recorded the response may inspect them.
      - Response values are excluded from Automation Flow by default. Administrators must explicitly enable `Include this value in Automation Flow events` per field; events always expose safe response field names for diagnostics.
-     - Source-field mapping currently targets main JSON-backed module-record fields. Detail-table writes and attachment-response fields remain separate enhancements.
+     - Response mappings can update permitted main JSON-backed fields or append a permission-checked row to a configured detail table. Attachment-type response fields are uploaded through the protected workflow attachment store and recorded as immutable response metadata.
+   - Phase 8 deferred enhancement closure - complete:
+     - `all`, `any`, and threshold-based `quorum` decisions share one deterministic stage-completion function. Pending assignments are cancelled after an any/quorum threshold is reached; rejection becomes terminal only when the configured threshold can no longer be reached.
+     - Active delegation resolves through up to ten scoped hops. Repeated delegation records, user loops, excessive depth, inactive users, and loss of source-record access fail closed before assignment.
+     - SLA policies may count elapsed time or configured UTC business hours, weekdays, and holiday exclusions. Recurring overdue reminders are optional, bounded to 100 occurrences, and remain notification-only.
+     - Attachment malware scanning uses ClamAV INSTREAM through `WORKFLOW_CLAMAV_HOST`, `WORKFLOW_CLAMAV_PORT`, and `WORKFLOW_CLAMAV_TIMEOUT_MS`. The option is disabled by default; enabling it without an available scanner rejects the upload without advancing the workflow.
+     - `npm.cmd run test:smoke:workflow-phase8-completion` verifies business-calendar arithmetic, scanner clean/infected/unavailable verdicts, any/quorum outcomes, multi-hop substitution, and bounded recurring overdue reminders.
+     - The same suite runs 25,000 mixed any/quorum evaluations as a bounded performance guard. Database-backed workflow smoke suites continue to cover transactional and authorization behavior.
 9. Phase 9: AI Agent Assistant - planned
    - Add an AI assistant panel to the admin portal for form and workflow generation.
    - Support natural-language prompts to suggest form fields, workflow steps, and validation rules.
@@ -1885,7 +1892,7 @@ Request lifecycle:
 | `GET /api/workflows/requests` | Authenticated; list requests visible to the current user. |
 | `POST /api/workflows/requests` | Authenticated; submit a request as `multipart/form-data`, with `Idempotency-Key`. Supports up to 20 attachments, each up to 25 MB. |
 | `GET /api/workflows/requests/:requestKey` | Authenticated and authorized; return request data, current stage, assignments, decisions, history, and permitted actions. |
-| `POST /api/workflows/requests/:requestKey/decisions` | Eligible approver; approve, reject, or return using `multipart/form-data` and `Idempotency-Key`. Structured response-form values are sent in the `responses` JSON form field. |
+| `POST /api/workflows/requests/:requestKey/decisions` | Eligible approver; approve, reject, or return using `multipart/form-data` and `Idempotency-Key`. Structured values use the `responses` JSON field; attachment response inputs use `responseAttachment:<fieldKey>`. |
 | `GET /api/workflows/requests/:requestKey/attachments/:attachmentId` | Authorized viewer; download an attachment as binary content. |
 | `POST /api/workflows/requests/:requestKey/withdraw` | Requester; withdraw an eligible request with `Idempotency-Key`. |
 | `POST /api/workflows/requests/:requestKey/resubmit` | Requester; resubmit a returned request with `Idempotency-Key`. |
@@ -1923,6 +1930,8 @@ Email is an optional, non-blocking delivery channel. Approval processing and in-
    ```
 
 3. Update `.env` for your local MySQL.
+
+   Attachment malware scanning is optional and disabled on each workflow node by default. To enable it, run a reachable ClamAV daemon with INSTREAM support and configure `WORKFLOW_CLAMAV_HOST`, `WORKFLOW_CLAMAV_PORT`, and `WORKFLOW_CLAMAV_TIMEOUT_MS`. When a node requires scanning, an unavailable scanner causes the upload to fail closed.
 
 4. Run database migration:
 

@@ -25,9 +25,43 @@ function sourceSnapshot(result) {
   };
 }
 
+function parseClock(value, fallback) {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(String(value || fallback));
+  return match ? { hours: Math.min(Number(match[1]), 23), minutes: Math.min(Number(match[2]), 59) } : { hours: 9, minutes: 0 };
+}
+
+function addBusinessMinutes(start, minutes, calendar = {}) {
+  const configuredWeekdays = Array.isArray(calendar.weekdays) && calendar.weekdays.length ? calendar.weekdays : [1, 2, 3, 4, 5];
+  const weekdays = new Set(configuredWeekdays.map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6));
+  const holidays = new Set((calendar.holidays || []).map(String));
+  const open = parseClock(calendar.startTime, '09:00');
+  const close = parseClock(calendar.endTime, '17:00');
+  const cursor = new Date(start);
+  let remaining = Math.max(0, Number(minutes));
+  const dateKey = (date) => date.toISOString().slice(0, 10);
+  const isWorkingDay = (date) => weekdays.has(date.getUTCDay()) && !holidays.has(dateKey(date));
+  while (remaining > 0) {
+    if (!isWorkingDay(cursor)) {
+      cursor.setUTCDate(cursor.getUTCDate() + 1); cursor.setUTCHours(open.hours, open.minutes, 0, 0); continue;
+    }
+    const opensAt = new Date(cursor); opensAt.setUTCHours(open.hours, open.minutes, 0, 0);
+    const closesAt = new Date(cursor); closesAt.setUTCHours(close.hours, close.minutes, 0, 0);
+    if (cursor < opensAt) cursor.setTime(opensAt.getTime());
+    if (cursor >= closesAt) { cursor.setUTCDate(cursor.getUTCDate() + 1); cursor.setUTCHours(open.hours, open.minutes, 0, 0); continue; }
+    const available = Math.max(0, (closesAt - cursor) / 60000);
+    const consumed = Math.min(remaining, available);
+    cursor.setTime(cursor.getTime() + consumed * 60000); remaining -= consumed;
+  }
+  return cursor;
+}
+
 function dueAtFor(stage, now) {
   if (!stage.slaPolicy?.enabled) return null;
   const multipliers = { minutes: 60000, hours: 3600000, days: 86400000 };
+  if (stage.slaPolicy.businessCalendar?.enabled) {
+    const unitMinutes = { minutes: 1, hours: 60, days: 480 };
+    return addBusinessMinutes(now, Number(stage.slaPolicy.duration) * unitMinutes[stage.slaPolicy.unit], stage.slaPolicy.businessCalendar);
+  }
   return new Date(now.getTime() + Number(stage.slaPolicy.duration) * multipliers[stage.slaPolicy.unit]);
 }
 
@@ -111,7 +145,7 @@ async function submitRequest(input, user, dependencies = {}) {
   }
 
   const { definition, version, routing } = candidates[0];
-  const validatedAttachments = attachmentService.validateFiles(input.attachments || [], attachmentService.submissionPolicy(version), 'submission');
+  const validatedAttachments = await attachmentService.validateAndScanFiles(input.attachments || [], attachmentService.submissionPolicy(version), 'submission', dependencies.attachmentScanner || {});
   const graphExecution = graphRouting.routeExecution({ ...version.snapshot, stages: version.stages }, snapshot);
   const selectedStageKeys = new Set((graphExecution?.stages || []).map((item) => item.stage.stageKey));
   const routedStages = graphExecution
@@ -152,6 +186,9 @@ async function submitRequest(input, user, dependencies = {}) {
       requesterUserId: user.id,
       snapshot
     }, dependencies);
+    if (stage.approvalMode === 'quorum' && Number(stage.decisionPolicy?.quorum || 1) > resolution.approvers.length) {
+      throw runtimeError(`Unable to submit: ${stage.name} requires more approvals than can be resolved.`, 422, 'WORKFLOW_APPROVER_QUORUM_UNREACHABLE', { stageKey: stage.stageKey, quorum: Number(stage.decisionPolicy?.quorum || 1), eligibleApprovers: resolution.approvers.length });
+    }
     for (const approver of resolution.approvers) {
       const approverPermissions = await permissionChecker.userModulePermissions(input.sourceModuleKey, {
         id: approver.userId,
@@ -176,7 +213,7 @@ async function submitRequest(input, user, dependencies = {}) {
       resolverReference: approver.resolverReference,
       approverIdentity: approver,
       authorityEvaluation: { ruleKey: approver.ruleKey, resolvedAt: now.toISOString(), delegationId: approver.delegationId || null, originalApprover: approver.originalApprover || null },
-      status: autoApproved ? 'approved' : 'pending',
+      status: resolution.autoApproveUserIds.includes(approver.userId) ? 'approved' : (autoApproved ? 'cancelled' : 'pending'),
       dueAt
     }));
     materialized.push({
@@ -188,15 +225,15 @@ async function submitRequest(input, user, dependencies = {}) {
       activatedAt: status === 'active' ? now : null,
       completedAt: autoApproved ? now : null,
       assignments,
-      autoDecisions: autoApproved ? [{
-        assignmentIndex: 0,
+      autoDecisions: resolution.autoApproveUserIds.map((userId) => ({
+        assignmentIndex: resolution.approvers.findIndex((approver) => approver.userId === userId),
         action: 'auto_approve',
         actorUserId: user.id,
         actorIdentity: resolution.approvers[0],
         remark: 'Automatically approved by configured self-approval policy.',
         instanceLockVersion: 0,
         assignmentLockVersion: 0
-      }] : [],
+      })),
       events: [...(status === 'waiting' ? [] : [{
         eventType: autoApproved ? 'workflow.stage.auto_approved' : (status === 'active' ? 'workflow.stage.started' : 'workflow.stage.waiting'),
         payload: { stageKey: stage.stageKey, stageStatus: status, ...(routed.incomingEdge ? { connectionKey: routed.incomingEdge.id, outcome: routed.incomingEdge.outcome } : {}) }
@@ -268,4 +305,4 @@ async function submitRequest(input, user, dependencies = {}) {
   return { request: bundle.instance, snapshot: bundle.snapshot, stages: bundle.stages, replayed: false };
 }
 
-module.exports = { candidateDefinitions, dueAtFor, sourceSnapshot, submissionHash, submitRequest };
+module.exports = { addBusinessMinutes, candidateDefinitions, dueAtFor, sourceSnapshot, submissionHash, submitRequest };

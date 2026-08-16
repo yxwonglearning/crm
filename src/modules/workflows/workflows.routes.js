@@ -27,7 +27,7 @@ function monitoringFilters(req) {
 }
 const attachmentUpload = multer({ storage: multer.memoryStorage(), limits: { files: 20, fileSize: 25 * 1024 * 1024 } });
 function uploadAttachments(req, res, next) {
-  attachmentUpload.array('attachments', 20)(req, res, (error) => {
+  attachmentUpload.any()(req, res, (error) => {
     if (!error) return next();
     const tooLarge = ['LIMIT_FILE_SIZE', 'LIMIT_FILE_COUNT', 'LIMIT_UNEXPECTED_FILE'].includes(error.code);
     return next(new AppError(
@@ -191,7 +191,9 @@ workflowRoutes.get('/requests/:requestKey', asyncHandler(async (req, res) => {
 }));
 workflowRoutes.post('/requests/:requestKey/decisions', uploadAttachments, asyncHandler(async (req, res) => {
   const body = { ...req.body, responses: parseJsonField(req.body.responses, {}) };
-  res.json(await decisions.decideRequest(req.params.requestKey, { ...withIdempotency(req, validate(decisionSchema, body)), attachments: req.files || [] }, req.user));
+  const responseAttachments = Object.fromEntries((req.files || []).filter((file) => file.fieldname.startsWith('responseAttachment:')).map((file) => [file.fieldname.slice(19), file]));
+  const attachments = (req.files || []).filter((file) => file.fieldname === 'attachments' || file.fieldname.startsWith('responseAttachment:'));
+  res.json(await decisions.decideRequest(req.params.requestKey, { ...withIdempotency(req, validate(decisionSchema, body)), attachments, responseAttachments }, req.user));
 }));
 workflowRoutes.get('/requests/:requestKey/attachments/:attachmentId', asyncHandler(async (req, res) => {
   const attachmentId = Number(req.params.attachmentId);

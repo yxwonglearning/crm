@@ -772,6 +772,7 @@ async function main() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
   );
   await ensureColumn(connection, 'crm_workflow_version_stages', 'email_policy_json', '`email_policy_json` JSON NULL AFTER `sla_policy_json`');
+  await connection.query("ALTER TABLE crm_workflow_version_stages MODIFY approval_mode ENUM('all', 'any', 'quorum') NOT NULL DEFAULT 'all'");
   await connection.query(
     `CREATE TABLE IF NOT EXISTS crm_workflow_version_approver_rules (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -942,6 +943,12 @@ async function main() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
   );
   await ensureColumn(connection, 'crm_workflow_attachments', 'file_data', '`file_data` LONGBLOB NULL AFTER `file_checksum`');
+  await ensureColumn(connection, 'crm_workflow_attachments', 'scan_status', "`scan_status` ENUM('quarantined', 'clean', 'infected', 'error', 'not_required') NOT NULL DEFAULT 'not_required' AFTER `file_data`");
+  await ensureColumn(connection, 'crm_workflow_attachments', 'scan_engine', '`scan_engine` VARCHAR(80) NULL AFTER `scan_status`');
+  await ensureColumn(connection, 'crm_workflow_attachments', 'scan_result', '`scan_result` VARCHAR(500) NULL AFTER `scan_engine`');
+  await ensureColumn(connection, 'crm_workflow_attachments', 'scanned_at', '`scanned_at` TIMESTAMP NULL AFTER `scan_result`');
+  await connection.query("ALTER TABLE crm_workflow_attachments MODIFY scan_status ENUM('quarantined', 'clean', 'infected', 'error', 'not_required') NOT NULL DEFAULT 'not_required'");
+  await connection.query("UPDATE crm_workflow_attachments SET scan_status = 'not_required' WHERE scan_status = 'quarantined' AND scan_engine IS NULL AND scanned_at IS NULL");
   await connection.query(
     `CREATE TABLE IF NOT EXISTS crm_workflow_record_locks (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

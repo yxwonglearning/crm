@@ -34,9 +34,16 @@ async function create(input, user) {
   const startsAt = new Date(input.startsAt); const endsAt = new Date(input.endsAt);
   if (!Number.isFinite(startsAt.getTime()) || !Number.isFinite(endsAt.getTime()) || endsAt <= startsAt) throw new AppError('Delegation end must be after its start.', 422, { code: 'WORKFLOW_DELEGATION_PERIOD_INVALID' });
   const existing = await repository.listDelegations({});
-  const reverse = existing.some((item) => item.status === 'active' && Number(item.delegatorUserId) === Number(delegate.id)
-    && Number(item.delegateUserId) === Number(delegator.id) && new Date(item.startsAt) <= endsAt && new Date(item.endsAt) >= startsAt);
-  if (reverse) throw new AppError('This delegation would create a delegation loop.', 409, { code: 'WORKFLOW_DELEGATION_LOOP' });
+  const overlapping = existing.filter((item) => item.status === 'active' && new Date(item.startsAt) <= endsAt && new Date(item.endsAt) >= startsAt);
+  const edges = new Map();
+  for (const item of overlapping) { edges.set(Number(item.delegatorUserId), Number(item.delegateUserId)); }
+  edges.set(Number(delegator.id), Number(delegate.id));
+  const visited = new Set();
+  let cursor = Number(delegator.id);
+  while (edges.has(cursor)) {
+    if (visited.has(cursor)) throw new AppError('This delegation would create a delegation loop.', 409, { code: 'WORKFLOW_DELEGATION_LOOP' });
+    visited.add(cursor); cursor = edges.get(cursor);
+  }
   const id = await repository.createDelegation({ ...input, startsAt, endsAt, createdBy: user.id });
   await repository.appendAudit({ actorUserId: user.id, action: 'workflow.delegation.created', targetType: 'workflow_delegation', targetKey: String(id), result: 'allowed', reasonCode: 'WORKFLOW_DELEGATION_CREATED', metadata: { delegatorUserId: delegator.id, delegateUserId: delegate.id, workflowKey: input.workflowKey || '' } });
   return { delegationId: id };

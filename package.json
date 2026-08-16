@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
-    "test:smoke:backend": "node tests/smoke/backend-smoke.js && node tests/smoke/readme-api-surface-smoke.js",
+    "test:smoke:backend": "node tests/smoke/backend-smoke.js && node tests/smoke/readme-api-surface-smoke.js && node tests/smoke/workflow-phase8-completion-smoke.js",
     "test:smoke:dashboard-persistence": "node tests/smoke/dashboard-persistence-smoke.js",
     "test:smoke:dashboard-query": "node tests/smoke/dashboard-query-smoke.js",
     "test:smoke:dashboard-management": "node tests/smoke/dashboard-management-smoke.js",
@@ -26,6 +26,7 @@
     "test:smoke:workflow-access": "node tests/smoke/workflow-access-smoke.js",
     "test:smoke:workflow-api": "node tests/smoke/workflow-api-smoke.js",
     "test:smoke:workflow-frontend": "node tests/smoke/workflow-frontend-smoke.js",
+    "test:smoke:workflow-phase8-completion": "node tests/smoke/workflow-phase8-completion-smoke.js",
     "test:smoke:notifications": "node tests/smoke/notification-center-smoke.js",
     "test:e2e:workflow": "playwright test tests/manual/ui/workflow-request-e2e.spec.js --workers=1",
     "db:migrate": "node src/database/migrate.js",

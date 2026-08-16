@@ -32,7 +32,17 @@ function responseConfiguration(version, stageKey) {
   return version?.snapshot?.builderGraph?.nodes?.find((node) => node.type === 'approval' && node.stageKey === stageKey)?.responsePresentation || null;
 }
 
-function validateResponses(config, inputResponses, action) {
+function stageDecisionOutcome(approvalMode, configuredQuorum, counts, action) {
+  const mode = ['all', 'any', 'quorum'].includes(approvalMode) ? approvalMode : 'all';
+  const threshold = mode === 'quorum' ? Math.max(1, Number(configuredQuorum || 1)) : (mode === 'any' ? 1 : Math.max(1, counts.total - (counts.cancelled || 0)));
+  return {
+    threshold,
+    approved: action === 'approve' && counts.approved >= threshold,
+    rejected: action === 'reject' && (mode === 'all' || counts.approved + counts.pending < threshold)
+  };
+}
+
+function validateResponses(config, inputResponses, action, responseAttachments = {}) {
   const supplied = inputResponses && typeof inputResponses === 'object' ? inputResponses : {};
   const allowed = new Map((config?.fields || []).map((field) => [field.fieldKey, field]));
   for (const key of Object.keys(supplied)) {
@@ -40,7 +50,8 @@ function validateResponses(config, inputResponses, action) {
   }
   const responses = {};
   for (const field of allowed.values()) {
-    const value = supplied[field.fieldKey];
+    const attachment = responseAttachments[field.fieldKey];
+    const value = field.type === 'attachment' && attachment ? { fileName: attachment.originalname, contentType: attachment.mimetype, fileSize: attachment.size || attachment.buffer?.length } : supplied[field.fieldKey];
     const empty = value === undefined || value === null || String(value).trim() === '';
     if (action === 'approve' && field.required && empty) throw decisionError(`${field.label || field.fieldKey} is required.`, 422, 'WORKFLOW_RESPONSE_FIELD_REQUIRED', { fieldKey: field.fieldKey });
     if (!empty) responses[field.fieldKey] = typeof value === 'string' ? value.trim().slice(0, 5000) : value;
@@ -71,7 +82,7 @@ async function decideRequest(requestKey, input, user, dependencies = {}) {
   if (['reject', 'return'].includes(action) && !remark) {
     throw decisionError('A remark is required for rejection or return.', 422, 'WORKFLOW_STATE_REMARK_REQUIRED', { action });
   }
-  const hash = requestHash(requestKey, { action, remark, responses: input.responses || {} });
+  const hash = requestHash(requestKey, { action, remark, responses: input.responses || {}, attachments: input.attachments || [] });
   const actorKey = String(user.id);
   const now = dependencies.now ? new Date(dependencies.now) : new Date();
 
@@ -110,9 +121,9 @@ async function decideRequest(requestKey, input, user, dependencies = {}) {
 
     const version = await repo.findVersion(instance.workflowKey, instance.workflowVersionId, connection);
     const responseConfig = responseConfiguration(version, stage.stageKey);
-    const responses = validateResponses(responseConfig, input.responses, action);
+    const responses = validateResponses(responseConfig, input.responses, action, input.responseAttachments || {});
     const purpose = action === 'approve' ? 'approval' : action;
-    const validatedAttachments = attachmentService.validateFiles(input.attachments || [], stage.attachmentPolicy || {}, purpose);
+    const validatedAttachments = await attachmentService.validateAndScanFiles(input.attachments || [], stage.attachmentPolicy || {}, purpose, dependencies.attachmentScanner || {});
     const automationResponses = Object.fromEntries((responseConfig?.fields || []).filter((field) => field.exposeToAutomation && responses[field.fieldKey] !== undefined).map((field) => [field.fieldKey, responses[field.fieldKey]]));
     const sourceMappings = (responseConfig?.fields || []).filter((field) => field.storage === 'source' && responses[field.fieldKey] !== undefined);
     if (sourceMappings.length && action === 'approve') {
@@ -126,6 +137,21 @@ async function decideRequest(requestKey, input, user, dependencies = {}) {
         sourceUpdates[targetFieldKey] = responses[mapping.fieldKey];
       }
       if (!await repo.updateWorkflowSourceFields(instance.sourceModuleKey, instance.sourceRecordId, sourceUpdates, user.id, connection)) throw decisionError('The mapped source record could not be updated.', 409, 'WORKFLOW_RESPONSE_SOURCE_UPDATE_FAILED');
+    }
+    const detailMappings = (responseConfig?.fields || []).filter((field) => field.storage === 'detail' && responses[field.fieldKey] !== undefined);
+    if (detailMappings.length && action === 'approve') {
+      const moduleConfig = await configService.getModuleConfig(instance.sourceModuleKey);
+      const fieldPermissions = await permissionChecker.userFieldPermissions(instance.sourceModuleKey, activeUser, moduleConfig.fields || []);
+      const rowsByTable = {};
+      for (const mapping of detailMappings) {
+        const targetFieldKey = mapping.targetFieldKey || mapping.fieldKey;
+        const target = moduleConfig.fields?.find((field) => field.fieldKey === targetFieldKey && field.tableType === 'detail' && field.detailTableName);
+        if (!target) throw decisionError(`Mapped detail field ${targetFieldKey} is unavailable.`, 422, 'WORKFLOW_RESPONSE_DETAIL_MAPPING_INVALID', { fieldKey: mapping.fieldKey, targetFieldKey });
+        if (fieldPermissions.get(targetFieldKey)?.edit === false) throw decisionError(`You cannot append ${targetFieldKey} through this approval.`, 403, 'WORKFLOW_PERMISSION_RESPONSE_FIELD_EDIT_DENIED', { targetFieldKey });
+        rowsByTable[target.detailTableName] ||= {};
+        rowsByTable[target.detailTableName][targetFieldKey] = responses[mapping.fieldKey];
+      }
+      await repo.appendWorkflowDetailRows(instance.sourceRecordId, rowsByTable, connection);
     }
 
     const decisionId = await repo.appendDecision({
@@ -155,7 +181,12 @@ async function decideRequest(requestKey, input, user, dependencies = {}) {
 
     let requestStatus = 'pending';
     let currentStageKey = stage.stageKey;
-    if (action === 'reject' || action === 'return') {
+    const counts = await repo.assignmentCounts(stage.id, connection);
+    const approvalMode = stage.approvalMode || 'all';
+    const outcome = stageDecisionOutcome(approvalMode, stage.decisionPolicy?.quorum, counts, action);
+    const stageApproved = outcome.approved;
+    const stageRejected = outcome.rejected;
+    if (action === 'return' || stageRejected) {
       await repo.cancelPendingAssignments(stage.id, now, connection);
       await repo.transitionInstanceStage(stage.id, stage.lockVersion, {
         status: action === 'return' ? 'returned' : 'rejected',
@@ -180,7 +211,8 @@ async function decideRequest(requestKey, input, user, dependencies = {}) {
         decisionId,
         payload: { requestKey, stageKey: stage.stageKey, requestStatus, actorId: Number(user.id), remark, responseFieldKeys: Object.keys(responses), responses: automationResponses }
       }, connection);
-    } else if (await repo.countPendingAssignments(stage.id, connection) === 0) {
+    } else if (stageApproved) {
+      if (approvalMode !== 'all') await repo.cancelPendingAssignments(stage.id, now, connection);
       await repo.transitionInstanceStage(stage.id, stage.lockVersion, {
         status: 'approved',
         completedAt: now
@@ -275,4 +307,4 @@ async function decideRequest(requestKey, input, user, dependencies = {}) {
   });
 }
 
-module.exports = { actorIdentity, decideRequest, requestHash, responseConfiguration, validateResponses };
+module.exports = { actorIdentity, decideRequest, requestHash, responseConfiguration, stageDecisionOutcome, validateResponses };

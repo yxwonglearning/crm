@@ -146,13 +146,26 @@ async function resolveStageApprovers(input, dependencies = {}) {
   const workflowRepo = dependencies.workflowRepository || workflowRepository;
   const effective = [];
   for (const approver of directApprovers) {
-    const delegation = input.workflowKey
-      ? await workflowRepo.findActiveDelegation({ id: approver.userId, role: approver.role, organizationNodeId: approver.organizationNodeId }, input.workflowKey, dependencies.now || new Date())
-      : null;
-    if (!delegation) { effective.push(approver); continue; }
-    const delegate = publicIdentity(delegation.delegate);
-    effective.push({ ...approver, ...delegate, userId: delegate.userId, originalApprover: approver,
-      delegationId: delegation.id, delegationReason: delegation.reason });
+    let current = approver;
+    const chain = [];
+    const visited = new Set([approver.userId]);
+    const delegationIds = new Set();
+    while (input.workflowKey && chain.length < 10) {
+      const delegation = await workflowRepo.findActiveDelegation({ id: current.userId, role: current.role, organizationNodeId: current.organizationNodeId }, input.workflowKey, dependencies.now || new Date());
+      if (!delegation) break;
+      if (delegationIds.has(delegation.id)) break;
+      delegationIds.add(delegation.id);
+      const delegate = publicIdentity(delegation.delegate);
+      if (visited.has(delegate.userId)) throw resolverError('Unable to resolve approver: the active substitution chain contains a loop.', 'WORKFLOW_DELEGATION_LOOP', { stageKey: context.stageKey, approverUserId: approver.userId });
+      visited.add(delegate.userId);
+      chain.push({ delegationId: delegation.id, fromUserId: current.userId, toUserId: delegate.userId, reason: delegation.reason });
+      current = delegate;
+    }
+    if (chain.length === 10 && await workflowRepo.findActiveDelegation({ id: current.userId, role: current.role, organizationNodeId: current.organizationNodeId }, input.workflowKey, dependencies.now || new Date())) {
+      throw resolverError('Unable to resolve approver: the substitution chain exceeds 10 hops.', 'WORKFLOW_DELEGATION_CHAIN_TOO_DEEP', { stageKey: context.stageKey });
+    }
+    effective.push(chain.length ? { ...approver, ...current, userId: current.userId, originalApprover: approver,
+      delegationId: chain.at(-1).delegationId, delegationReason: chain.at(-1).reason, delegationChain: chain } : approver);
   }
   const approvers = [...new Map(effective.map((approver) => [approver.userId, approver])).values()];
   if (!approvers.length) {
@@ -172,12 +185,14 @@ async function resolveStageApprovers(input, dependencies = {}) {
     });
   }
 
+  const mode = stage.approvalMode || 'all';
+  const threshold = mode === 'any' ? 1 : mode === 'quorum' ? Math.max(1, Number(stage.decisionPolicy?.quorum || 1)) : approvers.length;
   return {
     stageKey: context.stageKey,
-    approvalMode: 'all',
+    approvalMode: stage.approvalMode || 'all',
     approvers,
     autoApproveUserIds,
-    stageAutoApproved: approvers.length === 1 && autoApproveUserIds.length === 1
+    stageAutoApproved: autoApproveUserIds.length >= threshold
   };
 }
 

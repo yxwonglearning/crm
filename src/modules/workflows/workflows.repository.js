@@ -740,7 +740,7 @@ async function cancelOpenInstanceWork(instanceId, decidedAt, db = pool) {
 
 async function findActiveStage(instanceId, db = pool, options = {}) {
   const [rows] = await db.execute(
-    `SELECT stages.*, version_stages.name AS stage_name,
+    `SELECT stages.*, version_stages.name AS stage_name, version_stages.approval_mode,
             version_stages.decision_policy_json, version_stages.attachment_policy_json, version_stages.sla_policy_json
      FROM crm_workflow_instance_stages stages
      INNER JOIN crm_workflow_version_stages version_stages ON version_stages.id = stages.version_stage_id
@@ -751,6 +751,7 @@ async function findActiveStage(instanceId, db = pool, options = {}) {
   if (!rows[0]) return null;
   return {
     ...stageRow(rows[0]),
+    approvalMode: rows[0].approval_mode || 'all',
     decisionPolicy: parseJson(rows[0].decision_policy_json, {}),
     attachmentPolicy: parseJson(rows[0].attachment_policy_json, {}),
     slaPolicy: parseJson(rows[0].sla_policy_json, {})
@@ -773,6 +774,16 @@ async function countPendingAssignments(instanceStageId, db = pool) {
     [instanceStageId]
   );
   return Number(rows[0]?.count || 0);
+}
+
+async function assignmentCounts(instanceStageId, db = pool) {
+  const [rows] = await db.execute(
+    `SELECT assignment_status, COUNT(*) AS count FROM crm_workflow_assignments
+     WHERE instance_stage_id = ? GROUP BY assignment_status`, [instanceStageId]
+  );
+  const counts = { pending: 0, approved: 0, rejected: 0, returned: 0, cancelled: 0, total: 0 };
+  for (const row of rows) { counts[row.assignment_status] = Number(row.count); counts.total += Number(row.count); }
+  return counts;
 }
 
 async function findNextWaitingStage(instanceId, afterOrder, db = pool, options = {}) {
@@ -902,10 +913,11 @@ async function appendAttachment(entry, db = pool) {
   const [result] = await db.execute(
     `INSERT INTO crm_workflow_attachments
      (instance_id, decision_id, uploaded_by, attachment_purpose, file_name,
-      content_type, file_size, storage_key, file_checksum, file_data)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      content_type, file_size, storage_key, file_checksum, file_data, scan_status, scan_engine, scan_result, scanned_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [entry.instanceId, entry.decisionId || null, entry.uploadedBy || null, entry.purpose,
-      entry.fileName, entry.contentType, entry.fileSize, entry.storageKey, entry.checksum, entry.data]
+      entry.fileName, entry.contentType, entry.fileSize, entry.storageKey, entry.checksum, entry.data,
+      entry.scanStatus || 'not_required', entry.scanEngine || null, entry.scanResult || null, entry.scannedAt || null]
   );
   return Number(result.insertId);
 }
@@ -913,7 +925,7 @@ async function appendAttachment(entry, db = pool) {
 async function listAttachments(instanceId, db = pool) {
   const [rows] = await db.execute(
     `SELECT id, instance_id, decision_id, uploaded_by, attachment_purpose, file_name,
-            content_type, file_size, file_checksum, created_at
+            content_type, file_size, file_checksum, scan_status, scan_engine, scanned_at, created_at
      FROM crm_workflow_attachments WHERE instance_id = ? ORDER BY created_at, id`,
     [instanceId]
   );
@@ -921,14 +933,14 @@ async function listAttachments(instanceId, db = pool) {
     id: Number(row.id), instanceId: Number(row.instance_id), decisionId: numberOrNull(row.decision_id),
     uploadedBy: numberOrNull(row.uploaded_by), purpose: row.attachment_purpose,
     fileName: row.file_name, contentType: row.content_type, fileSize: Number(row.file_size),
-    checksum: row.file_checksum, createdAt: row.created_at
+    checksum: row.file_checksum, scanStatus: row.scan_status, scanEngine: row.scan_engine, scannedAt: row.scanned_at, createdAt: row.created_at
   }));
 }
 
 async function findAttachment(instanceId, attachmentId, db = pool) {
   const [rows] = await db.execute(
     `SELECT id, instance_id, decision_id, uploaded_by, attachment_purpose, file_name,
-            content_type, file_size, file_checksum, file_data, created_at
+            content_type, file_size, file_checksum, file_data, scan_status, scan_engine, scan_result, scanned_at, created_at
      FROM crm_workflow_attachments WHERE instance_id = ? AND id = ? LIMIT 1`,
     [instanceId, attachmentId]
   );
@@ -937,7 +949,8 @@ async function findAttachment(instanceId, attachmentId, db = pool) {
   return { id: Number(item.id), instanceId: Number(item.instance_id), decisionId: numberOrNull(item.decision_id),
     uploadedBy: numberOrNull(item.uploaded_by), purpose: item.attachment_purpose, fileName: item.file_name,
     contentType: item.content_type, fileSize: Number(item.file_size), checksum: item.file_checksum,
-    data: item.file_data, createdAt: item.created_at };
+    data: ['clean', 'not_required'].includes(item.scan_status) ? item.file_data : null,
+    scanStatus: item.scan_status, scanEngine: item.scan_engine, scanResult: item.scan_result, scannedAt: item.scanned_at, createdAt: item.created_at };
 }
 
 async function updateWorkflowSourceFields(moduleKey, recordId, updates, userId, db = pool) {
@@ -950,6 +963,19 @@ async function updateWorkflowSourceFields(moduleKey, recordId, updates, userId, 
     [json({ ...current, ...updates }), userId || null, recordId]
   );
   return result.affectedRows === 1;
+}
+
+async function appendWorkflowDetailRows(recordId, rowsByTable, db = pool) {
+  for (const [tableName, values] of Object.entries(rowsByTable || {})) {
+    const entries = Object.entries(values || {});
+    if (!entries.length) continue;
+    const columns = ['mainid', ...entries.map(([fieldKey]) => fieldKey)];
+    await db.execute(
+      `INSERT INTO ${safeSqlIdentifier(tableName)} (${columns.map(safeSqlIdentifier).join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`,
+      [recordId, ...entries.map(([, value]) => value)]
+    );
+  }
+  return true;
 }
 
 async function acquireRecordLock(entry, db = pool) {
@@ -1470,6 +1496,7 @@ module.exports = {
   findActiveStage,
   findAssignmentForApprover,
   countPendingAssignments,
+  assignmentCounts,
   findNextWaitingStage,
   cancelPendingAssignments,
   transitionInstance,
@@ -1480,6 +1507,7 @@ module.exports = {
   listAttachments,
   findAttachment,
   updateWorkflowSourceFields,
+  appendWorkflowDetailRows,
   acquireRecordLock,
   findRecordLock,
   releaseRecordLock,
