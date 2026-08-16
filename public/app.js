@@ -133,6 +133,16 @@ const state = {
   notificationUnreadOnly: false,
   notificationTimer: null,
   emailSettings: null,
+  account: null,
+  accountAvatarUrl: '',
+  activeAccountTab: 'profile',
+  accountReturnView: 'customersView',
+  sidebarMenu: [],
+  menuConfigDraft: null,
+  menuConfigCatalog: { destinations: [], users: [], departments: [] },
+  menuConfigVersions: [],
+  selectedMenuItemKey: '',
+  draggingMenuItemKey: '',
   workflowDelegations: [],
   workflowDelegationStatus: 'all',
   workflowDelegationSearch: '',
@@ -3799,6 +3809,7 @@ function showAdminSection(id) {
     });
   }
   if (id === 'adminEmailSettingsSection' && state.user?.role === 'admin') runWorkflowUi(loadEmailSettings);
+  if (id === 'adminMenuConfigurationSection' && state.user?.role === 'admin') runWorkflowUi(loadMenuConfiguration);
 }
 
 function workflowStatusClass(status) {
@@ -6376,6 +6387,7 @@ function setSession(token, user, rememberSession = state.rememberSession) {
   $('#sessionLabel').textContent = `${user.name} · ${user.role}`;
   $('#logoutButton').hidden = false;
   $('#notificationHub').hidden = false;
+  $('#accountHub').hidden = false;
   $('[data-view="usersView"]').hidden = user.role !== 'admin';
   $('[data-view="sysadminView"]').hidden = user.role !== 'admin';
   $('[data-view="workflowMonitoringView"]').hidden = user.role !== 'admin';
@@ -6392,6 +6404,10 @@ function clearSession() {
   $('#sessionLabel').textContent = 'Not signed in';
   $('#logoutButton').hidden = true;
   $('#notificationHub').hidden = true;
+  $('#accountHub').hidden = true;
+  toggleAccountMenu(false);
+  if (state.accountAvatarUrl) URL.revokeObjectURL(state.accountAvatarUrl);
+  state.accountAvatarUrl = ''; state.account = null;
   window.clearInterval(state.notificationTimer); state.notificationTimer = null;
   $('[data-view="usersView"]').hidden = false;
   $('[data-view="sysadminView"]').hidden = false;
@@ -9771,9 +9787,198 @@ async function loadBootstrap() {
   renderFieldConfig();
   syncCustomerModuleActions();
   await loadCustomers();
+  await loadSidebarMenu();
+  await loadAccount();
   await loadNotifications();
   window.clearInterval(state.notificationTimer);
   state.notificationTimer = window.setInterval(() => runWorkflowUi(loadNotifications), 30000);
+}
+
+function menuStableKey(label, existingKey = '') {
+  if (existingKey) return existingKey;
+  const base = String(label || 'menu_item').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 68) || 'menu_item';
+  const used = new Set((state.menuConfigDraft?.items || []).map((item) => item.key));
+  let key = base; let number = 2;
+  while (used.has(key)) key = `${base}_${number++}`;
+  return key;
+}
+
+function menuItemVisibleForPreview(item) {
+  if (!item.enabled) return false;
+  const role = $('#menuPreviewRole')?.value || 'admin';
+  const visibility = item.visibility || {};
+  if (!(visibility.roles?.length || visibility.userIds?.length || visibility.departmentIds?.length)) return true;
+  return visibility.roles?.includes(role);
+}
+
+function menuIcon(icon) {
+  const icons = { users: 'U', dashboard: 'D', approval: 'A', module: 'M', settings: 'S', link: '↗', none: '' };
+  return Object.prototype.hasOwnProperty.call(icons, icon) ? icons[icon] : String(icon || '').slice(0, 1).toUpperCase();
+}
+
+function renderSidebarMenu() {
+  const nav = $('#mainSidebarNav');
+  if (!nav || !state.sidebarMenu.length) return;
+  const roots = state.sidebarMenu.filter((item) => !item.parentKey).sort((a, b) => a.order - b.order);
+  const itemHtml = (item) => {
+    const icon = menuIcon(item.icon);
+    if (item.destination?.type === 'external') return `<a class="nav-button nav-link" href="${escapeHtml(item.destination.url)}" target="_blank" rel="noopener noreferrer">${icon ? `<span class="nav-menu-icon">${escapeHtml(icon)}</span>` : ''}<span>${escapeHtml(item.label)}</span><span class="external-link-mark" aria-label="External link">↗</span></a>`;
+    const displayLabel = item.destination?.type === 'view' && item.destination?.key === 'dashboardPagesView' ? 'Homepage' : item.label;
+    const attribute = item.destination?.type === 'module' ? `data-module-view="${escapeHtml(item.destination.key)}"` : `data-view="${escapeHtml(item.destination?.key)}"`;
+    return `<button class="nav-button" ${attribute}>${icon ? `<span class="nav-menu-icon">${escapeHtml(icon)}</span>` : ''}<span>${escapeHtml(displayLabel)}</span></button>`;
+  };
+  const renderEntry = (entry) => entry.type === 'group'
+    ? `<details class="nav-group" open><summary>${menuIcon(entry.icon) ? `<span class="nav-menu-icon">${escapeHtml(menuIcon(entry.icon))}</span>` : ''}${escapeHtml(entry.label)}</summary><div>${state.sidebarMenu.filter((item) => item.parentKey === entry.key).sort((a,b) => a.order-b.order).map(renderEntry).join('')}</div></details>`
+    : itemHtml(entry);
+  nav.innerHTML = roots.map(renderEntry).join('');
+}
+
+async function loadSidebarMenu() {
+  const payload = await api('/api/menu/sidebar').catch(() => ({ items: [] }));
+  state.sidebarMenu = payload.items || [];
+  renderSidebarMenu();
+}
+
+function menuVisibilityChecks(kind, values, selected) {
+  return values.map((value) => `<label class="menu-visibility-option"><input type="checkbox" data-menu-visibility="${kind}" value="${escapeHtml(value.id ?? value.value)}" ${(selected || []).map(String).includes(String(value.id ?? value.value)) ? 'checked' : ''}><span><strong>${escapeHtml(value.name ?? value.label)}</strong>${value.email ? `<small>${escapeHtml(value.email)}</small>` : ''}</span></label>`).join('') || '<p class="muted">No options available.</p>';
+}
+
+function renderMenuConfigInspector() {
+  const inspector = $('#menuConfigInspector');
+  if (!inspector) return;
+  const item = state.menuConfigDraft?.items?.find((entry) => entry.key === state.selectedMenuItemKey);
+  if (!item) { inspector.innerHTML = '<div class="empty-state"><h3>Select an entry</h3><p>Choose a group or menu item to configure it.</p></div>'; return; }
+  const destinationValue = item.destination?.type === 'external' ? 'external' : `${item.destination?.type || 'view'}:${item.destination?.key || ''}`;
+  inspector.innerHTML = `<div class="menu-inspector-title"><span class="menu-tree-symbol">${item.type === 'group' ? 'G' : 'I'}</span><div><h3>${escapeHtml(item.label)}</h3><small>${escapeHtml(item.key)} · automatic</small></div></div>
+    <label>Label<input data-menu-field="label" value="${escapeHtml(item.label)}"></label>
+    <label>Stable key (automatic)<input value="${escapeHtml(item.key)}" disabled></label>
+    <label>Icon<select data-menu-field="icon">${['none','users','dashboard','approval','module','settings','link'].map((icon) => `<option value="${icon}" ${item.icon === icon ? 'selected' : ''}>${icon === 'none' ? 'No icon' : icon[0].toUpperCase() + icon.slice(1)}</option>`).join('')}</select></label>
+    <label class="checkbox-label"><input type="checkbox" data-menu-field="enabled" ${item.enabled ? 'checked' : ''} ${item.systemKey === 'admin_portal' ? 'disabled' : ''}><span><strong>Show this entry</strong><small>Visibility never grants backend permission.</small></span></label>
+    ${item.type === 'item' ? `<label>Destination<select data-menu-field="destination" ${item.systemKey === 'admin_portal' ? 'disabled' : ''}>${state.menuConfigCatalog.destinations.map((destination) => `<option value="${destination.type}:${destination.key}" ${destinationValue === `${destination.type}:${destination.key}` ? 'selected' : ''}>${escapeHtml(destination.label)}</option>`).join('')}<option value="external" ${destinationValue === 'external' ? 'selected' : ''}>External HTTPS link</option></select></label>${destinationValue === 'external' ? `<label>HTTPS URL<input type="url" data-menu-field="externalUrl" value="${escapeHtml(item.destination?.url || '')}" placeholder="https://example.com"></label>` : ''}` : ''}
+    ${item.systemKey === 'admin_portal' ? '<div class="menu-config-notice">Admin Portal is protected so administrators cannot be locked out.</div>' : `<details open><summary>Visibility rules</summary><p class="muted">Leave all choices empty to show this entry to everyone with permission.</p><h4>Roles</h4><div class="menu-visibility-grid">${menuVisibilityChecks('roles', [{value:'admin',label:'Admin'},{value:'manager',label:'Manager'},{value:'user',label:'User'}], item.visibility?.roles)}</div><h4>Users</h4><div class="menu-visibility-scroll">${menuVisibilityChecks('userIds', state.menuConfigCatalog.users, item.visibility?.userIds)}</div><h4>Departments</h4><div class="menu-visibility-scroll">${menuVisibilityChecks('departmentIds', state.menuConfigCatalog.departments, item.visibility?.departmentIds)}</div></details><button type="button" class="danger-button full-width" data-remove-menu-item>Remove entry</button>`}`;
+}
+
+function renderMenuConfig() {
+  const tree = $('#menuConfigTree');
+  if (!tree || !state.menuConfigDraft) return;
+  const items = state.menuConfigDraft.items || [];
+  const row = (item, depth = 0) => `<button type="button" role="treeitem" draggable="true" class="menu-tree-item ${depth ? 'is-nested' : ''} ${item.key === state.selectedMenuItemKey ? 'is-selected' : ''} ${!menuItemVisibleForPreview(item) ? 'is-preview-hidden' : ''}" style="--menu-depth:${depth}" data-menu-item-key="${escapeHtml(item.key)}"><span class="menu-tree-grip" aria-hidden="true">⋮⋮</span><span class="menu-tree-symbol">${item.type === 'group' ? 'G' : menuIcon(item.icon) || 'I'}</span><span><strong>${escapeHtml(item.label)}</strong><small>${item.type === 'group' ? 'Group' : item.destination?.type === 'external' ? 'External link' : item.destination?.key || 'Choose destination'}</small></span><span class="menu-tree-state">${item.enabled ? '' : 'Hidden'}</span></button>`;
+  const roots = items.filter((item) => !item.parentKey).sort((a,b) => a.order-b.order);
+  const renderTreeEntry = (item, depth = 0) => `${row(item, depth)}${item.type === 'group' ? items.filter((child) => child.parentKey === item.key).sort((a,b) => a.order-b.order).map((child) => renderTreeEntry(child, depth + 1)).join('') : ''}`;
+  tree.innerHTML = roots.map((item) => renderTreeEntry(item)).join('') || '<div class="empty-state"><h3>No menu entries</h3><p>Add a group or item to begin.</p></div>';
+  const groupSelect = $('#menuDefaultGroup');
+  if (groupSelect) { groupSelect.innerHTML = `<option value="">Top level</option>${items.filter((item) => item.type === 'group').map((group) => `<option value="${escapeHtml(group.key)}" ${state.menuConfigDraft.defaultModuleGroupKey === group.key ? 'selected' : ''}>${escapeHtml(group.label)}</option>`).join('')}`; }
+  renderMenuConfigInspector();
+}
+
+function renderMenuVersions() {
+  const target = $('#menuConfigVersions'); if (!target) return;
+  target.innerHTML = state.menuConfigVersions.map((version) => `<div class="menu-version-row"><span><strong>Version ${version.version_number}</strong><small>${escapeHtml(version.created_by_name || 'System')} · ${formatDateTime(version.created_at)}</small></span><button type="button" class="secondary" data-restore-menu-version="${version.id}">Restore to draft</button></div>`).join('') || '<p class="muted">No menu has been published yet.</p>';
+}
+
+async function loadMenuConfiguration() {
+  const [configuration, catalog, versions] = await Promise.all([api('/api/menu/configuration'), api('/api/menu/configuration/catalog'), api('/api/menu/configuration/versions')]);
+  state.menuConfigDraft = configuration.draft;
+  state.menuConfigCatalog = catalog;
+  state.menuConfigVersions = versions.versions || [];
+  state.selectedMenuItemKey = state.menuConfigDraft.items?.[0]?.key || '';
+  $('#menuConfigStatus').textContent = `Draft loaded · Published version ${configuration.publishedVersion || 0}`;
+  renderMenuConfig(); renderMenuVersions();
+}
+
+async function saveMenuConfiguration(publish = false) {
+  const path = publish ? '/api/menu/configuration/publish' : '/api/menu/configuration/draft';
+  const payload = await api(path, { method: publish ? 'POST' : 'PUT', body: JSON.stringify(state.menuConfigDraft) });
+  state.menuConfigDraft = payload.config;
+  if (publish) { await loadSidebarMenu(); await loadMenuConfiguration(); }
+  toast(publish ? 'Sidebar Menu Published.' : 'Menu Draft Saved.');
+}
+
+function accountInitials(name = state.account?.name || state.user?.name || 'A') {
+  return String(name).trim().split(/\s+/).slice(0, 2).map((part) => part[0] || '').join('').toUpperCase() || 'A';
+}
+
+function setAccountAvatarElements(url = '') {
+  ['header', 'menu', 'settings', 'profile'].forEach((prefix) => {
+    const image = $(`#${prefix}AvatarImage`); const initials = $(`#${prefix}AvatarInitials`);
+    if (!image || !initials) return;
+    image.hidden = !url; initials.hidden = Boolean(url);
+    if (url) image.src = url; else image.removeAttribute('src');
+    initials.textContent = accountInitials();
+  });
+}
+
+async function loadAccountAvatar() {
+  if (state.accountAvatarUrl) { URL.revokeObjectURL(state.accountAvatarUrl); state.accountAvatarUrl = ''; }
+  if (!state.account?.hasAvatar) { setAccountAvatarElements(''); return; }
+  const response = await fetch('/api/account/avatar', { headers: { Authorization: `Bearer ${await currentAuthToken()}` } });
+  if (!response.ok) { setAccountAvatarElements(''); return; }
+  state.accountAvatarUrl = URL.createObjectURL(await response.blob());
+  setAccountAvatarElements(state.accountAvatarUrl);
+}
+
+function renderAccount() {
+  const account = state.account; if (!account) return;
+  state.user = { ...state.user, name: account.name };
+  const storage = state.rememberSession ? localStorage : sessionStorage;
+  storage.setItem(authStorageKeys.user, JSON.stringify(state.user));
+  $('#sessionLabel').textContent = `${account.name} · ${account.role}`;
+  $('#headerAccountName').textContent = account.name;
+  $('#headerAccountRole').textContent = account.role;
+  $('#menuAccountName').textContent = account.name; $('#menuAccountEmail').textContent = account.email;
+  $('#settingsAccountName').textContent = account.name; $('#settingsAccountEmail').textContent = account.email;
+  const profile = $('#accountProfileForm'); profile.elements.name.value = account.name; profile.elements.phone.value = account.phone; profile.elements.jobTitle.value = account.jobTitle;
+  $('#accountManagedEmail').textContent = account.email; $('#accountManagedStaffId').textContent = account.staffId || 'Not assigned'; $('#accountManagedRole').textContent = account.role; $('#accountManagedDepartment').textContent = account.departmentName; $('#accountManagedStatus').textContent = account.status;
+  const preferences = $('#accountPreferencesForm'); preferences.elements.language.value = account.language; preferences.elements.timezone.value = account.timezone; preferences.elements.dateFormat.value = account.dateFormat; preferences.elements.timeFormat.value = account.timeFormat;
+  setAccountAvatarElements(state.accountAvatarUrl);
+}
+
+async function loadAccount() {
+  const payload = await api('/api/account'); state.account = payload.account; renderAccount(); await loadAccountAvatar();
+}
+
+function toggleAccountMenu(force) {
+  const menu = $('#accountMenu'); const button = $('#accountMenuButton');
+  const open = force === undefined ? menu.hidden : Boolean(force);
+  menu.hidden = !open; button.setAttribute('aria-expanded', String(open));
+  if (open) toggleNotificationDrawer(false);
+}
+
+function selectAccountTab(tab) {
+  state.activeAccountTab = tab;
+  const ids = { profile: 'accountProfilePanel', security: 'accountSecurityPanel', preferences: 'accountPreferencesPanel' };
+  Object.entries(ids).forEach(([key, id]) => { $(`#${id}`).hidden = key !== tab; });
+  $$('[data-account-tab]').forEach((button) => button.classList.toggle('is-active', button.dataset.accountTab === tab));
+}
+
+async function openAccountSettings(tab = 'profile') {
+  const visible = $$('.view').find((view) => !view.hidden && view.id !== 'accountSettingsView');
+  if (visible) state.accountReturnView = visible.id;
+  toggleAccountMenu(false); showView('accountSettingsView'); selectAccountTab(tab); await loadAccount();
+}
+
+async function saveAccountProfile(event) {
+  event.preventDefault(); const payload = await api('/api/account/profile', { method: 'PATCH', body: JSON.stringify(serializeForm(event.currentTarget)) });
+  state.account = payload.account; renderAccount(); toast('Profile Saved.');
+}
+
+async function saveAccountPreferences(event) {
+  event.preventDefault(); const payload = await api('/api/account/preferences', { method: 'PUT', body: JSON.stringify(serializeForm(event.currentTarget)) });
+  state.account = payload.account; renderAccount(); toast('Preferences Saved.');
+}
+
+async function changeAccountPassword(event) {
+  event.preventDefault(); await api('/api/account/password', { method: 'POST', body: JSON.stringify(serializeForm(event.currentTarget)) });
+  event.currentTarget.reset(); clearSession(); configureAuthUi(); toast('Password Changed. Sign In Again.');
+}
+
+async function uploadAccountAvatar(file) {
+  if (!file) return; const body = new FormData(); body.append('avatar', file);
+  const payload = await api('/api/account/avatar', { method: 'POST', body }); state.account = payload.account; await loadAccountAvatar(); renderAccount(); toast('Profile Photo Updated.');
+}
+
+async function removeAccountAvatar() {
+  await api('/api/account/avatar', { method: 'DELETE' }); state.account.hasAvatar = false; await loadAccountAvatar(); renderAccount(); toast('Profile Photo Removed.');
 }
 
 async function loadCustomers() {
@@ -9994,6 +10199,15 @@ function configureAuthUi() {
 
 function bindEvents() {
   $('#notificationBell')?.addEventListener('click', () => toggleNotificationDrawer());
+  $('#accountMenuButton')?.addEventListener('click', () => toggleAccountMenu());
+  $('#accountMenu')?.addEventListener('click', (event) => { const button = event.target.closest('[data-open-account-settings]'); if (button) runWorkflowUi(() => openAccountSettings(button.dataset.openAccountSettings)); });
+  $$('[data-account-tab]').forEach((button) => button.addEventListener('click', () => selectAccountTab(button.dataset.accountTab)));
+  $('#backFromAccountSettings')?.addEventListener('click', () => showView(state.accountReturnView || 'customersView'));
+  $('#accountProfileForm')?.addEventListener('submit', (event) => runWorkflowUi(() => saveAccountProfile(event)));
+  $('#accountPreferencesForm')?.addEventListener('submit', (event) => runWorkflowUi(() => saveAccountPreferences(event)));
+  $('#accountPasswordForm')?.addEventListener('submit', (event) => runWorkflowUi(() => changeAccountPassword(event)));
+  $('#accountAvatarInput')?.addEventListener('change', (event) => runWorkflowUi(() => uploadAccountAvatar(event.target.files?.[0])));
+  $('#removeAccountAvatar')?.addEventListener('click', () => runWorkflowUi(removeAccountAvatar));
   $('#notificationUnreadOnly')?.addEventListener('change', (event) => { state.notificationUnreadOnly = event.target.checked; runWorkflowUi(loadNotifications); });
   $('#markAllNotificationsRead')?.addEventListener('click', () => runWorkflowUi(async () => { await api('/api/notifications/read-all', { method: 'POST', body: '{}' }); await loadNotifications(); }));
   $('#notificationList')?.addEventListener('click', (event) => { const button = event.target.closest('[data-notification-id]'); if (!button) return; const item = state.notifications.find((entry) => entry.id === Number(button.dataset.notificationId)); if (item) runWorkflowUi(() => openNotification(item)); });
@@ -10043,21 +10257,20 @@ function bindEvents() {
     }
   });
 
-  $$('.nav-button').forEach((button) => {
-    button.addEventListener('click', () => {
-      if (!state.token) return showView('loginView');
-      showView(button.dataset.view);
-      if (button.dataset.view === 'dashboardPagesView') loadPublishedDashboards().catch((error) => toast(titleCaseMessage(error.message), 'error'));
-      if (button.dataset.view === 'workflowRequestsView') runWorkflowUi(loadWorkflowRequests);
-      if (button.dataset.view === 'workflowMonitoringView') runWorkflowUi(loadWorkflowMonitoring);
-      if (button.dataset.view === 'workflowDelegationView') runWorkflowUi(loadWorkflowDelegations);
-    });
-  });
-  $('#publishedModuleNav')?.addEventListener('click', (event) => {
+  $('#mainSidebarNav')?.addEventListener('click', (event) => {
     const button = event.target.closest('[data-module-view]');
-    if (!button || !state.token) return;
-    openRuntimeModulePage(button.dataset.moduleView)
-      .catch((error) => toast(titleCaseMessage(error.message), 'error'));
+    if (button && state.token) return openRuntimeModulePage(button.dataset.moduleView).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+    const viewButton = event.target.closest('[data-view]');
+    if (!viewButton) return;
+    if (!state.token) return showView('loginView');
+    showView(viewButton.dataset.view);
+    if (viewButton.dataset.view === 'dashboardPagesView') loadPublishedDashboards().catch((error) => toast(titleCaseMessage(error.message), 'error'));
+    if (viewButton.dataset.view === 'workflowRequestsView') runWorkflowUi(loadWorkflowRequests);
+    if (viewButton.dataset.view === 'workflowMonitoringView') runWorkflowUi(loadWorkflowMonitoring);
+    if (viewButton.dataset.view === 'workflowDelegationView') runWorkflowUi(loadWorkflowDelegations);
+  });
+  document.addEventListener('click', (event) => {
+    if (!event.target.closest('#accountHub')) toggleAccountMenu(false);
   });
 
   $$('.admin-section-button').forEach((button) => {
@@ -10129,6 +10342,47 @@ function bindEvents() {
       }
     });
   });
+  $('#addMenuGroup')?.addEventListener('click', () => {
+    const label = 'New group'; const key = menuStableKey(label);
+    state.menuConfigDraft.items.push({ key, type: 'group', parentKey: null, label, icon: 'none', enabled: true, order: state.menuConfigDraft.items.length + 1, destination: null, visibility: { roles: [], userIds: [], departmentIds: [] } });
+    state.selectedMenuItemKey = key; renderMenuConfig();
+  });
+  $('#addMenuItem')?.addEventListener('click', () => {
+    const label = 'New menu item'; const key = menuStableKey(label); const destination = state.menuConfigCatalog.destinations[0] || { type: 'view', key: 'customersView' };
+    state.menuConfigDraft.items.push({ key, type: 'item', parentKey: null, label, icon: 'none', enabled: true, order: state.menuConfigDraft.items.length + 1, destination: { type: destination.type, key: destination.key }, visibility: { roles: [], userIds: [], departmentIds: [] } });
+    state.selectedMenuItemKey = key; renderMenuConfig();
+  });
+  $('#menuPreviewRole')?.addEventListener('change', renderMenuConfig);
+  $('#menuDefaultGroup')?.addEventListener('change', (event) => { state.menuConfigDraft.defaultModuleGroupKey = event.target.value; });
+  $('#checkMenuConfig')?.addEventListener('click', () => runWorkflowUi(async () => { const result = await api('/api/menu/configuration/check', { method: 'POST', body: JSON.stringify(state.menuConfigDraft) }); if (!result.check.valid) throw new Error(result.check.errors[0]); toast('Menu Configuration Check Passed.'); }));
+  $('#saveMenuConfig')?.addEventListener('click', () => runWorkflowUi(() => saveMenuConfiguration(false)));
+  $('#publishMenuConfig')?.addEventListener('click', () => runWorkflowUi(() => saveMenuConfiguration(true)));
+  $('#resetMenuConfig')?.addEventListener('click', () => runWorkflowUi(async () => { const confirmed = await showConfirmationModal({ title: 'Reset menu draft', message: 'Replace the current draft with the safe default sidebar? The published menu remains unchanged until you publish.', confirmLabel: 'Reset draft' }); if (!confirmed) return; const payload = await api('/api/menu/configuration/reset', { method: 'POST' }); state.menuConfigDraft = payload.config; state.selectedMenuItemKey = state.menuConfigDraft.items[0]?.key || ''; renderMenuConfig(); toast('Menu Draft Reset.'); }));
+  $('#menuConfigTree')?.addEventListener('click', (event) => { const row = event.target.closest('[data-menu-item-key]'); if (!row) return; state.selectedMenuItemKey = row.dataset.menuItemKey; renderMenuConfig(); });
+  $('#menuConfigTree')?.addEventListener('dragstart', (event) => { const row = event.target.closest('[data-menu-item-key]'); if (!row) return; state.draggingMenuItemKey = row.dataset.menuItemKey; event.dataTransfer.effectAllowed = 'move'; });
+  $('#menuConfigTree')?.addEventListener('dragover', (event) => { if (event.target.closest('[data-menu-item-key]')) event.preventDefault(); });
+  $('#menuConfigTree')?.addEventListener('drop', (event) => {
+    event.preventDefault(); const targetRow = event.target.closest('[data-menu-item-key]'); const source = state.menuConfigDraft.items.find((item) => item.key === state.draggingMenuItemKey); const target = state.menuConfigDraft.items.find((item) => item.key === targetRow?.dataset.menuItemKey); if (!source || !target || source === target || source.systemKey === 'admin_portal') return;
+    let ancestor = target; while (ancestor?.parentKey) { if (ancestor.parentKey === source.key) return; ancestor = state.menuConfigDraft.items.find((item) => item.key === ancestor.parentKey); }
+    if (target.type === 'group') source.parentKey = target.key; else { source.parentKey = target.parentKey || null; const siblings = state.menuConfigDraft.items.filter((item) => item.parentKey === source.parentKey && item !== source).sort((a,b) => a.order-b.order); const index = siblings.indexOf(target); siblings.splice(index < 0 ? siblings.length : index, 0, source); siblings.forEach((item, order) => { item.order = order + 1; }); }
+    state.draggingMenuItemKey = ''; renderMenuConfig();
+  });
+  $('#menuConfigInspector')?.addEventListener('input', (event) => {
+    const item = state.menuConfigDraft?.items?.find((entry) => entry.key === state.selectedMenuItemKey); if (!item) return;
+    const field = event.target.dataset.menuField;
+    if (field === 'label') item.label = event.target.value;
+    if (field === 'icon') item.icon = event.target.value;
+    if (field === 'enabled') item.enabled = event.target.checked;
+    if (field === 'externalUrl') item.destination = { type: 'external', url: event.target.value };
+    if (event.target.dataset.menuVisibility) { const kind = event.target.dataset.menuVisibility; const cast = kind === 'roles' ? String : Number; item.visibility[kind] = [...$('#menuConfigInspector').querySelectorAll(`[data-menu-visibility="${kind}"]:checked`)].map((input) => cast(input.value)); }
+    if (field !== 'label' && field !== 'externalUrl') renderMenuConfig();
+  });
+  $('#menuConfigInspector')?.addEventListener('change', (event) => {
+    const item = state.menuConfigDraft?.items?.find((entry) => entry.key === state.selectedMenuItemKey); if (!item || event.target.dataset.menuField !== 'destination') return;
+    const value = event.target.value; item.destination = value === 'external' ? { type: 'external', url: 'https://' } : { type: value.split(':')[0], key: value.split(':').slice(1).join(':') }; renderMenuConfig();
+  });
+  $('#menuConfigInspector')?.addEventListener('click', (event) => { if (!event.target.closest('[data-remove-menu-item]')) return; const key = state.selectedMenuItemKey; state.menuConfigDraft.items = state.menuConfigDraft.items.filter((item) => item.key !== key && item.parentKey !== key); state.selectedMenuItemKey = state.menuConfigDraft.items[0]?.key || ''; renderMenuConfig(); });
+  $('#menuConfigVersions')?.addEventListener('click', (event) => { const button = event.target.closest('[data-restore-menu-version]'); if (!button) return; runWorkflowUi(async () => { const payload = await api(`/api/menu/configuration/versions/${button.dataset.restoreMenuVersion}/restore`, { method: 'POST' }); state.menuConfigDraft = payload.config; state.selectedMenuItemKey = state.menuConfigDraft.items[0]?.key || ''; renderMenuConfig(); toast('Menu Version Restored To Draft.'); }); });
   $('#newWorkflowRequestButton')?.addEventListener('click', openWorkflowSubmitModal);
   $('#refreshWorkflowMonitoring')?.addEventListener('click', () => runWorkflowUi(state.workflowMonitoringTab === 'history' ? loadWorkflowReport : loadWorkflowMonitoring));
   $('#runWorkflowSlaButton')?.addEventListener('click', () => runWorkflowUi(runWorkflowSlaCheck));

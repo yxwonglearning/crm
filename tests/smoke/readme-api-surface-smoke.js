@@ -8,7 +8,9 @@ const routeGroups = [
   ['src/modules/dashboards/dashboard-pages.routes.js', 'dashboardPageRoutes', '/api/dashboard-pages'],
   ['src/modules/action-flows/action-flows.routes.js', 'actionFlowRoutes', '/api/action-flows'],
   ['src/modules/workflows/workflows.routes.js', 'workflowRoutes', '/api/workflows'],
-  ['src/modules/notifications/notifications.routes.js', 'notificationRoutes', '/api/notifications']
+  ['src/modules/notifications/notifications.routes.js', 'notificationRoutes', '/api/notifications'],
+  ['src/modules/menu/menu.routes.js', 'menuRoutes', '/api/menu'],
+  ['src/modules/account/account.routes.js', 'accountRoutes', '/api/account']
 ];
 
 const missing = [];

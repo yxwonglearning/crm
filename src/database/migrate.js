@@ -156,6 +156,15 @@ async function main() {
   await ensureIndex(connection, 'users', 'users_staff_id_unique', 'UNIQUE KEY users_staff_id_unique (staff_id)');
   await connection.query('ALTER TABLE `users` MODIFY `password_hash` VARCHAR(255) NULL');
   await ensureColumn(connection, 'users', 'custom_fields', 'custom_fields JSON NULL AFTER status');
+  await ensureColumn(connection, 'users', 'profile_phone', 'profile_phone VARCHAR(40) NULL AFTER custom_fields');
+  await ensureColumn(connection, 'users', 'job_title', 'job_title VARCHAR(120) NULL AFTER profile_phone');
+  await ensureColumn(connection, 'users', 'preferred_language', "preferred_language VARCHAR(12) NOT NULL DEFAULT 'en' AFTER job_title");
+  await ensureColumn(connection, 'users', 'preferred_timezone', "preferred_timezone VARCHAR(80) NOT NULL DEFAULT 'Asia/Singapore' AFTER preferred_language");
+  await ensureColumn(connection, 'users', 'preferred_date_format', "preferred_date_format VARCHAR(20) NOT NULL DEFAULT 'DD/MM/YYYY' AFTER preferred_timezone");
+  await ensureColumn(connection, 'users', 'preferred_time_format', "preferred_time_format VARCHAR(8) NOT NULL DEFAULT '24h' AFTER preferred_date_format");
+  await ensureColumn(connection, 'users', 'avatar_blob', 'avatar_blob MEDIUMBLOB NULL AFTER preferred_time_format');
+  await ensureColumn(connection, 'users', 'avatar_mime', 'avatar_mime VARCHAR(40) NULL AFTER avatar_blob');
+  await ensureColumn(connection, 'users', 'auth_version', 'auth_version INT UNSIGNED NOT NULL DEFAULT 0 AFTER avatar_mime');
   await ensureColumn(connection, 'customers', 'custom_fields', 'custom_fields JSON NULL AFTER notes');
   await ensureColumn(connection, 'crm_modules', 'module_status', "module_status ENUM('draft', 'published', 'archived') NOT NULL DEFAULT 'draft' AFTER description");
   await ensureColumn(connection, 'crm_modules', 'show_in_menu', 'show_in_menu TINYINT(1) NOT NULL DEFAULT 0 AFTER module_status');
@@ -1091,6 +1100,35 @@ async function main() {
       CONSTRAINT crm_workflow_assignment_transfers_original_user_fk FOREIGN KEY (original_approver_user_id) REFERENCES users(id) ON DELETE SET NULL,
       CONSTRAINT crm_workflow_assignment_transfers_replacement_user_fk FOREIGN KEY (replacement_approver_user_id) REFERENCES users(id) ON DELETE RESTRICT,
       CONSTRAINT crm_workflow_assignment_transfers_actor_fk FOREIGN KEY (transferred_by) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_menu_definitions (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      menu_key VARCHAR(80) NOT NULL,
+      draft_json JSON NOT NULL,
+      published_json JSON NULL,
+      published_version INT UNSIGNED NOT NULL DEFAULT 0,
+      updated_by BIGINT UNSIGNED NULL,
+      published_by BIGINT UNSIGNED NULL,
+      published_at DATETIME NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id), UNIQUE KEY crm_menu_definitions_key_unique (menu_key),
+      CONSTRAINT crm_menu_definitions_updated_by_fk FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL,
+      CONSTRAINT crm_menu_definitions_published_by_fk FOREIGN KEY (published_by) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_menu_versions (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      menu_key VARCHAR(80) NOT NULL,
+      version_number INT UNSIGNED NOT NULL,
+      config_json JSON NOT NULL,
+      created_by BIGINT UNSIGNED NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id), UNIQUE KEY crm_menu_versions_number_unique (menu_key, version_number),
+      CONSTRAINT crm_menu_versions_created_by_fk FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
   );
   try {

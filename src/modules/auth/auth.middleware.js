@@ -25,6 +25,9 @@ async function authenticateLocalToken(token) {
   if (!user || user.status !== 'active') {
     throw new AppError('Invalid or expired token', 401);
   }
+  if (Number(decoded.authVersion || 0) !== Number(user.auth_version || 0)) {
+    throw new AppError('Your session has expired. Sign in again.', 401);
+  }
   return user;
 }
 

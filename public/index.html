@@ -16,17 +16,16 @@
             <small id="sessionLabel">Not signed in</small>
           </span>
         </div>
-        <nav class="nav">
+        <nav class="nav" id="mainSidebarNav" aria-label="Main navigation">
           <button class="nav-button is-active" data-view="customersView">Customers</button>
           <button class="nav-button" data-view="usersView">Users</button>
-          <button class="nav-button" data-view="dashboardPagesView">Dashboards</button>
+          <button class="nav-button" data-view="dashboardPagesView">Homepage</button>
           <button class="nav-button" data-view="workflowRequestsView">Approval Requests</button>
           <button class="nav-button" data-view="workflowMonitoringView">Workflow Monitoring</button>
           <button class="nav-button" data-view="workflowDelegationView">Approval Delegation</button>
           <div id="publishedModuleNav"></div>
           <button class="nav-button" data-view="sysadminView">Admin Portal</button>
         </nav>
-        <button id="logoutButton" class="secondary full-width" hidden>Sign out</button>
       </aside>
 
       <section class="app-frame">
@@ -38,6 +37,21 @@
                 <div class="notification-drawer-heading"><div><span class="eyebrow">Updates</span><h2>Notifications</h2></div><button type="button" class="link-button" id="markAllNotificationsRead">Mark all read</button></div>
                 <label class="notification-unread-filter"><input id="notificationUnreadOnly" type="checkbox"> Unread only</label>
                 <div id="notificationList" class="notification-list"></div>
+              </aside>
+            </div>
+            <div id="accountHub" class="account-hub" hidden>
+              <button type="button" id="accountMenuButton" class="account-menu-button" aria-label="Open account menu" aria-expanded="false" aria-controls="accountMenu">
+                <span class="account-avatar"><img id="headerAvatarImage" alt="" hidden><span id="headerAvatarInitials">A</span></span>
+                <span class="account-menu-identity"><strong id="headerAccountName">Account</strong><small id="headerAccountRole">User</small></span>
+                <span aria-hidden="true">⌄</span>
+              </button>
+              <aside id="accountMenu" class="account-menu" hidden aria-label="Account menu">
+                <div class="account-menu-summary"><span class="account-avatar large"><img id="menuAvatarImage" alt="" hidden><span id="menuAvatarInitials">A</span></span><div><strong id="menuAccountName">Account</strong><small id="menuAccountEmail"></small></div></div>
+                <button type="button" data-open-account-settings="profile"><span>My profile</span><small>Photo and personal details</small></button>
+                <button type="button" data-open-account-settings="security"><span>Security</span><small>Change your password</small></button>
+                <button type="button" data-open-account-settings="preferences"><span>Language &amp; region</span><small>Time and display formats</small></button>
+                <div class="account-menu-divider"></div>
+                <button type="button" id="logoutButton" class="account-signout"><span>Sign out</span><small>End this session</small></button>
               </aside>
             </div>
           </div>
@@ -239,6 +253,43 @@
           </div>
         </section>
 
+        <section id="accountSettingsView" class="view account-settings-view" hidden>
+          <header class="toolbar account-settings-heading"><div><span class="eyebrow">Personal workspace</span><h1>Account settings</h1><p>Manage your profile, security, and regional preferences.</p></div><button type="button" class="secondary" id="backFromAccountSettings">Back</button></header>
+          <div class="account-settings-layout">
+            <aside class="account-settings-nav" aria-label="Account settings sections">
+              <div class="account-settings-person"><span class="account-avatar portrait"><img id="settingsAvatarImage" alt="Profile photo" hidden><span id="settingsAvatarInitials">A</span></span><strong id="settingsAccountName">Account</strong><small id="settingsAccountEmail"></small></div>
+              <button type="button" class="is-active" data-account-tab="profile">Profile</button>
+              <button type="button" data-account-tab="security">Security</button>
+              <button type="button" data-account-tab="preferences">Language &amp; region</button>
+            </aside>
+            <main class="account-settings-content">
+              <section id="accountProfilePanel" class="account-settings-panel">
+                <div class="account-panel-heading"><div><h2>Profile</h2><p>Update how your name and photo appear across the workspace.</p></div></div>
+                <div class="account-photo-card"><span class="account-avatar portrait"><img id="profileAvatarImage" alt="Profile photo" hidden><span id="profileAvatarInitials">A</span></span><div><strong>Profile photo</strong><p>JPG, PNG, or WebP. Maximum 5 MB.</p><div class="account-photo-actions"><label class="button-link" for="accountAvatarInput">Choose photo</label><input id="accountAvatarInput" type="file" accept="image/jpeg,image/png,image/webp" hidden><button type="button" class="secondary" id="removeAccountAvatar">Remove</button></div></div></div>
+                <form id="accountProfileForm" class="account-settings-form"><div class="account-form-grid"><label>Display name<input name="name" required minlength="2" maxlength="120"></label><label>Phone number<input name="phone" type="tel" maxlength="40" placeholder="+60 12-345 6789"></label><label class="account-form-wide">Job title<input name="jobTitle" maxlength="120" placeholder="Operations manager"></label></div><div class="account-form-actions"><button type="submit">Save profile</button></div></form>
+                <div class="account-managed-card"><div><strong>Organization details</strong><p>Your administrator controls these fields.</p></div><dl><div><dt>Email</dt><dd id="accountManagedEmail">—</dd></div><div><dt>Staff ID</dt><dd id="accountManagedStaffId">—</dd></div><div><dt>Role</dt><dd id="accountManagedRole">—</dd></div><div><dt>Department</dt><dd id="accountManagedDepartment">—</dd></div><div><dt>Status</dt><dd id="accountManagedStatus">—</dd></div></dl></div>
+              </section>
+              <section id="accountSecurityPanel" class="account-settings-panel" hidden>
+                <div class="account-panel-heading"><div><h2>Security</h2><p>Choose a new password for your account.</p></div></div>
+                <div class="account-security-notice"><strong>All sessions will end</strong><p>After changing your password, sign in again on every device.</p></div>
+                <form id="accountPasswordForm" class="account-settings-form narrow"><label>Current password<input name="currentPassword" type="password" autocomplete="current-password" required></label><label>New password<input name="newPassword" type="password" autocomplete="new-password" minlength="8" maxlength="72" required><small>Use at least 8 characters.</small></label><label>Confirm new password<input name="confirmPassword" type="password" autocomplete="new-password" minlength="8" maxlength="72" required></label><div class="account-form-actions"><button type="submit">Change password</button></div></form>
+              </section>
+              <section id="accountPreferencesPanel" class="account-settings-panel" hidden>
+                <div class="account-panel-heading"><div><h2>Language &amp; region</h2><p>Control how dates and time are shown for your account.</p></div></div>
+                <form id="accountPreferencesForm" class="account-settings-form">
+                  <div class="account-form-grid account-preferences-grid">
+                    <label>Language<select name="language"><option value="en">English</option></select><small>More interface languages can be added later.</small></label>
+                    <label>Time zone<select name="timezone"><option value="Asia/Singapore">Asia/Singapore</option><option value="Asia/Kuala_Lumpur">Asia/Kuala Lumpur</option><option value="Asia/Tokyo">Asia/Tokyo</option><option value="Europe/London">Europe/London</option><option value="America/New_York">America/New York</option><option value="UTC">UTC</option></select><small class="account-field-spacer" aria-hidden="true">&nbsp;</small></label>
+                    <label>Date format<select name="dateFormat"><option value="DD/MM/YYYY">DD/MM/YYYY</option><option value="MM/DD/YYYY">MM/DD/YYYY</option><option value="YYYY-MM-DD">YYYY-MM-DD</option></select><small class="account-field-spacer" aria-hidden="true">&nbsp;</small></label>
+                    <label>Time format<select name="timeFormat"><option value="24h">24-hour</option><option value="12h">12-hour</option></select><small class="account-field-spacer" aria-hidden="true">&nbsp;</small></label>
+                  </div>
+                  <div class="account-form-actions"><button type="submit">Save preferences</button></div>
+                </form>
+              </section>
+            </main>
+          </div>
+        </section>
+
         <section id="workflowDelegationView" class="view workflow-delegation-view" hidden>
           <header class="toolbar"><div><span class="eyebrow">Coverage schedule</span><h1>Approval delegation</h1><p>Temporarily route approvals to a trusted replacement. Without a schedule, normal workflow approvers remain unchanged.</p></div><button type="button" id="newWorkflowDelegationButton">Create delegation</button></header>
           <div class="workflow-delegation-note"><strong>Optional by design</strong><span>Delegation only applies during its effective dates and matching workflow scope.</span></div>
@@ -399,7 +450,30 @@
                 <span>Email Settings</span>
                 <small>Workflow delivery provider</small>
               </button>
+              <button type="button" class="admin-section-button" data-admin-section="adminMenuConfigurationSection" data-short="N">
+                <span>Menu Configuration</span>
+                <small>Sidebar structure and visibility</small>
+              </button>
             </aside>
+
+            <section id="adminMenuConfigurationSection" class="admin-section" hidden>
+              <div class="menu-config-shell">
+                <header class="menu-config-heading">
+                  <div><span class="eyebrow">Navigation studio</span><h2>Menu Configuration</h2><p>Arrange the shared sidebar, choose destinations, and control who can see each entry.</p></div>
+                  <div class="menu-config-actions"><button type="button" class="secondary" id="resetMenuConfig">Reset draft</button><button type="button" class="secondary" id="checkMenuConfig">Check</button><button type="button" class="secondary" id="saveMenuConfig">Save draft</button><button type="button" id="publishMenuConfig">Publish</button></div>
+                </header>
+                <div id="menuConfigStatus" class="menu-config-status">Open this page to load the current navigation draft.</div>
+                <div class="menu-config-workspace">
+                  <section class="menu-config-tree-card">
+                    <div class="menu-config-card-heading"><div><h3>Structure</h3><p>Drag entries to reorder. Groups can contain menu items.</p></div><div><button type="button" class="secondary" id="addMenuGroup">+ Group</button><button type="button" class="secondary" id="addMenuItem">+ Item</button></div></div>
+                    <div class="menu-config-preview-controls"><label>Preview access<select id="menuPreviewRole"><option value="admin">Admin</option><option value="manager">Manager</option><option value="user">User</option></select></label><label>Auto-add published modules<select id="menuDefaultGroup"><option value="">Top level</option></select></label></div>
+                    <div id="menuConfigTree" class="menu-config-tree" role="tree" aria-label="Configured sidebar items"></div>
+                  </section>
+                  <aside id="menuConfigInspector" class="menu-config-inspector"><div class="empty-state"><h3>Select an entry</h3><p>Choose a group or menu item to edit its label, destination, icon, and visibility.</p></div></aside>
+                </div>
+                <section class="menu-config-versions"><div class="menu-config-card-heading"><div><h3>Published versions</h3><p>Restore a prior version into the draft without changing the live menu.</p></div></div><div id="menuConfigVersions"></div></section>
+              </div>
+            </section>
 
             <section id="adminEmailSettingsSection" class="admin-section" hidden>
               <div class="email-settings-shell">

@@ -286,7 +286,7 @@ Admins should have a dedicated portal for configuring the CRM:
    - Each widget should map query result columns such as `label`, `value`, `date`, and `group` into the chart renderer.
    - Guard dashboard SQL so it is read-only: no `INSERT`, `UPDATE`, `DELETE`, `DROP`, comments, or statement separators.
    - Later add dashboard filters, date ranges, role/user permissions, config export/import, and version history.
-8. Phase 8: Workflow Module and Approver Workflows - in progress
+8. Phase 8: Workflow Module and Approver Workflows - complete
    - Create a separate `workflow` module for approval process configuration and runtime.
    - Reuse the form builder for workflow form definitions, but keep workflow config in a dedicated module.
    - Support workflow definitions with multiple approval steps, each with assigned approvers (role or user).
@@ -599,6 +599,28 @@ Admins should have a dedicated portal for configuring the CRM:
      - Attachment malware scanning uses ClamAV INSTREAM through `WORKFLOW_CLAMAV_HOST`, `WORKFLOW_CLAMAV_PORT`, and `WORKFLOW_CLAMAV_TIMEOUT_MS`. The option is disabled by default; enabling it without an available scanner rejects the upload without advancing the workflow.
      - `npm.cmd run test:smoke:workflow-phase8-completion` verifies business-calendar arithmetic, scanner clean/infected/unavailable verdicts, any/quorum outcomes, multi-hop substitution, and bounded recurring overdue reminders.
      - The same suite runs 25,000 mixed any/quorum evaluations as a bounded performance guard. Database-backed workflow smoke suites continue to cover transactional and authorization behavior.
+8.5. Phase 8.5: Configurable Application Menu - complete
+   - Admin Portal now includes a dedicated Menu Configuration studio for the shared application sidebar.
+   - Administrators can add menu groups and entries, drag entries to reorder or place them in groups, choose labels and icons, and publish a versioned navigation configuration.
+   - Destinations are selected from registered core pages and published modules. External destinations are optional, must use HTTPS, open with an external-link indicator, and use safe browser link attributes.
+   - Visibility can target any combination of roles, individual users, and departments. Empty visibility rules mean everyone who already has permission; menu visibility never grants or replaces backend authorization.
+   - Stable menu keys are generated automatically. The Admin Portal destination is protected from disabling, retargeting, removal, or restrictive visibility so administrators cannot lock themselves out.
+   - Newly published modules with menu visibility enabled are automatically added to the configured default group (or the top level) when they are not already represented.
+   - Draft, validation, publish, published-version history, restore-to-draft, reset-to-safe-default, and role-preview controls are available. The layout adapts to smaller screens by stacking the tree and inspector.
+   - Runtime navigation is served from the published menu; archived or unavailable modules are omitted. Top-level entries and group headers share one alignment, group headers expose an open/closed chevron, and the frontend dashboard destination is labelled `Homepage` while retaining the existing `dashboardPagesView` route and Dashboard backend terminology.
+   - If no menu has been published, Customers, Users, Homepage, Approval Requests, Workflow Monitoring, Approval Delegation, and Admin Portal remain the safe default entries.
+   - Persistence uses `crm_menu_definitions` and immutable `crm_menu_versions`; implementation is under `src/modules/menu/` and the UI is in the Admin Portal.
+
+8.6. Phase 8.6: User Account and Profile Settings - complete
+   - The shared header now places a user avatar and identity control beside the notification bell. Sign out has moved from the sidebar into the account dropdown.
+   - The dropdown provides direct access to Profile, Security, and Language & Region settings through a dedicated responsive Account Settings page with left-aligned section navigation and consistently aligned form controls.
+   - Users can update their display name, phone number, job title, and profile photo. JPG, PNG, and WebP uploads are limited to 5 MB and validated by file signature, not only browser-provided MIME type.
+   - Email, staff ID, role, department, and account status remain visible but administrator-controlled; self-service APIs cannot modify them.
+   - Password changes require the current password, confirmation, and a different new password of at least eight characters. Changing a password increments `auth_version`, invalidating all previously issued sessions and requiring a fresh sign-in.
+   - Language, time zone, date format, and time format preferences are stored per user. English is the initial interface language; the preference model is ready for future translated bundles.
+   - Profile photos remain private database content and are returned only by an authenticated, non-cacheable endpoint. Initials are shown when no photo exists.
+   - Implementation is under `src/modules/account/`; account preference and photo fields are maintained in both the migration and canonical schema.
+
 9. Phase 9: AI Agent Assistant - planned
    - Add an AI assistant panel to the admin portal for form and workflow generation.
    - Support natural-language prompts to suggest form fields, workflow steps, and validation rules.
@@ -1912,6 +1934,32 @@ In-app approval notifications are automatic and do not require Automation Flow o
 | `GET /api/notifications/email-settings/current` | Admin; load central email settings without returning stored secrets. |
 | `PUT /api/notifications/email-settings/current` | Admin; save encrypted Gmail, Google Workspace, Microsoft 365, or generic SMTP settings. |
 | `POST /api/notifications/email-settings/test` | Admin; send a test message to a validated recipient. |
+
+### Application Menu API
+
+| Endpoint | Access and purpose |
+| --- | --- |
+| `GET /api/menu/sidebar` | Authenticated; returns the published sidebar filtered for the current user's visibility and available destinations. |
+| `GET /api/menu/configuration` | Admin; returns the current draft, published configuration, and published version number. |
+| `GET /api/menu/configuration/catalog` | Admin; lists registered core/module destinations plus selectable users and departments. |
+| `GET /api/menu/configuration/versions` | Admin; lists recent immutable published menu versions. |
+| `POST /api/menu/configuration/check` | Admin; validates keys, hierarchy, destinations, HTTPS links, and administrator access safeguards. |
+| `PUT /api/menu/configuration/draft` | Admin; validates and saves the global sidebar draft. |
+| `POST /api/menu/configuration/publish` | Admin; validates, publishes, and creates an immutable menu version. |
+| `POST /api/menu/configuration/reset` | Admin; replaces only the draft with the safe default navigation. |
+| `POST /api/menu/configuration/versions/:id/restore` | Admin; copies a prior published version into the draft for review. |
+
+### Account Settings API
+
+| Endpoint | Access and purpose |
+| --- | --- |
+| `GET /api/account` | Authenticated; returns the current user's profile, administrator-managed organization details, and regional preferences. |
+| `PATCH /api/account/profile` | Authenticated owner; updates display name, phone number, and job title only. |
+| `PUT /api/account/preferences` | Authenticated owner; saves language, time zone, date format, and time format. |
+| `GET /api/account/avatar` | Authenticated owner; returns the private profile image with `no-store` caching. |
+| `POST /api/account/avatar` | Authenticated owner; uploads a signature-validated JPG, PNG, or WebP image up to 5 MB. |
+| `DELETE /api/account/avatar` | Authenticated owner; removes the profile image and restores the initials fallback. |
+| `POST /api/account/password` | Authenticated owner; verifies the current password, saves a new hash, and invalidates existing sessions. |
 
 Email is an optional, non-blocking delivery channel. Approval processing and in-app notification delivery remain successful when email is disabled or unavailable.
 

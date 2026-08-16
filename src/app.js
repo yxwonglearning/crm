@@ -18,6 +18,8 @@ const { dashboardRoutes } = require('./modules/dashboards/dashboards.routes');
 const { dashboardPageRoutes } = require('./modules/dashboards/dashboard-pages.routes');
 const { workflowRoutes } = require('./modules/workflows/workflows.routes');
 const { notificationRoutes } = require('./modules/notifications/notifications.routes');
+const { menuRoutes } = require('./modules/menu/menu.routes');
+const { accountRoutes } = require('./modules/account/account.routes');
 
 function createApp() {
   const app = express();
@@ -46,6 +48,8 @@ function createApp() {
   app.use('/api/dashboard-pages', dashboardPageRoutes);
   app.use('/api/workflows', workflowRoutes);
   app.use('/api/notifications', notificationRoutes);
+  app.use('/api/menu', menuRoutes);
+  app.use('/api/account', accountRoutes);
   app.use('/api/sysadmin', sysadminRoutes);
   app.use('/api', notFoundHandler);
 

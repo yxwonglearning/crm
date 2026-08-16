@@ -30,7 +30,7 @@ async function login(email, password, options = {}) {
   }
 
   const tokenUser = publicUser(user);
-  const token = jwt.sign(tokenUser, config.jwtSecret, {
+  const token = jwt.sign({ ...tokenUser, authVersion: Number(user.auth_version || 0) }, config.jwtSecret, {
     algorithm: 'HS256',
     audience: config.jwtAudience,
     expiresIn: options.rememberMe ? config.jwtRememberExpiresIn : config.jwtExpiresIn,
