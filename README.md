@@ -1052,6 +1052,8 @@ Keep maintaining these user fields in MySQL:
 
 ## Current API Surface
 
+> **API documentation contract:** Any endpoint addition, removal, rename, authorization change, content-type change, idempotency change, or request/response contract change must update this section in the same commit. The backend smoke suite runs `tests/smoke/readme-api-surface-smoke.js` to verify that every mounted Dashboard, Automation Flow, Approval Workflow, and Notification route is represented here.
+
 All protected endpoints require `Authorization: Bearer <token>` after login. Admin-only endpoints require an admin user.
 JSON endpoints use `Content-Type: application/json` unless noted otherwise. Validation errors return an error response from the shared error handler.
 
@@ -1775,6 +1777,136 @@ JSON endpoints use `Content-Type: application/json` unless noted otherwise. Vali
     "browserButtons": []
   }
   ```
+
+### Dashboard Administration
+
+All `/api/dashboards` endpoints require an authenticated administrator.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/dashboards` | List dashboard definitions, optionally filtered by status or search text. |
+| `POST /api/dashboards` | Create a dashboard draft. |
+| `GET /api/dashboards/views` | Discover database views that can back dashboard data sources. |
+| `GET /api/dashboards/views/:viewName` | Describe the columns exposed by one database view. |
+| `GET /api/dashboards/data-sources` | List active or archived dashboard data sources. |
+| `POST /api/dashboards/data-sources` | Create a governed data source. |
+| `GET /api/dashboards/data-sources/:dataSourceKey` | Get one data-source definition. |
+| `PUT /api/dashboards/data-sources/:dataSourceKey` | Replace editable data-source settings. |
+| `POST /api/dashboards/data-sources/:dataSourceKey/archive` | Archive a data source. |
+| `POST /api/dashboards/data-sources/:dataSourceKey/execute` | Execute a data source with validated filters and viewer context. |
+| `GET /api/dashboards/:dashboardKey` | Get a dashboard definition and draft configuration. |
+| `PUT /api/dashboards/:dashboardKey` | Update dashboard metadata. |
+| `PUT /api/dashboards/:dashboardKey/configuration` | Replace the dashboard canvas configuration. |
+| `POST /api/dashboards/:dashboardKey/check` | Validate the current dashboard configuration. |
+| `GET /api/dashboards/:dashboardKey/versions` | List saved dashboard versions. |
+| `POST /api/dashboards/:dashboardKey/versions` | Create a version checkpoint. |
+| `POST /api/dashboards/:dashboardKey/versions/:versionId/restore` | Restore a saved version into the draft. |
+| `GET /api/dashboards/:dashboardKey/export` | Export a portable dashboard definition. |
+| `POST /api/dashboards/:dashboardKey/import` | Import configuration into the dashboard draft. |
+| `POST /api/dashboards/:dashboardKey/publish` | Publish a validated dashboard version. |
+| `POST /api/dashboards/:dashboardKey/duplicate` | Duplicate a dashboard into a new draft. |
+| `POST /api/dashboards/:dashboardKey/archive` | Archive a dashboard. |
+| `POST /api/dashboards/:dashboardKey/reopen` | Reopen an archived dashboard as a draft. |
+
+### Published Dashboard Pages
+
+These endpoints require authentication and apply the viewer's module and dashboard permissions.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/dashboard-pages` | List dashboards published for the current viewer. |
+| `GET /api/dashboard-pages/:dashboardKey` | Load one published dashboard page. |
+| `POST /api/dashboard-pages/:dashboardKey/widgets/:widgetKey/execute` | Execute a published widget with runtime filters. |
+| `POST /api/dashboard-pages/:dashboardKey/widgets/:widgetKey/drill-down` | Resolve a widget drill-down destination and filtered records. |
+
+### Automation Flow
+
+All `/api/action-flows` endpoints require an authenticated administrator. Published flows may be linked to approval events through their trigger configuration.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/action-flows` | List Automation Flow definitions. |
+| `POST /api/action-flows` | Create a flow draft. |
+| `GET /api/action-flows/connectors` | List configured connector interfaces. |
+| `GET /api/action-flows/connector-categories` | List connector categories. |
+| `POST /api/action-flows/connector-categories` | Create a connector category. |
+| `DELETE /api/action-flows/connector-categories/:categoryKey` | Delete an unused connector category. |
+| `GET /api/action-flows/executions` | List execution history. |
+| `POST /api/action-flows/connectors` | Create or update a connector interface. |
+| `POST /api/action-flows/connectors/:connectorKey/debug` | Test a connector using its configured interface. |
+| `DELETE /api/action-flows/connectors/:connectorKey` | Delete an unused connector. |
+| `GET /api/action-flows/:flowKey` | Get one flow definition. |
+| `PUT /api/action-flows/:flowKey` | Update flow metadata and graph configuration. |
+| `POST /api/action-flows/:flowKey/check` | Validate the draft graph. |
+| `GET /api/action-flows/:flowKey/versions` | List flow versions. |
+| `POST /api/action-flows/:flowKey/versions` | Create a version checkpoint. |
+| `POST /api/action-flows/:flowKey/publish` | Publish a validated flow version. |
+| `POST /api/action-flows/:flowKey/versions/:versionId/restore` | Restore a version into the draft. |
+| `POST /api/action-flows/:flowKey/run-once` | Run the draft once with supplied test input. |
+| `DELETE /api/action-flows/:flowKey` | Archive or remove the flow definition. |
+
+### Approval Workflows
+
+Definition administration:
+
+| Endpoint | Access and purpose |
+| --- | --- |
+| `GET /api/workflows/catalog` | Authenticated; list published workflows and request forms available to the viewer. |
+| `GET /api/workflows/definitions` | Admin; list workflow definitions. |
+| `POST /api/workflows/definitions` | Admin; create a draft definition. The stable key and readable request prefix are generated from the workflow name. |
+| `GET /api/workflows/definitions/:workflowKey` | Admin; load one definition and graph. |
+| `PUT /api/workflows/definitions/:workflowKey` | Admin; update metadata, record policy, node graph, forms, approvers, conditions, SLA, and optional email actions. |
+| `POST /api/workflows/definitions/:workflowKey/clone` | Admin; clone a workflow into a new draft. |
+| `POST /api/workflows/definitions/:workflowKey/archive` | Admin; archive a definition without changing requests already pinned to a published version. |
+| `POST /api/workflows/definitions/:workflowKey/check` | Admin; validate graph connectivity and configuration. |
+| `POST /api/workflows/definitions/:workflowKey/checkpoints` | Admin; save a draft checkpoint. |
+| `POST /api/workflows/definitions/:workflowKey/publish` | Admin; publish an immutable version used by new requests. |
+| `GET /api/workflows/definitions/:workflowKey/versions` | Admin; list published and checkpoint versions. |
+| `GET /api/workflows/definitions/:workflowKey/versions/:versionId` | Admin; inspect one version. |
+
+Operational administration:
+
+| Endpoint | Access and purpose |
+| --- | --- |
+| `GET /api/workflows/inbox` | Authenticated; list pending assignments for the current approver. |
+| `GET /api/workflows/monitoring` | Admin; search request status, SLA, requester, approver, department, workflow, and date filters. |
+| `GET /api/workflows/monitoring/export.csv` | Admin; export the filtered monitoring result as `text/csv`. |
+| `GET /api/workflows/delegations` | Admin; list approval delegations. |
+| `POST /api/workflows/delegations` | Admin; create an optional time-bounded delegation scoped by workflow, role, or department. |
+| `POST /api/workflows/delegations/:id/cancel` | Admin; cancel an active delegation. |
+| `POST /api/workflows/assignments/:id/reassign` | Admin; reassign a pending assignment with a required reason and `Idempotency-Key`. |
+| `POST /api/workflows/monitoring/run` | Admin; run the optional SLA reminder and escalation worker on demand. |
+| `POST /api/workflows/requests/:requestKey/remind` | Admin; send a manual reminder with `Idempotency-Key`. |
+
+Request lifecycle:
+
+| Endpoint | Access and purpose |
+| --- | --- |
+| `GET /api/workflows/requests` | Authenticated; list requests visible to the current user. |
+| `POST /api/workflows/requests` | Authenticated; submit a request as `multipart/form-data`, with `Idempotency-Key`. Supports up to 20 attachments, each up to 25 MB. |
+| `GET /api/workflows/requests/:requestKey` | Authenticated and authorized; return request data, current stage, assignments, decisions, history, and permitted actions. |
+| `POST /api/workflows/requests/:requestKey/decisions` | Eligible approver; approve, reject, or return using `multipart/form-data` and `Idempotency-Key`. Structured response-form values are sent in the `responses` JSON form field. |
+| `GET /api/workflows/requests/:requestKey/attachments/:attachmentId` | Authorized viewer; download an attachment as binary content. |
+| `POST /api/workflows/requests/:requestKey/withdraw` | Requester; withdraw an eligible request with `Idempotency-Key`. |
+| `POST /api/workflows/requests/:requestKey/resubmit` | Requester; resubmit a returned request with `Idempotency-Key`. |
+| `POST /api/workflows/requests/:requestKey/cancel` | Admin; cancel a request with a mandatory remark and `Idempotency-Key`. |
+
+Workflow commands fail closed: a request stays in draft when no published workflow or eligible approver can be resolved. Request identifiers use the automatically derived workflow prefix plus a six-digit sequence, for example `LEAVEAPPLICATION-000001`. Existing requests retain the exact published workflow version with which they started.
+
+### Notifications And Email Settings
+
+In-app approval notifications are automatic and do not require Automation Flow or email configuration.
+
+| Endpoint | Access and purpose |
+| --- | --- |
+| `GET /api/notifications` | Authenticated; list the current user's notifications. Supports `unread=true` and `limit`. |
+| `POST /api/notifications/read-all` | Authenticated; mark all current-user notifications as read. |
+| `POST /api/notifications/:id/read` | Authenticated owner; mark one notification as read. |
+| `GET /api/notifications/email-settings/current` | Admin; load central email settings without returning stored secrets. |
+| `PUT /api/notifications/email-settings/current` | Admin; save encrypted Gmail, Google Workspace, Microsoft 365, or generic SMTP settings. |
+| `POST /api/notifications/email-settings/test` | Admin; send a test message to a validated recipient. |
+
+Email is an optional, non-blocking delivery channel. Approval processing and in-app notification delivery remain successful when email is disabled or unavailable.
 
 ## Local Setup
 
