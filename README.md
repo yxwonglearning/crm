@@ -604,7 +604,7 @@ Admins should have a dedicated portal for configuring the CRM:
    - Administrators can add menu groups and entries, drag entries to reorder or place them in groups, choose labels and icons, and publish a versioned navigation configuration.
    - Destinations are selected from registered core pages and published modules. External destinations are optional, must use HTTPS, open with an external-link indicator, and use safe browser link attributes.
    - Visibility can target any combination of roles, individual users, and departments. Empty visibility rules mean everyone who already has permission; menu visibility never grants or replaces backend authorization.
-   - Stable menu keys are generated automatically. The Admin Portal destination is protected from disabling, retargeting, removal, or restrictive visibility so administrators cannot lock themselves out.
+   - Stable menu keys are generated automatically. The Admin Portal destination is protected from disabling, retargeting, removal, or restrictive visibility so administrators cannot lock themselves out; at runtime it is presented as a fixed admin-only action in the account dropdown instead of a duplicate sidebar entry.
    - Newly published modules with menu visibility enabled are automatically added to the configured default group (or the top level) when they are not already represented.
    - Draft, validation, publish, published-version history, restore-to-draft, reset-to-safe-default, and role-preview controls are available. The layout adapts to smaller screens by stacking the tree and inspector.
    - Runtime navigation is served from the published menu; archived or unavailable modules are omitted. Top-level entries and group headers share one alignment, group headers expose an open/closed chevron, and the frontend dashboard destination is labelled `Homepage` while retaining the existing `dashboardPagesView` route and Dashboard backend terminology.
@@ -612,7 +612,7 @@ Admins should have a dedicated portal for configuring the CRM:
    - Persistence uses `crm_menu_definitions` and immutable `crm_menu_versions`; implementation is under `src/modules/menu/` and the UI is in the Admin Portal.
 
 8.6. Phase 8.6: User Account and Profile Settings - complete
-   - The shared header now places a user avatar and identity control beside the notification bell. Sign out has moved from the sidebar into the account dropdown.
+   - The shared header now places a user avatar and identity control beside the notification bell. Sign out has moved from the sidebar into the account dropdown, alongside an Admin Portal action shown only to administrators.
    - The dropdown provides direct access to Profile, Security, and Language & Region settings through a dedicated responsive Account Settings page with left-aligned section navigation and consistently aligned form controls.
    - Users can update their display name, phone number, job title, and profile photo. JPG, PNG, and WebP uploads are limited to 5 MB and validated by file signature, not only browser-provided MIME type.
    - Email, staff ID, role, department, and account status remain visible but administrator-controlled; self-service APIs cannot modify them.

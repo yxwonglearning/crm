@@ -16,7 +16,10 @@ assert.match(service, /bcrypt\.compare\(input\.currentPassword/, 'password chang
 assert.match(middleware, /decoded\.authVersion/, 'tokens must be invalidated when the account auth version changes');
 assert.match(html, /id="accountSettingsView"/, 'dedicated account settings page must exist');
 assert.match(html, /id="accountMenu"/, 'header account menu must exist');
+assert.match(html, /id="adminPortalAccountButton" data-open-admin-portal hidden/, 'Admin Portal must be a hidden-by-default account-menu action');
+assert.doesNotMatch(html, /<aside class="sidebar">[\s\S]*?<button[^>]+data-view="sysadminView"/, 'Admin Portal must not remain as a duplicate sidebar action');
 assert.doesNotMatch(html, /<aside class="sidebar">[\s\S]*?<button id="logoutButton"/, 'sign out must not remain in the sidebar');
 assert.match(frontend, /loadAccountAvatar/, 'authenticated avatar loading must be wired');
+assert.match(frontend, /adminPortalAccountButton'\)\.hidden = user\.role !== 'admin'/, 'Admin Portal account action must be restricted to the admin role');
 
 console.log('Account settings smoke test passed.');

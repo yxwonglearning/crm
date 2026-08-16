@@ -6388,8 +6388,8 @@ function setSession(token, user, rememberSession = state.rememberSession) {
   $('#logoutButton').hidden = false;
   $('#notificationHub').hidden = false;
   $('#accountHub').hidden = false;
+  $('#adminPortalAccountButton').hidden = user.role !== 'admin';
   $('[data-view="usersView"]').hidden = user.role !== 'admin';
-  $('[data-view="sysadminView"]').hidden = user.role !== 'admin';
   $('[data-view="workflowMonitoringView"]').hidden = user.role !== 'admin';
   $('[data-view="workflowDelegationView"]').hidden = user.role !== 'admin';
 }
@@ -6408,9 +6408,9 @@ function clearSession() {
   toggleAccountMenu(false);
   if (state.accountAvatarUrl) URL.revokeObjectURL(state.accountAvatarUrl);
   state.accountAvatarUrl = ''; state.account = null;
+  $('#adminPortalAccountButton').hidden = true;
   window.clearInterval(state.notificationTimer); state.notificationTimer = null;
   $('[data-view="usersView"]').hidden = false;
-  $('[data-view="sysadminView"]').hidden = false;
   $('[data-view="workflowMonitoringView"]').hidden = false;
   $('[data-view="workflowDelegationView"]').hidden = false;
   showView('loginView');
@@ -10200,7 +10200,11 @@ function configureAuthUi() {
 function bindEvents() {
   $('#notificationBell')?.addEventListener('click', () => toggleNotificationDrawer());
   $('#accountMenuButton')?.addEventListener('click', () => toggleAccountMenu());
-  $('#accountMenu')?.addEventListener('click', (event) => { const button = event.target.closest('[data-open-account-settings]'); if (button) runWorkflowUi(() => openAccountSettings(button.dataset.openAccountSettings)); });
+  $('#accountMenu')?.addEventListener('click', (event) => {
+    const settingsButton = event.target.closest('[data-open-account-settings]');
+    if (settingsButton) return runWorkflowUi(() => openAccountSettings(settingsButton.dataset.openAccountSettings));
+    if (event.target.closest('[data-open-admin-portal]') && state.user?.role === 'admin') { toggleAccountMenu(false); showView('sysadminView'); }
+  });
   $$('[data-account-tab]').forEach((button) => button.addEventListener('click', () => selectAccountTab(button.dataset.accountTab)));
   $('#backFromAccountSettings')?.addEventListener('click', () => showView(state.accountReturnView || 'customersView'));
   $('#accountProfileForm')?.addEventListener('submit', (event) => runWorkflowUi(() => saveAccountProfile(event)));

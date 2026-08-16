@@ -93,7 +93,7 @@ async function getSidebar(user) {
     if (!represented.has(module.module_key)) config.items.push({ key: `module_${module.module_key}`, type: 'item', parentKey: config.defaultModuleGroupKey || null, label: module.name, icon: 'module', enabled: true, order: 1000 + index, destination: { type: 'module', key: module.module_key }, visibility: { roles: [], userIds: [], departmentIds: [] } });
   });
   const availableModules = new Set(catalog.modules.map((module) => module.module_key));
-  const visible = config.items.filter((item) => visibleTo(item, user) && (item.destination?.type !== 'module' || availableModules.has(item.destination.key)));
+  const visible = config.items.filter((item) => visibleTo(item, user) && item.systemKey !== 'admin_portal' && (item.destination?.type !== 'module' || availableModules.has(item.destination.key)));
   const visibleGroups = new Set();
   visible.filter((item) => item.type === 'item').forEach((item) => { let parentKey = item.parentKey; while (parentKey) { visibleGroups.add(parentKey); parentKey = config.items.find((candidate) => candidate.key === parentKey)?.parentKey || null; } });
   return { version: Number(row?.published_version || 0), items: visible.filter((item) => item.type !== 'group' || visibleGroups.has(item.key)).sort((a, b) => a.order - b.order) };
