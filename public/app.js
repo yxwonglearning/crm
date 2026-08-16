@@ -61,6 +61,30 @@ const state = {
   activeApiDefinitionTabs: { request: 'params', response: 'params' },
   apiInterfaceBodyFormats: { request: 'application/json', response: 'application/json' },
   apiDefinitionBatchTarget: null,
+  dashboardDataSources: [],
+  dashboardViews: [],
+  activeDashboardSourceKey: '',
+  dashboardSourceSearch: '',
+  dashboardPreview: null,
+  dashboardSourcesLoading: false,
+  dashboards: [],
+  dashboardStatusFilter: 'all',
+  dashboardManagementSearch: '',
+  activeDashboardKey: '',
+  dashboardManagementMode: 'list',
+  dashboardConfiguration: null,
+  dashboardLayoutViewport: 'desktop',
+  selectedDashboardWidgetKey: '',
+  dashboardLayoutHistory: [],
+  dashboardLayoutFuture: [],
+  dashboardLayoutDirty: false,
+  dashboardLayoutInteraction: null,
+  dashboardWidgetResults: {},
+  dashboardFilterValues: {},
+  publishedDashboards: [],
+  activePublishedDashboardKey: '',
+  dashboardAccessDraft: [],
+  dashboardPreviewMode: false,
   actionFlows: [],
   activeActionFlowKey: '',
   actionFlowMode: 'management',
@@ -74,6 +98,44 @@ const state = {
   actionFlowRun: null,
   actionFlowVersions: null,
   actionFlowVersionsLoading: false,
+  workflowDefinitions: [],
+  activeWorkflowKey: '',
+  workflowDefinitionSearch: '',
+  workflowDraftStages: [],
+  workflowBuilderGraph: { nodes: [], edges: [] },
+  selectedWorkflowNodeId: '',
+  selectedWorkflowEdgeId: '',
+  workflowCanvasZoom: 1,
+  workflowCanvasDrag: null,
+  workflowCanvasPan: null,
+  workflowConnectFrom: '',
+  workflowRouteDesignerOpen: false,
+  workflowInspectorCollapsed: false,
+  workflowRouteReturnScrollY: 0,
+  workflowRouteSaveNoticeTimer: null,
+  workflowRequests: [],
+  workflowInbox: [],
+  workflowRequestMode: 'requests',
+  workflowRequestStatus: 'all',
+  workflowRequestSearch: '',
+  activeWorkflowRequestKey: '',
+  activeWorkflowRequest: null,
+  workflowMonitoring: { summary: {}, items: [], generatedAt: null },
+  workflowMonitoringSearch: '',
+  workflowMonitoringStatus: 'all',
+  workflowMonitoringSla: 'all',
+  workflowMonitoringTab: 'live',
+  workflowReport: { items: [], generatedAt: null },
+  workflowReportFilters: { search: '', workflowKey: '', status: 'all', requester: '', approver: '', departmentId: '', dateFrom: '', dateTo: '' },
+  workflowMonitoringTimer: null,
+  notifications: [],
+  notificationUnreadCount: 0,
+  notificationUnreadOnly: false,
+  notificationTimer: null,
+  emailSettings: null,
+  workflowDelegations: [],
+  workflowDelegationStatus: 'all',
+  workflowDelegationSearch: '',
   permissionMatrix: null,
   fieldPermissionMatrix: null,
   activePermissionModule: 'customers',
@@ -1734,7 +1796,7 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
 function setModalFullscreen(modal, enabled) {
-  const card = modal?.querySelector('.modal-card, .form-design-drawer, .version-history-drawer, .page-permission-drawer, .permission-audit-drawer, .api-connector-drawer, .api-interface-drawer');
+  const card = modal?.querySelector('.modal-card, .form-design-drawer, .version-history-drawer, .page-permission-drawer, .permission-audit-drawer, .api-connector-drawer, .api-interface-drawer, .dashboard-source-drawer');
   const button = card?.querySelector('[data-modal-fullscreen]');
   if (!card || !button) return;
   modal.classList.toggle('is-fullscreen', enabled);
@@ -1750,7 +1812,7 @@ function resetModalFullscreen(modal) {
 
 function toggleModalFullscreen(button) {
   const modal = button.closest('.modal-backdrop');
-  const card = button.closest('.modal-card, .form-design-drawer, .version-history-drawer, .page-permission-drawer, .permission-audit-drawer, .api-connector-drawer, .api-interface-drawer');
+  const card = button.closest('.modal-card, .form-design-drawer, .version-history-drawer, .page-permission-drawer, .permission-audit-drawer, .api-connector-drawer, .api-interface-drawer, .dashboard-source-drawer');
   if (!modal || !card) return;
   setModalFullscreen(modal, !card.classList.contains('is-fullscreen'));
 }
@@ -1795,7 +1857,11 @@ async function api(path, options = {}) {
     if (response.status === 401 && path !== '/api/auth/login') {
       clearSession();
     }
-    throw new Error(payload.error || 'Request failed');
+    const error = new Error(payload.error || 'Request failed');
+    error.status = response.status;
+    error.details = payload.details || {};
+    error.code = payload.details?.code || '';
+    throw error;
   }
 
   if (response.status === 204) {
@@ -1803,6 +1869,49 @@ async function api(path, options = {}) {
   }
   return response.json();
 }
+
+function renderNotifications() {
+  $('#notificationBadge').hidden = !state.notificationUnreadCount;
+  $('#notificationBadge').textContent = state.notificationUnreadCount > 99 ? '99+' : String(state.notificationUnreadCount);
+  $('#notificationList').innerHTML = state.notifications.map((item) => `<button type="button" class="notification-item ${item.read ? '' : 'is-unread'}" data-notification-id="${item.id}" data-notification-request="${escapeHtml(item.requestKey || '')}"><span class="notification-item-mark"></span><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.message)}</small><time>${escapeHtml(new Date(item.createdAt).toLocaleString())}</time></span></button>`).join('') || '<div class="notification-empty"><strong>You are all caught up</strong><span>Workflow updates will appear here automatically.</span></div>';
+}
+
+async function loadNotifications() {
+  if (!state.user) return;
+  const payload = await api(`/api/notifications?unread=${state.notificationUnreadOnly}&limit=50`);
+  state.notifications = payload.notifications || []; state.notificationUnreadCount = payload.unreadCount || 0; renderNotifications();
+}
+
+function toggleNotificationDrawer(force) {
+  const drawer = $('#notificationDrawer'); const open = force ?? drawer.hidden;
+  drawer.hidden = !open; $('#notificationBell').setAttribute('aria-expanded', String(open)); if (open) runWorkflowUi(loadNotifications);
+}
+
+async function openNotification(item) {
+  if (!item.read) await api(`/api/notifications/${item.id}/read`, { method: 'POST', body: '{}' });
+  toggleNotificationDrawer(false); await loadNotifications();
+  if (item.requestKey) await openMonitoredWorkflowRequest(item.requestKey);
+}
+
+function emailProviderDefaults(provider) {
+  return {
+    gmail: { host: 'smtp.gmail.com', port: 587, sender: 'yourname@gmail.com', secret: '16-character Google App Password', help: 'For Gmail, use a Google App Password instead of your normal password.' },
+    google_workspace: { host: 'smtp-relay.gmail.com', port: 587, sender: 'workflow@company.com', secret: 'Google Workspace relay password', help: 'Configure SMTP Relay in Google Admin, then enter its authenticated sender details.' },
+    microsoft_365: { host: '', port: '', sender: 'workflow@company.com', secret: 'Microsoft Entra client secret', help: 'Register an Entra application with Mail.Send application permission, then enter its Tenant ID, Client ID, secret, and sender mailbox.' },
+    generic_smtp: { host: 'mail.company.com', port: 587, sender: 'workflow@company.com', secret: 'SMTP password', help: 'Use the SMTP host and credentials supplied by your email administrator.' }
+  }[provider];
+}
+
+function syncEmailProviderExamples() { const form = $('#emailSettingsForm'); if (!form) return; const provider = form.elements.provider.value; const examples = emailProviderDefaults(provider); const graph = provider === 'microsoft_365';
+  $$('[data-email-smtp]').forEach((field) => { field.hidden = graph; }); $$('[data-email-graph]').forEach((field) => { field.hidden = !graph; }); $('#emailSecretLabel').textContent = graph ? 'Client secret' : 'App password / SMTP password';
+  form.elements.host.placeholder = examples.host; form.elements.port.placeholder = String(examples.port); form.elements.senderEmail.placeholder = examples.sender; form.elements.username.placeholder = examples.sender; form.elements.secret.placeholder = examples.secret; $('#emailProviderHelp').textContent = examples.help; }
+
+function renderEmailSettings() { const settings = state.emailSettings || {}; const form = $('#emailSettingsForm'); if (!form) return;
+  form.elements.provider.value = settings.provider || 'gmail'; form.elements.enabled.checked = Boolean(settings.enabled); form.elements.senderName.value = settings.senderName || ''; form.elements.senderEmail.value = settings.senderEmail || ''; form.elements.replyTo.value = settings.replyTo || ''; form.elements.host.value = settings.settings?.host || ''; form.elements.port.value = settings.settings?.port || ''; form.elements.security.value = settings.settings?.security || 'starttls'; form.elements.username.value = settings.settings?.username || ''; form.elements.tenantId.value = settings.settings?.tenantId || ''; form.elements.clientId.value = settings.settings?.clientId || ''; form.elements.secret.value = '';
+  $('#emailSecretHint').textContent = settings.hasSecret ? 'A password is saved. Leave blank to keep it.' : 'No password is saved yet.'; const status = settings.status === 'ready' ? 'Ready' : settings.status === 'failed' ? 'Test failed' : settings.configured ? 'Saved · not tested' : 'Not configured'; $('#emailSettingsStatus').className = `email-settings-status is-${settings.status || 'untested'}`; $('#emailSettingsStatus').textContent = status; syncEmailProviderExamples(); }
+async function loadEmailSettings() { const payload = await api('/api/notifications/email-settings/current'); state.emailSettings = payload.emailSettings; renderEmailSettings(); }
+async function saveEmailSettings(event) { event.preventDefault(); const form = event.currentTarget; const value = Object.fromEntries(new FormData(form)); const payload = { provider: value.provider, enabled: form.elements.enabled.checked, senderName: value.senderName.trim(), senderEmail: value.senderEmail.trim(), replyTo: value.replyTo.trim(), secret: value.secret, settings: { host: value.host.trim(), port: value.port ? Number(value.port) : undefined, security: value.security, username: value.username.trim(), tenantId: value.tenantId.trim(), clientId: value.clientId.trim() } }; state.emailSettings = (await api('/api/notifications/email-settings/current', { method: 'PUT', body: JSON.stringify(payload) })).emailSettings; renderEmailSettings(); toast('Email Settings Saved.'); }
+async function sendEmailSettingsTest() { const to = $('#emailTestRecipient').value.trim(); if (!to) throw new Error('Enter a test recipient email address.'); await api('/api/notifications/email-settings/test', { method: 'POST', body: JSON.stringify({ to }) }); await loadEmailSettings(); toast('Test Email Sent.'); }
 
 function initializeScrollableModalFrames() {
   const cards = $$('.modal-card:not(.compact-modal):not(.success-prompt-card):not(.confirmation-modal-card)');
@@ -2483,7 +2592,7 @@ function renderActionFlowManagement() {
       <td>${escapeHtml(actionFlowUpdatedLabel(flow.updatedAt))}</td>
       <td><div class="action-flow-management-actions"><button type="button" class="secondary" data-check-managed-flow="${escapeHtml(flow.flowKey)}">Check</button><button type="button" class="open-flow-canvas-button" data-open-flow-canvas="${escapeHtml(flow.flowKey)}">Open canvas →</button><button type="button" class="link-button danger-link" data-delete-managed-flow="${escapeHtml(flow.flowKey)}">Delete</button></div></td>
     </tr>`;
-  }).join('') || '<tr><td colspan="7" class="action-flow-management-empty"><strong>No Action Flows found</strong><span>Change the filter or create a new automation.</span></td></tr>';
+  }).join('') || '<tr><td colspan="7" class="action-flow-management-empty"><strong>No Automation Flows found</strong><span>Change the filter or create a new automation.</span></td></tr>';
 }
 
 function showActionFlowManagement() {
@@ -2890,14 +2999,23 @@ function renderActionFlowTriggerConfig(node) {
     ['record_updated', 'When a record is updated'],
     ['status_changed', 'When status changes'],
     ['record_deleted', 'When a record is deleted'],
+    ['workflow_event', 'When an approval workflow event occurs'],
     ['manual', 'Manually'],
     ['scheduled', 'On a schedule']
   ];
   const moduleOptions = configModules.map((module) => `<option value="${escapeHtml(module.key)}" ${module.key === triggerModule ? 'selected' : ''}>${escapeHtml(module.name)}</option>`).join('');
+  const workflowOptions = state.workflowDefinitions.map((workflow) => `<option value="${escapeHtml(workflow.workflowKey)}" ${workflow.workflowKey === triggerModule ? 'selected' : ''}>${escapeHtml(workflow.name)}</option>`).join('');
+  const workflowEvents = ['workflow.submitted', 'workflow.completed', 'workflow.stage.started', 'workflow.stage.waiting', 'workflow.stage.skipped', 'workflow.stage.auto_approved', 'workflow.stage.approved', 'workflow.reminder_due', 'workflow.escalated', 'workflow.assignment.delegated', 'workflow.assignment.reassigned', 'workflow.approved', 'workflow.rejected', 'workflow.returned', 'workflow.resubmitted', 'workflow.withdrawn', 'workflow.cancelled'];
+  const selectedEvent = node.config?.eventTypes?.[0] || '';
   return `<div class="action-flow-inspector-section action-flow-operation-config">
     <span>Start settings</span>
     <label>Start when<select data-trigger-config-field="triggerType">${triggerOptions.map(([value, label]) => `<option value="${value}" ${value === triggerType ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
-    <label>Source module<select data-trigger-config-field="triggerModule">${moduleOptions}</select></label>
+    ${triggerType === 'workflow_event' ? `
+      <label>Approval workflow<select data-trigger-config-field="triggerModule"><option value="">Any workflow</option>${workflowOptions}</select></label>
+      <label>Event<select data-trigger-config-field="workflowEventType"><option value="">Any event</option>${workflowEvents.map((eventType) => `<option value="${eventType}" ${selectedEvent === eventType ? 'selected' : ''}>${escapeHtml(titleCaseMessage(eventType.replace('workflow.', '')))}</option>`).join('')}</select></label>
+      <label>Stage key <span class="muted">(optional)</span><input data-trigger-config-field="stageKey" value="${escapeHtml(node.config?.stageKey || '')}" placeholder="manager_approval"></label>
+      <label>Connection / outcome <span class="muted">(optional)</span><input data-trigger-config-field="connectionKey" value="${escapeHtml(node.config?.connectionKey || '')}" placeholder="approved"></label>
+    ` : `<label>Source module<select data-trigger-config-field="triggerModule">${moduleOptions}</select></label>`}
     ${triggerType === 'scheduled' ? `<div class="action-flow-schedule-grid">
       <label>Run every<input data-trigger-config-field="scheduleEvery" type="number" min="1" max="1000" value="${escapeHtml(node.config?.scheduleEvery || 1)}"></label>
       <label>Interval<select data-trigger-config-field="scheduleUnit"><option value="minutes" ${node.config?.scheduleUnit === 'minutes' ? 'selected' : ''}>Minutes</option><option value="hours" ${!node.config?.scheduleUnit || node.config?.scheduleUnit === 'hours' ? 'selected' : ''}>Hours</option><option value="days" ${node.config?.scheduleUnit === 'days' ? 'selected' : ''}>Days</option></select></label>
@@ -3019,14 +3137,20 @@ function updateActionFlowOperationalConfig(field, value) {
 function updateActionFlowTriggerConfig(field, value) {
   const flow = activeActionFlow();
   const node = actionFlowDefinition(flow).nodes.find((item) => item.id === state.selectedActionFlowNodeId && item.category === 'trigger');
-  if (!flow || !node || !['triggerType', 'triggerModule', 'scheduleEvery', 'scheduleUnit', 'scheduleStartAt'].includes(field)) return;
+  if (!flow || !node || !['triggerType', 'triggerModule', 'workflowEventType', 'stageKey', 'connectionKey', 'scheduleEvery', 'scheduleUnit', 'scheduleStartAt'].includes(field)) return;
   if (field === 'triggerType') {
     flow.triggerType = value;
     node.type = value;
     if (value === 'scheduled') node.config = { scheduleEvery: 1, scheduleUnit: 'hours', ...(node.config || {}) };
+    if (value === 'workflow_event') {
+      flow.triggerModule = '';
+      node.config = { workflowKey: '', eventTypes: [], stageKey: '', connectionKey: '' };
+    }
   } else if (field === 'triggerModule') {
     flow.triggerModule = value;
     node.config = { ...(node.config || {}), moduleKey: value };
+  } else if (field === 'workflowEventType') {
+    node.config = { ...(node.config || {}), eventTypes: value ? [value] : [] };
   } else {
     node.config = { ...(node.config || {}), [field]: value };
   }
@@ -3208,7 +3332,7 @@ function renderActionFlowStudio() {
   renderActionFlowPalette();
   renderActionFlowCanvas();
   renderActionFlowInspector();
-  $('#actionFlowTitle').textContent = flow?.name || 'Action Flow';
+  $('#actionFlowTitle').textContent = flow?.name || 'Automation Flow';
   $('#actionFlowSaveState').textContent = flow
     ? (state.actionFlowDirty
       ? 'Unsaved draft changes'
@@ -3417,14 +3541,14 @@ async function saveActiveActionFlow() {
   state.actionFlows[index] = result.flow;
   state.actionFlowDirty = false;
   renderActionFlowStudio();
-  toast('Action Flow Saved.');
+  toast('Automation Flow Saved.');
 }
 
 function renderActionFlowVersions() {
   const flow = activeActionFlow();
   const list = $('#actionFlowVersionsList');
   if (!list) return;
-  $('#actionFlowVersionsTitle').textContent = `Version History - ${flow?.name || 'Action Flow'}`;
+  $('#actionFlowVersionsTitle').textContent = `Version History - ${flow?.name || 'Automation Flow'}`;
   if (state.actionFlowVersionsLoading) {
     list.innerHTML = '<div class="version-history-empty">Loading version history...</div>';
     return;
@@ -3439,7 +3563,7 @@ function renderActionFlowVersions() {
       <span class="version-timeline-marker" aria-hidden="true"></span>
       <div class="version-timeline-card">
         <div class="section-heading-row"><strong>Version ${version.versionNumber}</strong><span>${isPublished ? 'Published' : isCurrent ? 'Current draft' : titleCaseMessage(version.action || 'checkpoint')}</span></div>
-        <p>${escapeHtml(version.summary || 'Saved Action Flow checkpoint')}</p>
+        <p>${escapeHtml(version.summary || 'Saved Automation Flow checkpoint')}</p>
         <div class="version-timeline-meta"><span>${escapeHtml(author)}</span><span>${escapeHtml(versionHistoryDate(version.createdAt))}</span></div>
         ${isCurrent ? '' : `<div class="form-actions end-actions"><button type="button" class="secondary" data-restore-action-flow-version="${version.id}" data-version-number="${version.versionNumber}">Restore as New Version</button></div>`}
       </div>
@@ -3487,7 +3611,7 @@ async function createActionFlowVersion() {
   $('#actionFlowVersionRemark').value = '';
   renderActionFlowVersions();
   renderActionFlowStudio();
-  toast('Action Flow Version Saved.');
+  toast('Automation Flow Version Saved.');
 }
 
 async function publishActiveActionFlow() {
@@ -3495,7 +3619,7 @@ async function publishActiveActionFlow() {
   if (!flow) return;
   if (state.actionFlowDirty) await saveActiveActionFlow();
   const confirmed = await showConfirmationModal({
-    title: flow.publishedVersion ? 'Publish New Version' : 'Publish Action Flow',
+    title: flow.publishedVersion ? 'Publish New Version' : 'Publish Automation Flow',
     message: 'Publish this saved draft? The published version will be used for live and scheduled executions.',
     confirmLabel: 'Publish'
   });
@@ -3505,7 +3629,7 @@ async function publishActiveActionFlow() {
   state.actionFlows[index] = result.flow;
   state.actionFlowVersions = { versions: result.versions, currentVersion: result.flow.currentVersion, publishedVersion: result.flow.publishedVersion };
   renderActionFlowStudio();
-  toast(`Action Flow Version ${result.flow.publishedVersion} Published.`);
+  toast(`Automation Flow Version ${result.flow.publishedVersion} Published.`);
 }
 
 async function restoreActionFlowVersion(versionId, versionNumber) {
@@ -3594,22 +3718,22 @@ async function checkActiveActionFlow() {
   if (!flow) return;
   if (state.actionFlowDirty) await saveActiveActionFlow();
   const result = await api(`/api/action-flows/${encodeURIComponent(flow.flowKey)}/check`, { method: 'POST' });
-  if (result.check?.valid) return toast('Action Flow Check Passed.');
-  toast(titleCaseMessage(result.check?.errors?.[0] || 'Action Flow Needs Attention.'), 'error');
+  if (result.check?.valid) return toast('Automation Flow Check Passed.');
+  toast(titleCaseMessage(result.check?.errors?.[0] || 'Automation Flow Needs Attention.'), 'error');
 }
 
 async function deleteManagedActionFlow(flowKey) {
   const flow = state.actionFlows.find((item) => item.flowKey === flowKey);
   if (!flow) return;
   const confirmed = await showConfirmationModal({
-    title: 'Delete Action Flow',
+    title: 'Delete Automation Flow',
     message: `Delete ${flow.name}? This removes the automation and cannot be undone.`,
-    confirmLabel: 'Delete Action Flow'
+    confirmLabel: 'Delete Automation Flow'
   });
   if (!confirmed) return;
   await api(`/api/action-flows/${encodeURIComponent(flowKey)}`, { method: 'DELETE' });
   await loadActionFlows();
-  toast('Action Flow Deleted.');
+  toast('Automation Flow Deleted.');
 }
 
 function fieldValidationRulesFromForm(form) {
@@ -3635,6 +3759,14 @@ function showView(id) {
   closeApiConnectorModal();
   closeApiInterfaceModal();
   closeDepartmentNodeModal();
+  closeDashboardSourceDrawer();
+  closeDashboardFilterDrawer();
+  closeDashboardFormModal();
+  closeWorkflowModal('workflowSubmitModal');
+  closeWorkflowModal('workflowDecisionModal');
+  closeWorkflowModal('workflowLifecycleModal');
+  closeWorkflowModal('workflowDelegationModal');
+  closeWorkflowModal('workflowReassignModal');
   closeFormBuilderCreateModal();
   closeFieldConfigModal();
   closeFormDesignDrawer();
@@ -3647,6 +3779,10 @@ function showView(id) {
   $$('.nav-button').forEach((button) => {
     button.classList.toggle('is-active', button.dataset.view === id && !button.dataset.moduleView);
   });
+  window.clearInterval(state.workflowMonitoringTimer);
+  state.workflowMonitoringTimer = id === 'workflowMonitoringView'
+    ? window.setInterval(() => runWorkflowUi(loadWorkflowMonitoring), 30000)
+    : null;
 }
 
 function showAdminSection(id) {
@@ -3662,6 +3798,2533 @@ function showAdminSection(id) {
       toast(titleCaseMessage(error.message), 'error');
     });
   }
+  if (id === 'adminEmailSettingsSection' && state.user?.role === 'admin') runWorkflowUi(loadEmailSettings);
+}
+
+function workflowStatusClass(status) {
+  if (['approved', 'published', 'auto-approved'].includes(status)) return 'status-published';
+  if (['rejected', 'cancelled', 'archived'].includes(status)) return 'status-archived';
+  if (['pending', 'active'].includes(status)) return 'status-live';
+  return 'status-draft';
+}
+
+function workflowIdempotencyKey(action, requestKey = '') {
+  const random = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `ui:${action}:${requestKey}:${random}`.slice(0, 120);
+}
+
+function closeWorkflowModal(id) {
+  const modal = $(`#${id}`);
+  if (!modal) return;
+  resetModalFullscreen(modal);
+  modal.hidden = true;
+  if ($$('.modal-backdrop').every((item) => item.hidden)) document.body.classList.remove('modal-open');
+}
+
+async function runWorkflowUi(action) {
+  try {
+    await action();
+  } catch (error) {
+    toast(titleCaseMessage(error.message), 'error');
+  }
+}
+
+function openWorkflowModal(id, focusSelector = 'input, select, textarea, button') {
+  const modal = $(`#${id}`);
+  if (!modal) return;
+  modal.hidden = false;
+  document.body.classList.add('modal-open');
+  requestAnimationFrame(() => modal.querySelector(focusSelector)?.focus());
+}
+
+function workflowModuleOptions(selected = '') {
+  return configModules.filter((module) => module.status === 'published').map((module) => (
+    `<option value="${escapeHtml(module.key)}" ${module.key === selected ? 'selected' : ''}>${escapeHtml(module.name)}</option>`
+  )).join('');
+}
+
+function workflowStableKeyFromName(name, editingKey = '') {
+  let base = String(name || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  if (!base) return '';
+  if (!/^[a-z]/.test(base)) base = `workflow_${base}`;
+  if (base.length < 2) base = `${base}_workflow`;
+  base = base.slice(0, 80).replace(/_+$/g, '');
+  const used = new Set(state.workflowDefinitions.map((definition) => definition.workflowKey).filter((key) => key !== editingKey));
+  if (!used.has(base)) return base;
+  for (let suffix = 2; suffix < 10000; suffix += 1) {
+    const tail = `_${suffix}`;
+    const candidate = `${base.slice(0, 80 - tail.length).replace(/_+$/g, '')}${tail}`;
+    if (!used.has(candidate)) return candidate;
+  }
+  return base;
+}
+
+function syncWorkflowStableKey() {
+  const form = $('#workflowDefinitionForm');
+  if (!form || form.elements.editingWorkflowKey.value) return;
+  form.elements.workflowKey.value = workflowStableKeyFromName(form.elements.name.value);
+}
+
+function workflowRequestFormOptions(selected = '') {
+  const systemForms = [['', 'Use all source-module fields'], ['add', 'Add form'], ['edit', 'Edit form'], ['detail', 'Detail form']];
+  const standalone = workflowCompatibleStandaloneForms().map((form) => [form.formKey, form.name]);
+  return [...systemForms, ...standalone.filter(([key]) => !systemForms.some(([systemKey]) => systemKey === key))]
+    .map(([value, label]) => `<option value="${escapeHtml(value)}" ${value === selected ? 'selected' : ''}>${escapeHtml(label)}${value ? ` · ${escapeHtml(value)}` : ''}</option>`).join('');
+}
+
+function workflowCompatibleStandaloneForms() {
+  const moduleKey = $('#workflowDefinitionForm')?.elements.sourceModuleKey.value || '';
+  const sourceKeys = new Set(moduleFields(moduleKey).map((field) => field.fieldKey));
+  return state.standaloneForms.filter((form) => (form.fields || []).every((field) => sourceKeys.has(field.fieldKey)));
+}
+
+function workflowFieldsForForm(formKey = '') {
+  const form = $('#workflowDefinitionForm');
+  const moduleKey = form?.elements.sourceModuleKey.value || '';
+  const standalone = state.standaloneForms.find((item) => item.formKey === formKey);
+  if (standalone) return (standalone.fields || []).filter((field) => !field.archived);
+  const fields = moduleFields(moduleKey).filter((field) => field.tableType !== 'detail' && !field.archived);
+  if (!formKey || !formDesignTypes.includes(formKey)) return fields;
+  const layout = moduleConfigByKey(moduleKey)?.formLayouts?.published?.[formKey]
+    || readFormDesignLayouts(moduleKey)?.published?.[formKey]
+    || {};
+  const hidden = new Set(layout.hidden || []);
+  const order = Array.isArray(layout.order) ? layout.order : [];
+  return fields.filter((field) => field.showInForm !== false && !hidden.has(field.fieldKey)).sort((left, right) => {
+    const leftIndex = order.indexOf(left.fieldKey);
+    const rightIndex = order.indexOf(right.fieldKey);
+    return (leftIndex < 0 ? Number.MAX_SAFE_INTEGER : leftIndex) - (rightIndex < 0 ? Number.MAX_SAFE_INTEGER : rightIndex);
+  });
+}
+
+function workflowBoundFormFields() {
+  const formKey = $('#workflowDefinitionForm')?.elements.requestFormKey.value || '';
+  return workflowFieldsForForm(formKey);
+}
+
+function workflowNodePresentation(node) {
+  const defaultFormKey = $('#workflowDefinitionForm')?.elements.requestFormKey.value || '';
+  const inherited = !node?.presentation || node.presentation.inheritDefault === true;
+  const formKey = inherited ? defaultFormKey : (node.presentation.formKey || '');
+  return { ...(node?.presentation || {}), formKey, inherited };
+}
+
+function workflowNodeFormOptions(node) {
+  const presentation = workflowNodePresentation(node);
+  const defaultFormKey = $('#workflowDefinitionForm')?.elements.requestFormKey.value || '';
+  const defaultLabel = defaultFormKey
+    ? (state.standaloneForms.find((form) => form.formKey === defaultFormKey)?.name || titleCaseMessage(defaultFormKey))
+    : 'All source-module fields';
+  const choices = [['__all__', 'Use all source-module fields'], ['add', 'Add form'], ['edit', 'Edit form'], ['detail', 'Detail form'], ...workflowCompatibleStandaloneForms().map((form) => [form.formKey, form.name])];
+  const selectedValue = presentation.formKey || '__all__';
+  return `<option value="__inherit__" ${presentation.inherited ? 'selected' : ''}>Use default form · ${escapeHtml(defaultLabel)}</option>${choices.filter(([key], index) => choices.findIndex(([candidate]) => candidate === key) === index).map(([value, label]) => `<option value="${escapeHtml(value)}" ${!presentation.inherited && value === selectedValue ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('')}`;
+}
+
+function setWorkflowNodeForm(node, selectedValue) {
+  if (selectedValue === '__inherit__') {
+    node.presentation = { inheritDefault: true };
+    return;
+  }
+  const formKey = selectedValue === '__all__' ? '' : selectedValue;
+  const standalone = state.standaloneForms.find((form) => form.formKey === formKey);
+  const label = standalone?.name || (formKey ? `${titleCaseMessage(formKey)} form` : 'All source-module fields');
+  node.presentation = {
+    formKey,
+    formName: label,
+    inheritDefault: false,
+    mode: node.type === 'start' ? 'request' : node.type === 'approval' ? 'review' : 'result',
+    fieldKeys: workflowFieldsForForm(formKey).map((field) => field.fieldKey).filter(Boolean)
+  };
+}
+
+function workflowResponseFormOptions(selected = '') {
+  const choices = [['', 'No response form'], ['add', 'Add form'], ['edit', 'Edit form'], ['detail', 'Detail form'], ...workflowCompatibleStandaloneForms().map((form) => [form.formKey, form.name])];
+  return choices.filter(([key], index) => choices.findIndex(([candidate]) => candidate === key) === index).map(([value, label]) => `<option value="${escapeHtml(value)}" ${value === selected ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('');
+}
+
+function setWorkflowResponseForm(node, formKey) {
+  if (!formKey) {
+    delete node.responsePresentation;
+    return;
+  }
+  const standalone = state.standaloneForms.find((form) => form.formKey === formKey);
+  node.responsePresentation = {
+    formKey,
+    formName: standalone?.name || `${titleCaseMessage(formKey)} form`,
+    fields: workflowFieldsForForm(formKey).map((field) => ({
+      fieldKey: field.fieldKey,
+      label: field.label || titleCaseMessage(field.fieldKey),
+      type: field.type || 'textbox',
+      options: Array.isArray(field.options) ? structuredClone(field.options) : [],
+      required: Boolean(field.required),
+      storage: 'decision',
+      targetFieldKey: field.fieldKey,
+      exposeToAutomation: false
+    }))
+  };
+}
+
+function renderWorkflowResponseMappings(node) {
+  const response = node.responsePresentation;
+  if (!response?.fields?.length) return '<p class="muted">Choose a response form to collect structured information with the decision.</p>';
+  const sourceFields = moduleFields($('#workflowDefinitionForm')?.elements.sourceModuleKey.value || '').filter((field) => field.tableType !== 'detail' && !field.archived);
+  return `<div class="workflow-response-mappings">${response.fields.map((field, index) => `<article data-workflow-response-index="${index}"><div><strong>${escapeHtml(field.label)}</strong><small>${escapeHtml(field.fieldKey)}${field.required ? ' · Required' : ''}</small></div><label>Store response<select data-workflow-response-field="storage"><option value="decision" ${field.storage !== 'source' ? 'selected' : ''}>Decision history only</option><option value="source" ${field.storage === 'source' ? 'selected' : ''}>Update source record</option></select></label>${field.storage === 'source' ? `<label>Source field<select data-workflow-response-field="targetFieldKey">${sourceFields.map((target) => `<option value="${escapeHtml(target.fieldKey)}" ${target.fieldKey === (field.targetFieldKey || field.fieldKey) ? 'selected' : ''}>${escapeHtml(target.label || titleCaseMessage(target.fieldKey))}</option>`).join('')}</select></label>` : ''}<label class="checkbox-label"><input type="checkbox" data-workflow-response-field="exposeToAutomation" ${field.exposeToAutomation ? 'checked' : ''}> Include this value in Automation Flow events</label></article>`).join('')}</div>`;
+}
+
+function workflowGraphForSave() {
+  const defaultFormKey = $('#workflowDefinitionForm')?.elements.requestFormKey.value || '';
+  const defaultStandalone = state.standaloneForms.find((form) => form.formKey === defaultFormKey);
+  return {
+    ...structuredClone(state.workflowBuilderGraph),
+    nodes: state.workflowBuilderGraph.nodes.map((node) => {
+      const presentation = workflowNodePresentation(node);
+      const formKey = presentation.inherited ? defaultFormKey : presentation.formKey;
+      return {
+        ...structuredClone(node),
+        presentation: {
+          formKey,
+          formName: presentation.inherited
+            ? (defaultStandalone?.name || (formKey ? `${titleCaseMessage(formKey)} form` : 'All source-module fields'))
+            : presentation.formName,
+          mode: node.type === 'start' ? 'request' : node.type === 'approval' ? 'review' : 'result',
+          fieldKeys: workflowFieldsForForm(formKey).map((field) => field.fieldKey).filter(Boolean),
+          inheritDefault: presentation.inherited
+        }
+      };
+    })
+  };
+}
+
+function workflowBoundFormFieldOptions(selected = '') {
+  const fields = workflowBoundFormFields();
+  const missing = selected && !fields.some((field) => field.fieldKey === selected)
+    ? `<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)} · not available in selected form</option>`
+    : '';
+  return `<option value="">Choose a field</option>${missing}${fields.map((field) => `<option value="${escapeHtml(field.fieldKey)}" ${field.fieldKey === selected ? 'selected' : ''}>${escapeHtml(field.label || titleCaseMessage(field.fieldKey))} · ${escapeHtml(field.fieldKey)}</option>`).join('')}`;
+}
+
+function defaultWorkflowStage(index = 0) {
+  return {
+    stageKey: `approval_${index + 1}`,
+    name: `Approval ${index + 1}`,
+    order: index,
+    enabled: true,
+    approvalMode: 'all',
+    selfApprovalPolicy: 'error',
+    skipWhenConditionFalse: false,
+    condition: null,
+    decisionPolicy: { approvalRemark: 'optional' },
+    attachmentPolicy: { mode: 'disabled', allowedTypes: ['application/pdf', 'image/jpeg', 'image/png'], maxFileSize: 5242880, maxFileCount: 3, actions: ['approval', 'rejection', 'return'] },
+    approverRules: [],
+    slaPolicy: { enabled: false, duration: 24, unit: 'hours', reminderOffsets: [], escalationMode: 'notify' },
+    emailPolicy: { enabled: false, events: ['workflow.stage.started', 'workflow.reminder_due', 'workflow.escalated'], subject: '{{workflowName}} · {{requestId}}', message: 'Action is required for {{requestId}} at {{stageName}}.' }
+  };
+}
+
+function renderWorkflowStagesLegacy() {
+  const editor = $('#workflowStageEditor');
+  if (!editor) return;
+  editor.innerHTML = state.workflowDraftStages.map((stage, index) => {
+    const rule = stage.approverRules?.[0] || {};
+    const references = (stage.approverRules || []).map((item) => item.resolverReference).filter(Boolean).join(', ');
+    return `<article class="workflow-stage-editor-card" data-workflow-stage-index="${index}">
+      <div class="workflow-stage-order"><span>${String(index + 1).padStart(2, '0')}</span><i></i></div>
+      <div class="workflow-stage-editor-body">
+        <div class="workflow-stage-editor-heading"><div><strong>${escapeHtml(stage.name || `Stage ${index + 1}`)}</strong><small>${escapeHtml(stage.stageKey || '')}</small></div><div class="table-action-group">${index ? '<button type="button" class="secondary" data-move-workflow-stage="-1">↑</button>' : ''}${index < state.workflowDraftStages.length - 1 ? '<button type="button" class="secondary" data-move-workflow-stage="1">↓</button>' : ''}<button type="button" class="secondary danger-link" data-remove-workflow-stage>Remove</button></div></div>
+        <div class="workflow-stage-fields">
+          <label>Stage name<input data-stage-field="name" value="${escapeHtml(stage.name || '')}" maxlength="160" required></label>
+          <label>Stable key<input data-stage-field="stageKey" value="${escapeHtml(stage.stageKey || '')}" maxlength="80" required></label>
+          <label>Approver type<select data-stage-field="resolverType">
+            ${[['user', 'Specific user ID'], ['role', 'User role'], ['reporting_manager', 'Requester reporting manager'], ['organization_responsibility', 'Organization responsibility ID'], ['record_user_field', 'User ID from record field']].map(([value, label]) => `<option value="${value}" ${rule.resolverType === value ? 'selected' : ''}>${label}</option>`).join('')}
+          </select></label>
+          <label>Approver reference${['reporting_manager'].includes(rule.resolverType) ? ' (not required)' : ''}<input data-stage-field="resolverReferences" value="${escapeHtml(references)}" placeholder="IDs or roles, separated by commas"></label>
+          <label>Condition field <span class="muted">(optional)</span><input data-stage-field="conditionField" value="${escapeHtml(stage.condition?.fieldKey || '')}" placeholder="amount"></label>
+          <label>Condition operator<select data-stage-field="conditionOperator">${['equals', 'not_equals', 'greater_than', 'greater_than_or_equal', 'less_than', 'less_than_or_equal', 'contains', 'is_empty', 'is_not_empty'].map((operator) => `<option value="${operator}" ${stage.condition?.operator === operator ? 'selected' : ''}>${escapeHtml(titleCaseMessage(operator))}</option>`).join('')}</select></label>
+          <label>Condition value<input data-stage-field="conditionValue" value="${escapeHtml(stage.condition?.value ?? '')}"></label>
+          <label>Approval remark<select data-stage-field="approvalRemark"><option value="optional" ${stage.decisionPolicy?.approvalRemark !== 'required' ? 'selected' : ''}>Optional</option><option value="required" ${stage.decisionPolicy?.approvalRemark === 'required' ? 'selected' : ''}>Required</option></select></label>
+          <label>SLA duration<input data-stage-field="slaDuration" type="number" min="1" value="${Number(stage.slaPolicy?.duration) || 24}"></label>
+          <label>SLA unit<select data-stage-field="slaUnit"><option value="hours" ${stage.slaPolicy?.unit !== 'days' ? 'selected' : ''}>Hours</option><option value="days" ${stage.slaPolicy?.unit === 'days' ? 'selected' : ''}>Days</option></select></label>
+        </div>
+        <div class="workflow-stage-switches">
+          <label class="checkbox-label"><input data-stage-field="enabled" type="checkbox" ${stage.enabled !== false ? 'checked' : ''}> Stage enabled</label>
+          <label class="checkbox-label"><input data-stage-field="skipWhenConditionFalse" type="checkbox" ${stage.skipWhenConditionFalse ? 'checked' : ''}> Skip when condition is not met</label>
+          <label class="checkbox-label"><input data-stage-field="autoApprove" type="checkbox" ${stage.selfApprovalPolicy === 'auto_approve' ? 'checked' : ''}> Auto-approve eligible self-approval</label>
+          <label class="checkbox-label"><input data-stage-field="slaEnabled" type="checkbox" ${stage.slaPolicy?.enabled ? 'checked' : ''}> Track due date</label>
+          <label>Remind before due<input data-stage-field="slaReminderOffsets" value="${escapeHtml((stage.slaPolicy?.reminderOffsets || []).join(', '))}" placeholder="For example: 12, 2"></label>
+          <label>When overdue<select data-stage-field="slaEscalationMode"><option value="notify" ${stage.slaPolicy?.escalationMode !== 'none' ? 'selected' : ''}>Notify through Automation Flow</option><option value="none" ${stage.slaPolicy?.escalationMode === 'none' ? 'selected' : ''}>Mark overdue only</option></select></label>
+        </div>
+      </div>
+    </article>`;
+  }).join('') || '<div class="empty-state"><h3>No approval stages</h3><p>Add at least one enabled stage before checking or publishing this workflow.</p></div>';
+}
+
+function captureWorkflowStagesLegacy() {
+  state.workflowDraftStages = $$('#workflowStageEditor [data-workflow-stage-index]').map((card, index) => {
+    const value = (name) => card.querySelector(`[data-stage-field="${name}"]`)?.value?.trim() || '';
+    const checked = (name) => Boolean(card.querySelector(`[data-stage-field="${name}"]`)?.checked);
+    const conditionField = value('conditionField');
+    const operator = value('conditionOperator');
+    const rawConditionValue = value('conditionValue');
+    const conditionValue = rawConditionValue !== '' && Number.isFinite(Number(rawConditionValue)) ? Number(rawConditionValue) : rawConditionValue;
+    const resolverType = value('resolverType');
+    const references = value('resolverReferences').split(',').map((item) => item.trim()).filter(Boolean);
+    const effectiveReferences = references.length ? references : [''];
+    return {
+      stageKey: value('stageKey'),
+      name: value('name'),
+      order: index,
+      enabled: checked('enabled'),
+      approvalMode: 'all',
+      selfApprovalPolicy: checked('autoApprove') ? 'auto_approve' : 'error',
+      skipWhenConditionFalse: checked('skipWhenConditionFalse'),
+      condition: conditionField ? {
+        fieldKey: conditionField,
+        operator,
+        ...(!['is_empty', 'is_not_empty'].includes(operator) ? { value: conditionValue } : {})
+      } : null,
+      decisionPolicy: { approvalRemark: value('approvalRemark') || 'optional' },
+      attachmentPolicy: { mode: 'disabled' },
+      slaPolicy: {
+        enabled: checked('slaEnabled'),
+        duration: Number(value('slaDuration')) || 24,
+        unit: value('slaUnit') || 'hours',
+        reminderOffsets: value('slaReminderOffsets').split(',').map(Number).filter((item) => Number.isFinite(item) && item >= 0),
+        escalationMode: value('slaEscalationMode') || 'notify'
+      },
+      emailPolicy: state.workflowDraftStages[index]?.emailPolicy || { enabled: false, events: ['workflow.stage.started', 'workflow.reminder_due', 'workflow.escalated'], subject: '{{workflowName}} · {{requestId}}', message: 'Action is required for {{requestId}} at {{stageName}}.' },
+      approverRules: effectiveReferences.map((reference, ruleIndex) => ({
+        ruleKey: `${value('stageKey') || `stage_${index + 1}`}_approver_${ruleIndex + 1}`,
+        resolverType,
+        resolverReference: reference
+      }))
+    };
+  });
+  return state.workflowDraftStages;
+}
+
+function defaultWorkflowBuilderGraph(stages = state.workflowDraftStages) {
+  const nodes = [{ id: 'start', type: 'start', label: 'Request submitted', x: 60, y: 230 }];
+  stages.forEach((stage, index) => nodes.push({ id: `stage:${stage.stageKey}`, type: 'approval', stageKey: stage.stageKey, x: 300 + (index * 245), y: 210 }));
+  nodes.push({ id: 'end', type: 'end', label: 'Request complete', x: 300 + (stages.length * 245), y: 230 });
+  return {
+    nodes,
+    edges: nodes.slice(0, -1).map((node, index) => ({ id: `edge:${node.id}:${nodes[index + 1].id}`, from: node.id, to: nodes[index + 1].id, label: index ? 'Approved' : 'Submit', outcome: index ? 'approved' : 'submit' }))
+  };
+}
+
+function normalizeWorkflowBuilderGraph(graph, stages = state.workflowDraftStages) {
+  if (!graph?.nodes?.length) return defaultWorkflowBuilderGraph(stages);
+  const stageKeys = new Set(stages.map((stage) => stage.stageKey));
+  const nodes = graph.nodes.filter((node) => node.type !== 'approval' || stageKeys.has(node.stageKey)).map((node) => ({ ...node, x: Number(node.x) || 80, y: Number(node.y) || 180 }));
+  stages.forEach((stage, index) => {
+    if (!nodes.some((node) => node.type === 'approval' && node.stageKey === stage.stageKey)) nodes.push({ id: `stage:${stage.stageKey}`, type: 'approval', stageKey: stage.stageKey, x: 300 + (index * 245), y: 210 });
+  });
+  if (!nodes.some((node) => node.type === 'start')) nodes.unshift({ id: 'start', type: 'start', label: 'Request submitted', x: 60, y: 230 });
+  if (!nodes.some((node) => node.type === 'end')) nodes.push({ id: 'end', type: 'end', label: 'Request complete', x: 300 + (stages.length * 245), y: 230 });
+  const ids = new Set(nodes.map((node) => node.id));
+  const edges = (graph.edges || []).filter((edge) => ids.has(edge.from) && ids.has(edge.to));
+  return { nodes, edges: edges.length ? edges : defaultWorkflowBuilderGraph(stages).edges };
+}
+
+function workflowStageForNode(node) {
+  return node?.type === 'approval' ? state.workflowDraftStages.find((stage) => stage.stageKey === node.stageKey) : null;
+}
+
+function workflowNodeCenter(node) {
+  return { x: Number(node.x) + 92, y: Number(node.y) + 44 };
+}
+
+function workflowEdgePath(from, to) {
+  const start = workflowNodeCenter(from);
+  const end = workflowNodeCenter(to);
+  const bend = Math.max(55, Math.abs(end.x - start.x) * .42);
+  return `M ${start.x} ${start.y} C ${start.x + bend} ${start.y}, ${end.x - bend} ${end.y}, ${end.x} ${end.y}`;
+}
+
+function renderWorkflowCanvas() {
+  const canvas = $('#workflowCanvas');
+  if (!canvas) return;
+  const graph = state.workflowBuilderGraph;
+  const edges = graph.edges.map((edge) => {
+    const from = graph.nodes.find((node) => node.id === edge.from);
+    const to = graph.nodes.find((node) => node.id === edge.to);
+    if (!from || !to) return '';
+    const a = workflowNodeCenter(from);
+    const b = workflowNodeCenter(to);
+    const x = (a.x + b.x) / 2;
+    const y = (a.y + b.y) / 2;
+    return `<g class="workflow-canvas-edge ${state.selectedWorkflowEdgeId === edge.id ? 'is-selected' : ''}"><path d="${workflowEdgePath(from, to)}"></path><circle cx="${x}" cy="${y}" r="12"></circle><text x="${x}" y="${y + 3}">›</text><foreignObject x="${x - 46}" y="${y + 16}" width="92" height="26"><button type="button" data-workflow-edge-id="${escapeHtml(edge.id)}">${escapeHtml(edge.label || edge.outcome || 'Continue')}</button></foreignObject></g>`;
+  }).join('');
+  const nodes = graph.nodes.map((node) => {
+    const stage = workflowStageForNode(node);
+    const label = stage?.name || node.label || titleCaseMessage(node.type);
+    const detail = stage ? (stage.condition ? 'Conditional approval' : 'All approvers') : (node.type === 'start' ? 'Request enters here' : 'Route finishes here');
+    return `<button type="button" class="workflow-canvas-node is-${node.type} ${state.selectedWorkflowNodeId === node.id ? 'is-selected' : ''} ${state.workflowConnectFrom === node.id ? 'is-connecting' : ''}" data-workflow-node-id="${escapeHtml(node.id)}" style="left:${Number(node.x)}px;top:${Number(node.y)}px"><span class="workflow-node-glyph">${node.type === 'start' ? 'S' : node.type === 'end' ? 'E' : 'A'}</span><span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(detail)}</small></span><i></i></button>`;
+  }).join('');
+  canvas.style.transform = `scale(${state.workflowCanvasZoom})`;
+  canvas.innerHTML = `<svg class="workflow-canvas-edges" width="1600" height="820" viewBox="0 0 1600 820">${edges}</svg>${nodes}`;
+  $('#workflowZoomLabel').textContent = `${Math.round(state.workflowCanvasZoom * 100)}%`;
+  $('#workflowConnectButton').classList.toggle('is-active', Boolean(state.workflowConnectFrom));
+  $('#workflowCanvasSaveState').textContent = state.workflowConnectFrom ? 'Choose a destination node' : `${state.workflowDraftStages.length} approval stage${state.workflowDraftStages.length === 1 ? '' : 's'}`;
+  $('#workflowRouteStageCount').textContent = String(state.workflowDraftStages.length);
+  $('#workflowRouteConnectionCount').textContent = String(graph.edges.length);
+  $('#workflowRouteConditionCount').textContent = String(graph.edges.filter((edge) => edge.condition?.rules?.length).length);
+  renderWorkflowCanvasInspector();
+}
+
+function setWorkflowInspectorCollapsed(collapsed) {
+  state.workflowInspectorCollapsed = Boolean(collapsed);
+  const card = $('.workflow-visual-builder-card');
+  const button = $('#workflowInspectorToggle');
+  card?.classList.toggle('is-inspector-collapsed', state.workflowInspectorCollapsed);
+  if (button) {
+    button.textContent = state.workflowInspectorCollapsed ? 'Show settings' : 'Hide settings';
+    button.setAttribute('aria-expanded', String(!state.workflowInspectorCollapsed));
+  }
+}
+
+function openWorkflowRouteDesigner() {
+  const card = $('.workflow-visual-builder-card');
+  if (!card || state.workflowRouteDesignerOpen) return;
+  state.workflowRouteDesignerOpen = true;
+  state.workflowRouteReturnScrollY = window.scrollY;
+  document.body.classList.add('workflow-route-designer-open');
+  card.classList.add('is-designer-open');
+  setWorkflowInspectorCollapsed(false);
+  renderWorkflowCanvas();
+  requestAnimationFrame(() => fitWorkflowCanvas());
+  $('#closeWorkflowRouteDesigner')?.focus();
+}
+
+function closeWorkflowRouteDesigner() {
+  const card = $('.workflow-visual-builder-card');
+  if (!card || !state.workflowRouteDesignerOpen) return;
+  state.workflowRouteDesignerOpen = false;
+  document.body.classList.remove('workflow-route-designer-open');
+  card.classList.remove('is-designer-open', 'is-inspector-collapsed');
+  window.scrollTo({ top: state.workflowRouteReturnScrollY, behavior: 'auto' });
+  $('#openWorkflowRouteDesigner')?.focus();
+}
+
+async function saveWorkflowRouteDesigner() {
+  const button = $('#saveWorkflowRouteDesigner');
+  button.disabled = true;
+  button.textContent = 'Saving…';
+  try {
+    await saveWorkflowDefinition();
+    openWorkflowRouteDesigner();
+    const notice = $('#workflowRouteSaveNotice');
+    clearTimeout(state.workflowRouteSaveNoticeTimer);
+    notice.classList.remove('is-visible');
+    void notice.offsetWidth;
+    notice.classList.add('is-visible');
+    state.workflowRouteSaveNoticeTimer = setTimeout(() => notice.classList.remove('is-visible'), 4000);
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Save changes';
+  }
+}
+
+function workflowInspectorInput(label, field, value, type = 'text', extra = '') {
+  return `<label>${label}<input type="${type}" data-workflow-node-field="${field}" value="${escapeHtml(value ?? '')}" ${extra}></label>`;
+}
+
+function workflowApproverRuleKey(stageKey, resolverType, resolverReference = '') {
+  const suffix = String(resolverReference || 'requester').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'requester';
+  return `${String(stageKey || 'stage').toLowerCase().replace(/[^a-z0-9]+/g, '_')}_${resolverType}_${suffix}`.slice(0, 80);
+}
+
+function workflowApproverOption(stage, resolverType, resolverReference, label, detail = '', resolverConfig = {}) {
+  const selected = (stage.approverRules || []).some((rule) => rule.resolverType === resolverType && String(rule.resolverReference || '') === String(resolverReference || ''));
+  return `<label class="workflow-approver-option" data-workflow-approver-search="${escapeHtml(`${label} ${detail} ${resolverReference}`.toLowerCase())}"><input type="checkbox" data-workflow-approver-type="${escapeHtml(resolverType)}" data-workflow-approver-reference="${escapeHtml(resolverReference)}" data-workflow-approver-config="${escapeHtml(JSON.stringify(resolverConfig))}" ${selected ? 'checked' : ''}><span><strong>${escapeHtml(label)}</strong>${detail ? `<small>${escapeHtml(detail)}</small>` : ''}</span></label>`;
+}
+
+function renderWorkflowApproverPicker(stage) {
+  const activeUsers = (state.users || []).filter((user) => user.status === 'active');
+  const roles = [...new Set(activeUsers.map((user) => String(user.role || '').trim()).filter(Boolean))].sort();
+  const departments = (state.departmentNodes || []).filter((node) => node.enabled !== false && node.type !== 'organization');
+  const selectedRules = stage.approverRules || [];
+  const known = new Set([
+    ...activeUsers.map((user) => `user:${user.id}`),
+    ...roles.map((role) => `role:${role}`),
+    ...departments.map((node) => `organization_responsibility:${node.id}`),
+    'reporting_manager:'
+  ]);
+  const unavailable = selectedRules.filter((rule) => rule.resolverReference && !known.has(`${rule.resolverType}:${rule.resolverReference}`) && rule.resolverType !== 'record_user_field');
+  return `<div class="workflow-approver-picker">
+    <p class="muted">Select any combination. Every resolved approver must approve; duplicate people are counted once.</p>
+    <label class="workflow-approver-search"><span aria-hidden="true">⌕</span><input type="search" data-workflow-approver-search-input placeholder="Search users, roles, departments" autocomplete="off"><button type="button" data-clear-workflow-approver-search aria-label="Clear approver search">×</button></label>
+    <p class="workflow-approver-search-empty" data-workflow-approver-search-empty hidden>No matching users, roles, or departments.</p>
+    <details open data-workflow-approver-group><summary>Users <small>${activeUsers.length}</small></summary><div class="workflow-approver-options">${activeUsers.map((user) => workflowApproverOption(stage, 'user', String(user.id), user.name || user.email || `User ${user.id}`, [user.staffId || user.staff_id, user.email].filter(Boolean).join(' · '))).join('') || '<small class="muted">No active users.</small>'}</div></details>
+    <details data-workflow-approver-group><summary>Roles <small>${roles.length}</small></summary><div class="workflow-approver-options">${roles.map((role) => workflowApproverOption(stage, 'role', role, titleCaseMessage(role), 'All active users with this role')).join('') || '<small class="muted">No active roles.</small>'}</div></details>
+    <details data-workflow-approver-group><summary>Departments <small>${departments.length}</small></summary><div class="workflow-approver-options">${departments.map((node) => workflowApproverOption(stage, 'organization_responsibility', String(node.id), node.name, `${titleCaseMessage(node.type)}${node.parentName ? ` · ${node.parentName}` : ''}`, { includeDescendants: true })).join('') || '<small class="muted">No enabled departments.</small>'}</div></details>
+    <details><summary>Dynamic approvers</summary><div class="workflow-approver-options">${workflowApproverOption(stage, 'reporting_manager', '', 'Requester reporting manager', 'Resolved when the request is submitted')}<label>Users from form fields<select multiple size="4" data-workflow-record-approver-fields>${workflowBoundFormFields().map((field) => `<option value="${escapeHtml(field.fieldKey)}" ${selectedRules.some((rule) => rule.resolverType === 'record_user_field' && rule.resolverReference === field.fieldKey) ? 'selected' : ''}>${escapeHtml(field.label || titleCaseMessage(field.fieldKey))}</option>`).join('')}</select><small>Use Ctrl/Cmd to select more than one field.</small></label></div></details>
+    ${unavailable.length ? `<div class="workflow-approver-unavailable"><strong>Unavailable saved selections</strong>${unavailable.map((rule) => `<small>${escapeHtml(titleCaseMessage(rule.resolverType))}: ${escapeHtml(rule.resolverReference || 'dynamic')}</small>`).join('')}</div>` : ''}
+  </div>`;
+}
+
+function filterWorkflowApproverOptions(input) {
+  const inspector = input.closest('#workflowCanvasInspector');
+  const query = input.value.trim().toLowerCase();
+  let matchCount = 0;
+  inspector?.querySelectorAll('[data-workflow-approver-group]').forEach((group) => {
+    let groupMatches = 0;
+    group.querySelectorAll('[data-workflow-approver-search]').forEach((option) => {
+      const selected = Boolean(option.querySelector('input:checked'));
+      const matches = !query || option.dataset.workflowApproverSearch.includes(query);
+      option.hidden = !matches && !selected;
+      if (matches) groupMatches += 1;
+    });
+    group.hidden = Boolean(query) && groupMatches === 0 && !group.querySelector('input:checked');
+    if (query && groupMatches) group.open = true;
+    matchCount += groupMatches;
+  });
+  const empty = inspector?.querySelector('[data-workflow-approver-search-empty]');
+  if (empty) empty.hidden = !query || matchCount > 0;
+  const clear = inspector?.querySelector('[data-clear-workflow-approver-search]');
+  if (clear) clear.classList.toggle('is-visible', Boolean(query));
+}
+
+function toggleWorkflowApproverRule(target) {
+  const node = state.workflowBuilderGraph.nodes.find((item) => item.id === state.selectedWorkflowNodeId);
+  const stage = workflowStageForNode(node);
+  if (!stage) return;
+  const resolverType = target.dataset.workflowApproverType;
+  const resolverReference = target.dataset.workflowApproverReference || '';
+  stage.approverRules ||= [];
+  stage.approverRules = stage.approverRules.filter((rule) => rule.resolverReference || rule.resolverType === 'reporting_manager').filter((rule) => !(rule.resolverType === resolverType && String(rule.resolverReference || '') === resolverReference));
+  if (target.checked) {
+    let resolverConfig = {};
+    try { resolverConfig = JSON.parse(target.dataset.workflowApproverConfig || '{}'); } catch (_error) { resolverConfig = {}; }
+    stage.approverRules.push({ ruleKey: workflowApproverRuleKey(stage.stageKey, resolverType, resolverReference), resolverType, resolverReference, resolverConfig });
+  }
+  renderWorkflowCanvas();
+}
+
+function updateWorkflowRecordApproverFields(target) {
+  const node = state.workflowBuilderGraph.nodes.find((item) => item.id === state.selectedWorkflowNodeId);
+  const stage = workflowStageForNode(node);
+  if (!stage) return;
+  const selected = [...target.selectedOptions].map((option) => option.value);
+  stage.approverRules = (stage.approverRules || []).filter((rule) => rule.resolverType !== 'record_user_field');
+  selected.forEach((resolverReference) => stage.approverRules.push({ ruleKey: workflowApproverRuleKey(stage.stageKey, 'record_user_field', resolverReference), resolverType: 'record_user_field', resolverReference, resolverConfig: {} }));
+  renderWorkflowCanvas();
+}
+
+function renderWorkflowEdgeCondition(edge) {
+  if (!['condition_met', 'condition_not_met'].includes(edge.outcome)) return '';
+  const condition = edge.condition || { group: 'all', rules: [{ fieldKey: '', operator: 'equals', value: '' }] };
+  const operators = ['equals', 'not_equals', 'contains', 'not_contains', 'starts_with', 'ends_with', 'greater_than', 'greater_than_or_equal', 'less_than', 'less_than_or_equal', 'is_empty', 'is_not_empty', 'in', 'not_in'];
+  const rows = condition.rules.map((rule, index) => `<article class="workflow-edge-condition-rule" data-workflow-edge-condition-index="${index}"><div><strong>Rule ${index + 1}</strong>${condition.rules.length > 1 ? `<button type="button" class="link-button" data-remove-workflow-edge-condition="${index}">Remove</button>` : ''}</div><label>Form field<select data-workflow-edge-condition-field="fieldKey">${workflowBoundFormFieldOptions(rule.fieldKey || '')}</select></label><label>Operator<select data-workflow-edge-condition-field="operator">${operators.map((operator) => `<option value="${operator}" ${rule.operator === operator ? 'selected' : ''}>${escapeHtml(titleCaseMessage(operator))}</option>`).join('')}</select></label>${['is_empty', 'is_not_empty'].includes(rule.operator) ? '' : `<label>Value<input data-workflow-edge-condition-field="value" value="${escapeHtml(rule.value ?? '')}" placeholder="1000"></label>`}</article>`).join('');
+  return `<div class="workflow-inspector-section workflow-edge-condition-builder"><span>${edge.outcome === 'condition_met' ? 'Continue when' : 'Continue when not'}</span><div class="workflow-condition-match"><small>Match</small><div><button type="button" data-workflow-edge-condition-group="all" class="${condition.group !== 'any' ? 'is-active' : ''}">All rules</button><button type="button" data-workflow-edge-condition-group="any" class="${condition.group === 'any' ? 'is-active' : ''}">Any rule</button></div></div>${rows}<button type="button" class="secondary" data-add-workflow-edge-condition>+ Add rule</button><p class="muted">${edge.outcome === 'condition_met' ? 'This line matches when the configured rules pass.' : 'This line matches when the configured rules do not pass.'}</p></div>`;
+}
+
+function renderWorkflowAttachmentPolicy(policy = {}, nodeType = 'approval') {
+  const current = {
+    mode: policy.mode || 'disabled',
+    allowedTypes: policy.allowedTypes?.length ? policy.allowedTypes : ['application/pdf', 'image/jpeg', 'image/png'],
+    maxFileSize: Number(policy.maxFileSize) || 5242880,
+    maxFileCount: Number(policy.maxFileCount) || 3,
+    actions: policy.actions?.length ? policy.actions : (nodeType === 'start' ? ['submission'] : ['approval', 'rejection', 'return'])
+  };
+  const actions = nodeType === 'start' ? [['submission', 'Submission']] : [['approval', 'Approval'], ['rejection', 'Rejection'], ['return', 'Return']];
+  return `<div class="workflow-inspector-section"><span>Attachments</span><label>Requirement<select data-workflow-node-field="attachmentMode"><option value="disabled" ${current.mode === 'disabled' ? 'selected' : ''}>Disabled</option><option value="optional" ${current.mode === 'optional' ? 'selected' : ''}>Optional</option><option value="required" ${current.mode === 'required' ? 'selected' : ''}>Required</option></select></label>${workflowInspectorInput('Allowed MIME types', 'attachmentTypes', current.allowedTypes.join(', '))}${workflowInspectorInput('Maximum size (MB)', 'attachmentMaxSizeMb', Math.max(1, Math.round(current.maxFileSize / 1048576)), 'number', 'min="1" max="25"')}${workflowInspectorInput('Maximum files', 'attachmentMaxCount', current.maxFileCount, 'number', 'min="1" max="20"')}<div class="workflow-stage-switches">${actions.map(([value, label]) => `<label class="checkbox-label"><input type="checkbox" data-workflow-node-field="attachmentAction:${value}" ${current.actions.includes(value) ? 'checked' : ''}> ${label}</label>`).join('')}</div><p class="muted">Files are stored with a SHA-256 checksum. Executable and active-content file types are rejected.</p></div>`;
+}
+
+function renderWorkflowCanvasInspector() {
+  const inspector = $('#workflowCanvasInspector');
+  if (!inspector) return;
+  const edge = state.workflowBuilderGraph.edges.find((item) => item.id === state.selectedWorkflowEdgeId);
+  if (edge) {
+    inspector.innerHTML = `<div class="workflow-inspector-heading"><span class="workflow-palette-glyph is-connection">↗</span><div><strong>Connection</strong><small>${escapeHtml(edge.from)} → ${escapeHtml(edge.to)}</small></div></div><div class="workflow-inspector-section"><span>Route</span>${workflowInspectorInput('Line label', 'edgeLabel', edge.label || '')}<label>Outcome<select data-workflow-node-field="edgeOutcome">${['continue', 'submit', 'approved', 'condition_met', 'condition_not_met', 'rejected', 'returned'].map((value) => `<option value="${value}" ${edge.outcome === value ? 'selected' : ''}>${escapeHtml(titleCaseMessage(value))}</option>`).join('')}</select></label></div>${renderWorkflowEdgeCondition(edge)}<button type="button" class="secondary danger-link workflow-inspector-remove" data-remove-workflow-edge>Remove connection</button>`;
+    return;
+  }
+  const node = state.workflowBuilderGraph.nodes.find((item) => item.id === state.selectedWorkflowNodeId);
+  if (!node) {
+    inspector.innerHTML = '<div class="workflow-canvas-inspector-empty"><span>◇</span><strong>Select a node or line</strong><p>Configure the selected item here. Use Connect, then choose a source and destination.</p></div>';
+    return;
+  }
+  const stage = workflowStageForNode(node);
+  if (!stage) {
+    const presentation = workflowNodePresentation(node);
+    inspector.innerHTML = `<div class="workflow-inspector-heading"><span class="workflow-palette-glyph is-${node.type}">${node.type === 'start' ? 'S' : 'E'}</span><div><strong>${escapeHtml(node.label || titleCaseMessage(node.type))}</strong><small>${node.type === 'start' ? 'Begins the request' : 'Finishes this route'}</small></div></div><div class="workflow-inspector-section"><span>Node</span>${workflowInspectorInput('Label', 'nodeLabel', node.label || '')}</div><div class="workflow-inspector-section"><span>${node.type === 'start' ? 'Requester form' : 'Result form'}</span><label>Form layout<select data-workflow-node-field="nodeFormKey">${workflowNodeFormOptions(node)}</select></label><p class="muted">${presentation.inherited ? 'Inherits the workflow default form.' : `${presentation.fieldKeys?.length || 0} visible fields captured with this node.`}</p></div>${node.type === 'start' ? renderWorkflowAttachmentPolicy(node.attachmentPolicy, 'start') : '<button type="button" class="secondary danger-link workflow-inspector-remove" data-remove-workflow-node>Remove node</button>'}`;
+    return;
+  }
+  inspector.innerHTML = `<div class="workflow-inspector-heading"><span class="workflow-palette-glyph is-approval">A</span><div><strong>${escapeHtml(stage.name)}</strong><small>${escapeHtml(stage.stageKey)}</small></div></div>
+    <div class="workflow-inspector-section"><span>Approval node</span>${workflowInspectorInput('Stage name', 'name', stage.name)}${workflowInspectorInput('Stable key', 'stageKey', stage.stageKey)}</div>
+    <div class="workflow-inspector-section"><span>Review form</span><label>Form layout<select data-workflow-node-field="nodeFormKey">${workflowNodeFormOptions(node)}</select></label><p class="muted">${workflowNodePresentation(node).inherited ? 'Inherits the workflow default form.' : `${workflowNodePresentation(node).fieldKeys?.length || 0} visible fields captured for this stage.`}</p></div>
+    <div class="workflow-inspector-section"><span>Approver response</span><label>Response form<select data-workflow-node-field="responseFormKey">${workflowResponseFormOptions(node.responsePresentation?.formKey || '')}</select></label>${renderWorkflowResponseMappings(node)}</div>
+    <div class="workflow-inspector-section"><span>Approvers · ${(stage.approverRules || []).length} selected</span>${renderWorkflowApproverPicker(stage)}</div>
+    <div class="workflow-inspector-section"><span>Condition</span><label>Form field<select data-workflow-node-field="conditionField">${workflowBoundFormFieldOptions(stage.condition?.fieldKey || '')}</select></label><label>Operator<select data-workflow-node-field="conditionOperator">${['equals', 'not_equals', 'greater_than', 'greater_than_or_equal', 'less_than', 'less_than_or_equal', 'contains', 'is_empty', 'is_not_empty'].map((value) => `<option value="${value}" ${stage.condition?.operator === value ? 'selected' : ''}>${escapeHtml(titleCaseMessage(value))}</option>`).join('')}</select></label>${workflowInspectorInput('Value', 'conditionValue', stage.condition?.value ?? '')}<label class="checkbox-label"><input type="checkbox" data-workflow-node-field="skipWhenConditionFalse" ${stage.skipWhenConditionFalse ? 'checked' : ''}> Skip stage when false</label></div>
+    <div class="workflow-inspector-section"><span>Decision</span><label>Approval remark<select data-workflow-node-field="approvalRemark"><option value="optional" ${stage.decisionPolicy?.approvalRemark !== 'required' ? 'selected' : ''}>Optional</option><option value="required" ${stage.decisionPolicy?.approvalRemark === 'required' ? 'selected' : ''}>Required</option></select></label><label class="checkbox-label"><input type="checkbox" data-workflow-node-field="autoApprove" ${stage.selfApprovalPolicy === 'auto_approve' ? 'checked' : ''}> Auto-approve eligible self-approval</label><label class="checkbox-label"><input type="checkbox" data-workflow-node-field="enabled" ${stage.enabled !== false ? 'checked' : ''}> Stage enabled</label></div>
+    ${renderWorkflowAttachmentPolicy(stage.attachmentPolicy, 'approval')}
+    <div class="workflow-inspector-section"><span>SLA</span><label class="checkbox-label"><input type="checkbox" data-workflow-node-field="slaEnabled" ${stage.slaPolicy?.enabled ? 'checked' : ''}> Track due date</label>${workflowInspectorInput('Duration', 'slaDuration', Number(stage.slaPolicy?.duration) || 24, 'number', 'min="1"')}<label>Unit<select data-workflow-node-field="slaUnit"><option value="minutes" ${stage.slaPolicy?.unit === 'minutes' ? 'selected' : ''}>Minutes</option><option value="hours" ${!['minutes', 'days'].includes(stage.slaPolicy?.unit) ? 'selected' : ''}>Hours</option><option value="days" ${stage.slaPolicy?.unit === 'days' ? 'selected' : ''}>Days</option></select></label>${workflowInspectorInput('Remind before due', 'slaReminderOffsets', (stage.slaPolicy?.reminderOffsets || []).join(', '), 'text', 'placeholder="For example: 12, 2"')}<p class="muted">Enter offsets in the selected unit. Each reminder is emitted once.</p><label>When overdue<select data-workflow-node-field="slaEscalationMode"><option value="notify" ${stage.slaPolicy?.escalationMode !== 'none' ? 'selected' : ''}>Send built-in notification</option><option value="none" ${stage.slaPolicy?.escalationMode === 'none' ? 'selected' : ''}>Mark overdue only</option></select></label></div>
+    <div class="workflow-inspector-section"><span>Email (optional)</span><label class="checkbox-label"><input type="checkbox" data-workflow-node-field="emailEnabled" ${stage.emailPolicy?.enabled ? 'checked' : ''}> Send approval emails</label><p class="muted">Uses central Email Settings. Internal bell notifications are always created.</p><div class="workflow-email-events">${[['workflow.stage.started','Approver assigned'],['workflow.reminder_due','Reminder due'],['workflow.escalated','Escalated'],['workflow.returned','Returned'],['workflow.rejected','Rejected'],['workflow.approved','Approved']].map(([eventType,label]) => `<label class="checkbox-label"><input type="checkbox" value="${eventType}" data-workflow-node-field="emailEvent" ${(stage.emailPolicy?.events || ['workflow.stage.started','workflow.reminder_due','workflow.escalated']).includes(eventType) ? 'checked' : ''}> ${label}</label>`).join('')}</div>${workflowInspectorInput('Subject', 'emailSubject', stage.emailPolicy?.subject || '{{workflowName}} · {{requestId}}', 'text', 'placeholder="{{workflowName}} · {{requestId}}"')}<label>Message<textarea data-workflow-node-field="emailMessage" rows="4" placeholder="Action is required for {{requestId}} at {{stageName}}.">${escapeHtml(stage.emailPolicy?.message || '')}</textarea></label></div>
+    <div class="workflow-inspector-section"><span>Automation</span><p class="muted">Before and after actions are attached through linked Automation Flows using this stage key and its workflow events.</p></div><button type="button" class="secondary danger-link workflow-inspector-remove" data-remove-workflow-node>Remove approval node</button>`;
+}
+
+function renderWorkflowStages() {
+  renderWorkflowCanvas();
+}
+
+function captureWorkflowStages() {
+  state.workflowDraftStages.forEach((stage, index) => { stage.order = index; });
+  return state.workflowDraftStages;
+}
+
+function addWorkflowCanvasNode(type) {
+  if (type === 'start' && state.workflowBuilderGraph.nodes.some((node) => node.type === 'start')) return toast('This workflow already has a Start node.', 'error');
+  const id = `${type}:${Date.now().toString(36)}`;
+  const viewport = $('#workflowCanvasViewport');
+  const x = Math.max(70, ((viewport?.scrollLeft || 0) + 360) / state.workflowCanvasZoom);
+  const y = Math.max(90, ((viewport?.scrollTop || 0) + 220) / state.workflowCanvasZoom);
+  const node = { id, type, label: type === 'start' ? 'Request submitted' : 'Request complete', x, y };
+  if (type === 'approval') {
+    const stage = defaultWorkflowStage(state.workflowDraftStages.length);
+    while (state.workflowDraftStages.some((item) => item.stageKey === stage.stageKey)) stage.stageKey = `approval_${Date.now().toString(36).slice(-5)}`;
+    node.stageKey = stage.stageKey;
+    state.workflowDraftStages.push(stage);
+  }
+  state.workflowBuilderGraph.nodes.push(node);
+  state.selectedWorkflowNodeId = id;
+  state.selectedWorkflowEdgeId = '';
+  renderWorkflowCanvas();
+}
+
+function connectWorkflowNodes(fromId, toId) {
+  if (!fromId || !toId || fromId === toId) return;
+  if (state.workflowBuilderGraph.edges.some((edge) => edge.from === fromId && edge.to === toId)) return toast('These nodes are already connected.', 'error');
+  const from = state.workflowBuilderGraph.nodes.find((node) => node.id === fromId);
+  const outcome = from?.type === 'start' ? 'submit' : 'approved';
+  const edge = { id: `edge:${Date.now().toString(36)}`, from: fromId, to: toId, label: titleCaseMessage(outcome), outcome };
+  state.workflowBuilderGraph.edges.push(edge);
+  state.workflowConnectFrom = '';
+  state.selectedWorkflowNodeId = '';
+  state.selectedWorkflowEdgeId = edge.id;
+  renderWorkflowCanvas();
+}
+
+function removeSelectedWorkflowNode() {
+  const id = state.selectedWorkflowNodeId;
+  const node = state.workflowBuilderGraph.nodes.find((item) => item.id === id);
+  if (!node || node.type === 'start') return;
+  if (node.type === 'approval') state.workflowDraftStages = state.workflowDraftStages.filter((stage) => stage.stageKey !== node.stageKey);
+  state.workflowBuilderGraph.nodes = state.workflowBuilderGraph.nodes.filter((item) => item.id !== id);
+  state.workflowBuilderGraph.edges = state.workflowBuilderGraph.edges.filter((edge) => edge.from !== id && edge.to !== id);
+  state.selectedWorkflowNodeId = '';
+  renderWorkflowCanvas();
+}
+
+function updateWorkflowInspectorField(field, target) {
+  const edge = state.workflowBuilderGraph.edges.find((item) => item.id === state.selectedWorkflowEdgeId);
+  if (edge) {
+    if (field === 'edgeLabel') edge.label = target.value;
+    if (field === 'edgeOutcome') {
+      edge.outcome = target.value;
+      if (['condition_met', 'condition_not_met'].includes(edge.outcome) && !edge.condition) edge.condition = { group: 'all', rules: [{ fieldKey: '', operator: 'equals', value: '' }] };
+    }
+    renderWorkflowCanvas();
+    return;
+  }
+  const node = state.workflowBuilderGraph.nodes.find((item) => item.id === state.selectedWorkflowNodeId);
+  if (!node) return;
+  if (field === 'nodeLabel') node.label = target.value;
+  if (field === 'nodeFormKey') setWorkflowNodeForm(node, target.value);
+  if (field === 'responseFormKey') setWorkflowResponseForm(node, target.value);
+  const stage = workflowStageForNode(node);
+  const attachmentOwner = stage || (node.type === 'start' ? node : null);
+  if (attachmentOwner && field.startsWith('attachment')) {
+    attachmentOwner.attachmentPolicy ||= { mode: 'disabled', allowedTypes: [], maxFileSize: 5242880, maxFileCount: 3, actions: [] };
+    const policy = attachmentOwner.attachmentPolicy;
+    if (field === 'attachmentMode') policy.mode = target.value;
+    if (field === 'attachmentTypes') policy.allowedTypes = target.value.split(',').map((value) => value.trim().toLowerCase()).filter(Boolean);
+    if (field === 'attachmentMaxSizeMb') policy.maxFileSize = Math.min(25, Math.max(1, Number(target.value) || 5)) * 1024 * 1024;
+    if (field === 'attachmentMaxCount') policy.maxFileCount = Math.min(20, Math.max(1, Number(target.value) || 3));
+    if (field.startsWith('attachmentAction:')) {
+      const action = field.split(':')[1];
+      const actions = new Set(policy.actions || []);
+      target.checked ? actions.add(action) : actions.delete(action);
+      policy.actions = [...actions];
+    }
+  }
+  if (!stage) return renderWorkflowCanvas();
+  const checked = target.type === 'checkbox' ? target.checked : null;
+  if (field === 'name') stage.name = target.value;
+  if (field === 'stageKey') {
+    const previous = stage.stageKey;
+    stage.stageKey = target.value.trim();
+    node.stageKey = stage.stageKey;
+    if (node.id === `stage:${previous}`) node.id = `stage:${stage.stageKey}`;
+    state.workflowBuilderGraph.edges.forEach((item) => {
+      if (item.from === `stage:${previous}`) item.from = node.id;
+      if (item.to === `stage:${previous}`) item.to = node.id;
+    });
+    state.selectedWorkflowNodeId = node.id;
+  }
+  if (['conditionField', 'conditionOperator', 'conditionValue'].includes(field)) {
+    const current = stage.condition || { fieldKey: '', operator: 'equals', value: '' };
+    if (field === 'conditionField') current.fieldKey = target.value.trim();
+    if (field === 'conditionOperator') current.operator = target.value;
+    if (field === 'conditionValue') current.value = target.value !== '' && Number.isFinite(Number(target.value)) ? Number(target.value) : target.value;
+    stage.condition = current.fieldKey ? current : null;
+  }
+  if (field === 'skipWhenConditionFalse') stage.skipWhenConditionFalse = checked;
+  if (field === 'approvalRemark') stage.decisionPolicy = { ...(stage.decisionPolicy || {}), approvalRemark: target.value };
+  if (field === 'autoApprove') stage.selfApprovalPolicy = checked ? 'auto_approve' : 'error';
+  if (field === 'enabled') stage.enabled = checked;
+  if (field === 'slaEnabled') stage.slaPolicy = { ...(stage.slaPolicy || {}), enabled: checked };
+  if (field === 'slaDuration') stage.slaPolicy = { ...(stage.slaPolicy || {}), duration: Number(target.value) || 24 };
+  if (field === 'slaUnit') stage.slaPolicy = { ...(stage.slaPolicy || {}), unit: target.value };
+  if (field === 'slaReminderOffsets') stage.slaPolicy = { ...(stage.slaPolicy || {}), reminderOffsets: target.value.split(',').map(Number).filter((item) => Number.isFinite(item) && item >= 0) };
+  if (field === 'slaEscalationMode') stage.slaPolicy = { ...(stage.slaPolicy || {}), escalationMode: target.value };
+  if (field === 'emailEnabled') stage.emailPolicy = { ...(stage.emailPolicy || {}), enabled: checked };
+  if (field === 'emailSubject') stage.emailPolicy = { ...(stage.emailPolicy || {}), subject: target.value };
+  if (field === 'emailMessage') stage.emailPolicy = { ...(stage.emailPolicy || {}), message: target.value };
+  if (field === 'emailEvent') { const events = new Set(stage.emailPolicy?.events || []); if (checked) events.add(target.value); else events.delete(target.value); stage.emailPolicy = { ...(stage.emailPolicy || {}), events: [...events] }; }
+  renderWorkflowCanvas();
+}
+
+function updateWorkflowResponseMapping(target) {
+  const node = state.workflowBuilderGraph.nodes.find((item) => item.id === state.selectedWorkflowNodeId);
+  const row = target.closest('[data-workflow-response-index]');
+  const field = node?.responsePresentation?.fields?.[Number(row?.dataset.workflowResponseIndex)];
+  if (!field) return;
+  field[target.dataset.workflowResponseField] = target.type === 'checkbox' ? target.checked : target.value;
+  if (target.dataset.workflowResponseField === 'storage' && target.value === 'source' && !field.targetFieldKey) field.targetFieldKey = field.fieldKey;
+  renderWorkflowCanvas();
+}
+
+function updateWorkflowEdgeCondition(target) {
+  const edge = state.workflowBuilderGraph.edges.find((item) => item.id === state.selectedWorkflowEdgeId);
+  const row = target.closest('[data-workflow-edge-condition-index]');
+  if (!edge || !row) return;
+  edge.condition ||= { group: 'all', rules: [{ fieldKey: '', operator: 'equals', value: '' }] };
+  const rule = edge.condition.rules[Number(row.dataset.workflowEdgeConditionIndex)];
+  const field = target.dataset.workflowEdgeConditionField;
+  if (!rule || !field) return;
+  rule[field] = field === 'value' && target.value !== '' && Number.isFinite(Number(target.value)) ? Number(target.value) : target.value;
+  renderWorkflowCanvas();
+}
+
+function fitWorkflowCanvas() {
+  const viewport = $('#workflowCanvasViewport');
+  if (!viewport || !state.workflowBuilderGraph.nodes.length) return;
+  const nodes = state.workflowBuilderGraph.nodes;
+  const minX = Math.min(...nodes.map((node) => Number(node.x)));
+  const maxX = Math.max(...nodes.map((node) => Number(node.x) + 184));
+  const minY = Math.min(...nodes.map((node) => Number(node.y)));
+  const maxY = Math.max(...nodes.map((node) => Number(node.y) + 88));
+  state.workflowCanvasZoom = Math.min(1.2, Math.max(.45, Math.min((viewport.clientWidth - 80) / (maxX - minX), (viewport.clientHeight - 80) / (maxY - minY))));
+  renderWorkflowCanvas();
+  requestAnimationFrame(() => viewport.scrollTo({ left: Math.max(0, (minX * state.workflowCanvasZoom) - 40), top: Math.max(0, (minY * state.workflowCanvasZoom) - 40), behavior: 'smooth' }));
+}
+
+function activeWorkflowDefinition() {
+  return state.workflowDefinitions.find((definition) => definition.workflowKey === state.activeWorkflowKey) || null;
+}
+
+function renderWorkflowDefinitionList() {
+  const query = state.workflowDefinitionSearch.toLowerCase();
+  const definitions = state.workflowDefinitions.filter((definition) => (
+    !query || [definition.name, definition.workflowKey, definition.sourceModuleKey].some((value) => String(value || '').toLowerCase().includes(query))
+  ));
+  $('#workflowDefinitionList').innerHTML = definitions.map((definition) => `<button type="button" class="workflow-definition-item ${definition.workflowKey === state.activeWorkflowKey ? 'is-active' : ''}" data-workflow-definition="${escapeHtml(definition.workflowKey)}"><span><strong>${escapeHtml(definition.name)}</strong><small>${escapeHtml(definition.sourceModuleKey)} · ${escapeHtml(definition.requestPrefix || 'Prefix pending')}</small></span><em class="status-pill ${workflowStatusClass(definition.status)}">${escapeHtml(titleCaseMessage(definition.status))}</em></button>`).join('') || '<div class="empty-state"><p>No workflow definitions match this view.</p></div>';
+}
+
+function showWorkflowDefinition(definition) {
+  closeWorkflowRouteDesigner();
+  const form = $('#workflowDefinitionForm');
+  $('#workflowDefinitionEmpty').hidden = true;
+  form.hidden = false;
+  form.reset();
+  form.elements.editingWorkflowKey.value = definition?.workflowKey || '';
+  form.elements.name.value = definition?.name || '';
+  form.elements.workflowKey.value = definition?.workflowKey || '';
+  form.elements.workflowKey.readOnly = true;
+  form.elements.description.value = definition?.description || '';
+  form.elements.sourceModuleKey.innerHTML = workflowModuleOptions(definition?.sourceModuleKey);
+  form.elements.sourceModuleKey.value = definition?.sourceModuleKey || configModules.find((module) => module.status === 'published')?.key || '';
+  form.elements.requestFormKey.innerHTML = workflowRequestFormOptions(definition?.requestFormKey || '');
+  form.elements.requestFormKey.value = definition?.requestFormKey || '';
+  form.elements.lockScope.value = definition?.draftConfig?.recordPolicy?.lockScope || 'record';
+  form.elements.lockedFields.value = (definition?.draftConfig?.recordPolicy?.lockedFields || []).join(', ');
+  form.elements.snapshotFields.value = (definition?.draftConfig?.recordPolicy?.snapshotFields || []).join(', ');
+  form.elements.allowCancellation.checked = definition?.draftConfig?.recordPolicy?.allowAuthorizedCancel !== false;
+  state.workflowDraftStages = structuredClone(definition?.draftConfig?.stages?.length ? definition.draftConfig.stages : [defaultWorkflowStage()]);
+  state.workflowBuilderGraph = normalizeWorkflowBuilderGraph(structuredClone(definition?.draftConfig?.builderGraph || null), state.workflowDraftStages);
+  state.selectedWorkflowNodeId = state.workflowBuilderGraph.nodes.find((node) => node.type === 'start')?.id || '';
+  state.selectedWorkflowEdgeId = '';
+  state.workflowConnectFrom = '';
+  state.workflowCanvasZoom = 1;
+  $('#workflowDefinitionTitle').textContent = definition?.name || 'New workflow';
+  $('#workflowDefinitionLifecycle').textContent = definition ? `${titleCaseMessage(definition.status)} definition` : 'New draft';
+  $('#workflowDefinitionPrefix').textContent = definition?.requestPrefix ? `New requests will use ${definition.requestPrefix}-000001 and continue in sequence.` : 'The readable request prefix is assigned automatically from the workflow key.';
+  $('#workflowDefinitionStatus').textContent = titleCaseMessage(definition?.status || 'draft');
+  $('#workflowDefinitionStatus').className = `status-pill ${workflowStatusClass(definition?.status || 'draft')}`;
+  $('#archiveWorkflowDefinitionButton').hidden = !definition || definition.status === 'archived';
+  $('#publishWorkflowDefinitionButton').disabled = definition?.status === 'archived';
+  $('#saveWorkflowDefinitionButton').disabled = definition?.status === 'archived';
+  renderWorkflowStages();
+  renderWorkflowLinkedAutomationFlows(definition);
+  renderWorkflowCheck(null);
+}
+
+function renderWorkflowLinkedAutomationFlows(definition = activeWorkflowDefinition()) {
+  const panel = $('#workflowLinkedAutomationFlows');
+  if (!panel) return;
+  if (!definition?.workflowKey) {
+    panel.innerHTML = '<div class="empty-state"><p>Save the workflow before linking an Automation Flow.</p></div>';
+    return;
+  }
+  const linked = state.actionFlows.filter((flow) => flow.triggerType === 'workflow_event' && (!flow.triggerModule || flow.triggerModule === definition.workflowKey));
+  panel.innerHTML = linked.map((flow) => {
+    const trigger = (flow.definition?.nodes || []).find((node) => node.category === 'trigger');
+    const events = trigger?.config?.eventTypes?.length ? trigger.config.eventTypes.join(', ') : 'Any workflow event';
+    return `<article class="workflow-stage-card"><div class="workflow-stage-header"><div><span class="workflow-stage-order">Automation</span><h4>${escapeHtml(flow.name)}</h4><p>${escapeHtml(events)}${trigger?.config?.stageKey ? ` · Stage ${escapeHtml(trigger.config.stageKey)}` : ''}</p></div><span class="status-pill ${workflowStatusClass(flow.status)}">${escapeHtml(titleCaseMessage(flow.status))}</span></div></article>`;
+  }).join('') || '<div class="empty-state"><p>No Automation Flow is linked yet. In Automation Flow, choose “When an approval workflow event occurs”.</p></div>';
+}
+
+function renderWorkflowCheck(check) {
+  const panel = $('#workflowCheckPanel');
+  if (!check) {
+    panel.hidden = true;
+    panel.innerHTML = '';
+    return;
+  }
+  panel.hidden = false;
+  panel.className = `workflow-check-panel ${check.valid ? 'is-valid' : 'is-invalid'}`;
+  panel.innerHTML = `<div class="workflow-check-heading"><div><strong>${check.valid ? 'Ready to publish' : `${check.errors?.length || 0} issue${check.errors?.length === 1 ? '' : 's'} need attention`}</strong><p>${check.valid ? 'The configured route passed all publishing checks.' : 'Resolve every blocking finding, save the draft, then check again.'}</p></div><span>${check.valid ? '✓' : '!'}</span></div>${(check.findings || []).map((finding) => `<article><code>${escapeHtml(finding.path || finding.code)}</code><div><strong>${escapeHtml(finding.message)}</strong><p>${escapeHtml(finding.remediation || '')}</p></div></article>`).join('')}`;
+}
+
+async function loadWorkflowDefinitions(selectKey = state.activeWorkflowKey) {
+  if (state.user?.role !== 'admin') return;
+  const [payload, formsPayload] = await Promise.all([
+    api('/api/workflows/definitions?status=all'),
+    api('/api/sysadmin/forms').catch(() => ({ forms: [] }))
+  ]);
+  state.standaloneForms = formsPayload.forms || [];
+  state.workflowDefinitions = payload.definitions || [];
+  state.activeWorkflowKey = state.workflowDefinitions.some((item) => item.workflowKey === selectKey) ? selectKey : '';
+  renderWorkflowDefinitionList();
+  if (state.activeWorkflowKey) showWorkflowDefinition(activeWorkflowDefinition());
+}
+
+function workflowDefinitionPayload(form) {
+  const csv = (name) => form.elements[name].value.split(',').map((item) => item.trim()).filter(Boolean);
+  return {
+    workflowKey: form.elements.workflowKey.value.trim(),
+    name: form.elements.name.value.trim(),
+    description: form.elements.description.value.trim(),
+    sourceModuleKey: form.elements.sourceModuleKey.value,
+    requestFormKey: form.elements.requestFormKey.value.trim() || undefined,
+    config: {
+      trigger: { type: 'manual_submit' },
+      recordPolicy: {
+        lockScope: form.elements.lockScope.value,
+        lockedFields: csv('lockedFields'),
+        snapshotFields: csv('snapshotFields'),
+        allowAuthorizedCancel: form.elements.allowCancellation.checked
+      },
+      stages: captureWorkflowStages(),
+      builderGraph: workflowGraphForSave(),
+      eventPolicy: {
+        events: ['workflow.submitted', 'workflow.approved', 'workflow.rejected', 'workflow.returned', 'workflow.resubmitted', 'workflow.withdrawn', 'workflow.cancelled'],
+        payloadFields: ['workflowKey', 'requestKey', 'sourceModuleKey', 'sourceRecordId', 'requestStatus', 'stageKey']
+      }
+    }
+  };
+}
+
+async function saveWorkflowDefinition(event) {
+  event?.preventDefault();
+  const form = $('#workflowDefinitionForm');
+  const editingKey = form.elements.editingWorkflowKey.value;
+  const payload = workflowDefinitionPayload(form);
+  const result = await api(editingKey ? `/api/workflows/definitions/${encodeURIComponent(editingKey)}` : '/api/workflows/definitions', {
+    method: editingKey ? 'PUT' : 'POST',
+    body: JSON.stringify(payload)
+  });
+  state.activeWorkflowKey = result.definition.workflowKey;
+  await loadWorkflowDefinitions(state.activeWorkflowKey);
+  renderWorkflowCheck(result.check);
+  toast(editingKey ? 'Workflow Draft Saved.' : 'Workflow Created.');
+  return result;
+}
+
+async function checkWorkflowDefinition() {
+  const saved = await saveWorkflowDefinition();
+  const result = await api(`/api/workflows/definitions/${encodeURIComponent(saved.definition.workflowKey)}/check`, { method: 'POST', body: '{}' });
+  renderWorkflowCheck(result.check);
+  toast(result.check.valid ? 'Workflow Check Passed.' : 'Workflow Needs Attention.', result.check.valid ? 'success' : 'error');
+}
+
+async function publishWorkflowDefinition() {
+  const saved = await saveWorkflowDefinition();
+  if (!saved.check.valid) {
+    renderWorkflowCheck(saved.check);
+    return toast('Workflow Needs Attention Before Publishing.', 'error');
+  }
+  const confirmed = await showConfirmationModal({ title: 'Publish workflow', message: 'Publish this immutable version for new approval requests?', confirmLabel: 'Publish' });
+  if (!confirmed) return;
+  await api(`/api/workflows/definitions/${encodeURIComponent(saved.definition.workflowKey)}/publish`, { method: 'POST', body: JSON.stringify({ summary: 'Published from Workflow Builder' }) });
+  await loadWorkflowDefinitions(saved.definition.workflowKey);
+  toast('Workflow Published.');
+}
+
+async function checkpointWorkflowDefinition() {
+  const saved = await saveWorkflowDefinition();
+  await api(`/api/workflows/definitions/${encodeURIComponent(saved.definition.workflowKey)}/checkpoints`, { method: 'POST', body: JSON.stringify({ summary: 'Workflow Builder checkpoint' }) });
+  await loadWorkflowDefinitions(saved.definition.workflowKey);
+  toast('Workflow Checkpoint Saved.');
+}
+
+async function cloneWorkflowDefinition() {
+  const definition = activeWorkflowDefinition();
+  if (!definition) return;
+  const key = `${definition.workflowKey}_copy_${String(Date.now()).slice(-5)}`.slice(0, 80);
+  const result = await api(`/api/workflows/definitions/${encodeURIComponent(definition.workflowKey)}/clone`, { method: 'POST', body: JSON.stringify({ workflowKey: key, name: `${definition.name} Copy` }) });
+  state.activeWorkflowKey = result.definition.workflowKey;
+  await loadWorkflowDefinitions(state.activeWorkflowKey);
+  toast('Workflow Cloned.');
+}
+
+async function archiveWorkflowDefinition() {
+  const definition = activeWorkflowDefinition();
+  if (!definition) return;
+  const confirmed = await showConfirmationModal({ title: 'Archive workflow', message: `Archive ${definition.name}? Existing requests keep their original version.`, confirmLabel: 'Archive' });
+  if (!confirmed) return;
+  await api(`/api/workflows/definitions/${encodeURIComponent(definition.workflowKey)}/archive`, { method: 'POST', body: '{}' });
+  await loadWorkflowDefinitions(definition.workflowKey);
+  toast('Workflow Archived.');
+}
+
+function workflowRequestItems() {
+  if (state.workflowRequestMode === 'inbox') {
+    return state.workflowInbox.filter((item) => state.workflowRequestStatus === 'all' || item.requestStatus === state.workflowRequestStatus);
+  }
+  return state.workflowRequests.filter((item) => (
+    (state.user?.role === 'admin' || item.relationship === 'requester')
+    && (state.workflowRequestStatus === 'all' || item.status === state.workflowRequestStatus)
+    && (!state.workflowRequestSearch || [item.requestKey, item.workflowName].some((value) => String(value || '').toLowerCase().includes(state.workflowRequestSearch.toLowerCase())))
+  ));
+}
+
+function renderWorkflowRequestList() {
+  const items = workflowRequestItems();
+  $('#workflowRequestList').innerHTML = items.map((item) => {
+    const requestKey = item.requestKey;
+    const status = item.requestStatus || item.status || 'pending';
+    return `<button type="button" class="workflow-request-item ${requestKey === state.activeWorkflowRequestKey ? 'is-active' : ''}" data-workflow-request="${escapeHtml(requestKey)}"><span class="workflow-request-item-top"><strong>${escapeHtml(requestKey)}</strong><em class="status-pill ${workflowStatusClass(status)}">${escapeHtml(titleCaseMessage(status))}</em></span><span>${escapeHtml(item.workflowName || item.stageName || item.sourceModuleKey || 'Approval request')}</span><small>${state.workflowRequestMode === 'inbox' ? `${escapeHtml(item.stageName || item.stageKey)} · ` : ''}${escapeHtml(item.sourceModuleKey)} #${escapeHtml(String(item.sourceRecordId))}</small></button>`;
+  }).join('') || `<div class="empty-state"><h3>${state.workflowRequestMode === 'inbox' ? 'Inbox clear' : 'No requests yet'}</h3><p>${state.workflowRequestMode === 'inbox' ? 'New assignments appear here when an approval stage reaches you.' : 'Send an existing CRM record through a published approval workflow.'}</p></div>`;
+  const mine = state.workflowRequests.filter((item) => state.user?.role === 'admin' || item.relationship === 'requester');
+  const pending = mine.filter((item) => item.status === 'pending').length;
+  const returned = mine.filter((item) => item.status === 'returned').length;
+  $('#workflowRequestSummary').innerHTML = [
+    [state.user?.role === 'admin' ? 'Visible requests' : 'My requests', mine.length, state.user?.role === 'admin' ? 'All requests across configured workflows' : 'All requests you raised'],
+    ['In progress', pending, 'Currently moving through approval'],
+    ['Returned', returned, 'Waiting for your correction'],
+    ['My approvals', state.workflowInbox.filter((item) => item.status === 'pending').length, 'Assignments needing a decision']
+  ].map(([label, value, help]) => `<article><span>${escapeHtml(label)}</span><strong>${value}</strong><small>${escapeHtml(help)}</small></article>`).join('');
+}
+
+function workflowStageTone(stage) {
+  if (stage.status === 'active') return 'is-active';
+  if (['approved', 'auto-approved'].includes(stage.status)) return 'is-complete';
+  if (stage.status === 'skipped') return 'is-skipped';
+  if (['rejected', 'returned', 'cancelled'].includes(stage.status)) return 'is-stopped';
+  return 'is-waiting';
+}
+
+function renderWorkflowRequestDetail(payload) {
+  const request = payload.request;
+  const canDecide = payload.relationship === 'approver'
+    && request.status === 'pending'
+    && state.workflowInbox.some((assignment) => assignment.requestKey === request.requestKey && assignment.status === 'pending');
+  const actions = [];
+  if (canDecide) actions.push('<button type="button" data-workflow-decision="approve">Approve</button>', '<button type="button" class="secondary" data-workflow-decision="return">Return for correction</button>', '<button type="button" class="secondary danger-link" data-workflow-decision="reject">Reject</button>');
+  if (payload.relationship === 'requester' && request.status === 'pending') actions.push('<button type="button" class="secondary danger-link" data-workflow-lifecycle="withdraw">Withdraw</button>');
+  if (payload.relationship === 'requester' && request.status === 'returned') actions.push('<button type="button" data-workflow-lifecycle="resubmit">Resubmit amended record</button>');
+  if (state.user?.role === 'admin' && request.status === 'pending') actions.push('<button type="button" class="secondary danger-link" data-workflow-lifecycle="cancel">Cancel request</button>');
+  const snapshot = payload.snapshot?.snapshot || {};
+  const attachmentSection = `<section class="workflow-detail-section"><div class="workflow-detail-section-heading"><h3>Attachments</h3><span>${payload.attachments?.length || 0} files</span></div><div class="workflow-attachment-list">${(payload.attachments || []).map((attachment) => `<button type="button" class="secondary" data-workflow-attachment-download="${attachment.id}"><strong>${escapeHtml(attachment.fileName)}</strong><small>${escapeHtml(titleCaseMessage(attachment.purpose))} · ${Math.max(1, Math.ceil(attachment.fileSize / 1024))} KB</small></button>`).join('') || '<p class="muted">No attachments were added to this request.</p>'}</div></section>`;
+  $('#workflowRequestDetail').innerHTML = `<header class="workflow-request-detail-header"><div><span class="eyebrow">${escapeHtml(request.workflowName || request.workflowKey)}</span><h2>${escapeHtml(request.requestKey)}</h2><p>${escapeHtml(titleCaseMessage(payload.relationship))} view · ${escapeHtml(request.sourceModuleKey)} record #${escapeHtml(String(request.sourceRecordId))}</p></div><span class="status-pill ${workflowStatusClass(request.status)}">${escapeHtml(titleCaseMessage(request.status))}</span></header>
+    <div class="workflow-request-actionbar">${actions.join('')}</div>${attachmentSection}
+    <section class="workflow-detail-section"><div class="workflow-detail-section-heading"><h3>Approval rail</h3><span>Version ${request.workflowVersion}</span></div><div class="workflow-approval-rail">${payload.stages.map((stage, index) => `<article class="${workflowStageTone(stage)}"><span class="workflow-rail-marker">${['approved', 'auto-approved'].includes(stage.status) ? '✓' : index + 1}</span><div><strong>${escapeHtml(stage.name || stage.stageKey)}</strong><small>${escapeHtml(titleCaseMessage(stage.status))}${stage.dueAt ? ` · Due ${escapeHtml(new Date(stage.dueAt).toLocaleString())}` : ''}</small>${stage.reasonMessage ? `<p>${escapeHtml(stage.reasonMessage)}</p>` : ''}</div></article>`).join('')}</div></section>
+    <section class="workflow-detail-section"><div class="workflow-detail-section-heading"><h3>Protected snapshot</h3><span>${escapeHtml(payload.presentation?.formName || 'Permitted fields')} · Revision ${payload.snapshot?.revisionNumber || 1}</span></div><dl class="workflow-snapshot-grid">${Object.entries(snapshot).map(([key, value]) => `<div><dt>${escapeHtml(titleCaseMessage(key))}</dt><dd>${escapeHtml(typeof value === 'object' ? JSON.stringify(value) : String(value ?? '—'))}</dd></div>`).join('') || '<div><dt>Visible fields</dt><dd>No fields are available in this node form under your field permissions.</dd></div>'}</dl></section>
+    <section class="workflow-detail-section"><div class="workflow-detail-section-heading"><h3>Decision history</h3><span>${payload.timeline.length} entries</span></div><div class="workflow-timeline">${payload.timeline.slice().reverse().map((entry) => `<article><span></span><div><strong>${escapeHtml(titleCaseMessage(entry.action || entry.eventType || entry.type))}</strong><small>${escapeHtml(entry.stageName || entry.stageKey || 'Request')} · ${escapeHtml(new Date(entry.createdAt).toLocaleString())}</small>${entry.actorIdentity?.name ? `<p>${escapeHtml(entry.actorIdentity.name)}${entry.remark ? ` — ${escapeHtml(entry.remark)}` : ''}</p>` : entry.remark ? `<p>${escapeHtml(entry.remark)}</p>` : ''}${Object.keys(entry.responses || {}).length ? `<dl class="workflow-response-history">${Object.entries(entry.responses).map(([key, value]) => `<div><dt>${escapeHtml(titleCaseMessage(key))}</dt><dd>${escapeHtml(String(value ?? '—'))}</dd></div>`).join('')}</dl>` : ''}</div></article>`).join('') || '<div class="empty-state"><p>No history entries are available.</p></div>'}</div></section>`;
+}
+
+async function openWorkflowRequest(requestKey) {
+  state.activeWorkflowRequestKey = requestKey;
+  renderWorkflowRequestList();
+  $('#workflowRequestDetail').innerHTML = '<div class="empty-state"><p>Loading request history…</p></div>';
+  const payload = await api(`/api/workflows/requests/${encodeURIComponent(requestKey)}`);
+  state.activeWorkflowRequest = payload;
+  renderWorkflowRequestDetail(payload);
+}
+
+async function downloadWorkflowAttachment(attachmentId) {
+  const requestKey = state.activeWorkflowRequestKey;
+  const attachment = state.activeWorkflowRequest?.attachments?.find((item) => Number(item.id) === Number(attachmentId));
+  if (!requestKey || !attachment) return;
+  const response = await fetch(`/api/workflows/requests/${encodeURIComponent(requestKey)}/attachments/${attachment.id}`, {
+    headers: { Authorization: `Bearer ${await currentAuthToken()}` }
+  });
+  if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'Unable to download attachment');
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = attachment.fileName;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+async function loadWorkflowRequests() {
+  const [requests, inbox] = await Promise.all([
+    api('/api/workflows/requests?status=all&limit=100'),
+    api('/api/workflows/inbox?status=pending&limit=100')
+  ]);
+  state.workflowRequests = requests.requests || [];
+  state.workflowInbox = inbox.assignments || [];
+  renderWorkflowRequestList();
+  if (state.activeWorkflowRequestKey && state.workflowRequests.some((item) => item.requestKey === state.activeWorkflowRequestKey)) {
+    await openWorkflowRequest(state.activeWorkflowRequestKey);
+  }
+}
+
+function workflowMonitoringTiming(item) {
+  if (!item.dueAt) return '<strong>Not tracked</strong><small>No SLA on this stage</small>';
+  const due = new Date(item.dueAt);
+  const remaining = due.getTime() - Date.now();
+  const hours = Math.max(1, Math.ceil(Math.abs(remaining) / 3600000));
+  return `<strong>${remaining < 0 ? `${hours}h overdue` : `${hours}h remaining`}</strong><small>Due ${escapeHtml(due.toLocaleString())}</small>`;
+}
+
+function renderWorkflowMonitoring() {
+  const { summary = {}, items = [], generatedAt } = state.workflowMonitoring;
+  $('#workflowMonitoringUpdated').textContent = generatedAt ? `Updated ${new Date(generatedAt).toLocaleTimeString()}` : '';
+  $('#workflowMonitoringSummary').innerHTML = [
+    ['Open routes', summary.active || 0, 'active'],
+    ['Due within 24h', summary.dueSoon || 0, 'due_soon'],
+    ['Overdue', summary.overdue || 0, 'overdue'],
+    ['Completed in view', summary.completed || 0, 'completed']
+  ].map(([label, value, tone]) => `<button type="button" class="workflow-monitoring-metric is-${tone}" data-monitoring-sla-filter="${tone === 'active' || tone === 'completed' ? 'all' : tone}"><span>${escapeHtml(label)}</span><strong>${value}</strong></button>`).join('');
+  $('#workflowMonitoringRows').innerHTML = items.map((item) => `<tr class="is-${escapeHtml(item.slaStatus)}">
+    <td><button type="button" class="workflow-monitoring-request-link" data-monitoring-request="${escapeHtml(item.requestKey)}"><strong>${escapeHtml(item.requestKey)}</strong><small>${escapeHtml(item.workflowName)}</small></button></td>
+    <td><strong>${escapeHtml(item.stageName || titleCaseMessage(item.status))}</strong><small>${escapeHtml(item.sourceModuleKey)} #${escapeHtml(String(item.sourceRecordId))}</small></td>
+    <td><strong>${escapeHtml(item.approverNames?.join(', ') || 'No active approver')}</strong><small>Requested by ${escapeHtml(item.requesterName || 'Unknown')}</small></td>
+    <td>${workflowMonitoringTiming(item)}</td>
+    <td><span class="workflow-sla-badge is-${escapeHtml(item.slaStatus)}">${escapeHtml(titleCaseMessage(item.slaStatus))}</span></td>
+    <td>${item.status === 'pending' && item.stageId ? `<div class="workflow-monitoring-actions"><button type="button" class="secondary compact-button" data-monitoring-remind="${escapeHtml(item.requestKey)}">Send reminder</button>${item.assignments?.length ? `<button type="button" class="secondary compact-button" data-monitoring-reassign="${escapeHtml(item.requestKey)}">Reassign</button>` : ''}</div>` : ''}</td>
+  </tr>`).join('') || '<tr><td colspan="6"><div class="empty-state"><h3>No workflow requests match</h3><p>Adjust the request or SLA filters to widen this operational view.</p></div></td></tr>';
+}
+
+async function loadWorkflowMonitoring() {
+  const params = new URLSearchParams({ status: state.workflowMonitoringStatus, sla: state.workflowMonitoringSla, search: state.workflowMonitoringSearch, limit: '300' });
+  state.workflowMonitoring = await api(`/api/workflows/monitoring?${params}`);
+  renderWorkflowMonitoring();
+}
+
+function workflowReportParams() {
+  const filters = state.workflowReportFilters;
+  return new URLSearchParams({ ...filters, limit: '500' });
+}
+
+function syncWorkflowReportOptions() {
+  const workflow = $('#workflowReportWorkflow');
+  const department = $('#workflowReportDepartment');
+  if (workflow) workflow.innerHTML = `<option value="">All workflows</option>${state.workflowDefinitions.map((item) => `<option value="${escapeHtml(item.workflowKey)}">${escapeHtml(item.name)}</option>`).join('')}`;
+  if (department) department.innerHTML = `<option value="">All departments</option>${state.departmentNodes.filter((node) => node.enabled !== false).map((node) => `<option value="${node.id}">${escapeHtml(node.name)}</option>`).join('')}`;
+  const controls = { search: 'Search', workflowKey: 'Workflow', status: 'Status', requester: 'Requester', approver: 'Approver', departmentId: 'Department', dateFrom: 'DateFrom', dateTo: 'DateTo' };
+  Object.entries(controls).forEach(([key, suffix]) => { const control = $(`#workflowReport${suffix}`); if (control) control.value = state.workflowReportFilters[key]; });
+}
+
+function renderWorkflowReport() {
+  const items = state.workflowReport.items || [];
+  $('#workflowReportCount').textContent = `${items.length} request${items.length === 1 ? '' : 's'}`;
+  $('#workflowReportRows').innerHTML = items.map((item) => `<tr>
+    <td><button type="button" class="workflow-monitoring-request-link" data-monitoring-request="${escapeHtml(item.requestKey)}"><strong>${escapeHtml(item.requestKey)}</strong><small>${escapeHtml(item.workflowName)}</small></button></td>
+    <td><strong>${escapeHtml(item.requesterName || 'Unknown')}</strong><small>${escapeHtml(item.requesterEmail || '')}</small></td>
+    <td>${escapeHtml(item.requesterDepartmentName || 'Not assigned')}</td>
+    <td><span class="status-pill status-${escapeHtml(item.status)}">${escapeHtml(titleCaseMessage(item.status))}</span></td>
+    <td>${escapeHtml(item.submittedAt ? new Date(item.submittedAt).toLocaleString() : 'Draft')}</td>
+    <td>${escapeHtml(item.completedAt ? new Date(item.completedAt).toLocaleString() : '—')}</td>
+    <td><button type="button" class="secondary compact-button" data-monitoring-request="${escapeHtml(item.requestKey)}">View timeline</button></td>
+  </tr>`).join('') || '<tr><td colspan="7"><div class="empty-state"><h3>No request history matches</h3><p>Clear one or more filters to widen this report.</p></div></td></tr>';
+}
+
+async function loadWorkflowReport() {
+  state.workflowReport = await api(`/api/workflows/monitoring?${workflowReportParams()}`);
+  renderWorkflowReport();
+}
+
+async function selectWorkflowMonitoringTab(tab) {
+  state.workflowMonitoringTab = tab;
+  $$('[data-workflow-monitoring-tab]').forEach((button) => {
+    const active = button.dataset.workflowMonitoringTab === tab;
+    button.classList.toggle('is-active', active); button.setAttribute('aria-selected', String(active));
+  });
+  $('#workflowMonitoringLivePanel').hidden = tab !== 'live';
+  $('#workflowMonitoringHistoryPanel').hidden = tab !== 'history';
+  if (tab === 'history') { syncWorkflowReportOptions(); await loadWorkflowReport(); } else await loadWorkflowMonitoring();
+}
+
+async function exportWorkflowReport() {
+  const authToken = await currentAuthToken();
+  const response = await fetch(`/api/workflows/monitoring/export.csv?${workflowReportParams()}`, { headers: authToken ? { Authorization: `Bearer ${authToken}` } : {} });
+  if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'Unable to export workflow history');
+  const url = URL.createObjectURL(await response.blob()); const link = document.createElement('a');
+  link.href = url; link.download = `workflow-history-${new Date().toISOString().slice(0, 10)}.csv`; link.click(); URL.revokeObjectURL(url);
+  toast('Workflow History Exported.');
+}
+
+function clearWorkflowReportFilters() {
+  state.workflowReportFilters = { search: '', workflowKey: '', status: 'all', requester: '', approver: '', departmentId: '', dateFrom: '', dateTo: '' };
+  syncWorkflowReportOptions(); runWorkflowUi(loadWorkflowReport);
+}
+
+async function runWorkflowSlaCheck() {
+  const result = await api('/api/workflows/monitoring/run', { method: 'POST', body: '{}' });
+  await loadWorkflowMonitoring();
+  toast(`Deadline Check Complete: ${result.reminders} Reminder(s), ${result.escalations} Escalation(s).`);
+}
+
+async function sendWorkflowReminder(requestKey) {
+  await api(`/api/workflows/requests/${encodeURIComponent(requestKey)}/remind`, {
+    method: 'POST', headers: { 'Idempotency-Key': workflowIdempotencyKey('reminder') }, body: '{}'
+  });
+  toast(`Reminder Queued For ${requestKey}.`);
+}
+
+async function openMonitoredWorkflowRequest(requestKey) {
+  showView('workflowRequestsView');
+  await loadWorkflowRequests();
+  await openWorkflowRequest(requestKey);
+}
+
+function workflowUserOptions(selected = '') {
+  return state.users.filter((user) => user.status === 'active').map((user) => `<option value="${user.id}" ${Number(selected) === Number(user.id) ? 'selected' : ''}>${escapeHtml(user.name)} · ${escapeHtml(user.email)}</option>`).join('');
+}
+
+function delegationDisplayStatus(item) {
+  if (item.status === 'cancelled') return 'cancelled';
+  const now = Date.now();
+  if (new Date(item.startsAt).getTime() > now) return 'scheduled';
+  if (new Date(item.endsAt).getTime() < now) return 'expired';
+  return 'active';
+}
+
+function renderWorkflowDelegations() {
+  $('#workflowDelegationList').innerHTML = state.workflowDelegations.map((item) => {
+    const status = delegationDisplayStatus(item);
+    const scope = [item.workflowKey || 'All workflows', item.scopeRole ? `Role: ${item.scopeRole}` : '', item.scopeDepartmentId ? `Department #${item.scopeDepartmentId}` : ''].filter(Boolean).join(' · ');
+    return `<article class="workflow-delegation-card is-${status}"><div class="workflow-delegation-route"><div><span>Original</span><strong>${escapeHtml(item.delegatorName)}</strong><small>${escapeHtml(item.delegatorEmail)}</small></div><b aria-hidden="true">→</b><div><span>Replacement</span><strong>${escapeHtml(item.delegateName)}</strong><small>${escapeHtml(item.delegateEmail)}</small></div></div><div class="workflow-delegation-window"><span class="workflow-sla-badge is-${status === 'active' ? 'on_track' : status}">${escapeHtml(titleCaseMessage(status))}</span><strong>${escapeHtml(new Date(item.startsAt).toLocaleString())} — ${escapeHtml(new Date(item.endsAt).toLocaleString())}</strong><small>${escapeHtml(scope)} · ${escapeHtml(item.reason)}</small></div>${item.status === 'active' ? `<button type="button" class="secondary danger-link" data-cancel-workflow-delegation="${item.id}">Cancel delegation</button>` : ''}</article>`;
+  }).join('') || '<div class="empty-state"><h3>No delegation schedules</h3><p>Normal workflow approvers remain in control until an optional coverage schedule is created.</p></div>';
+}
+
+async function loadWorkflowDelegations() {
+  const params = new URLSearchParams({ status: state.workflowDelegationStatus, search: state.workflowDelegationSearch });
+  const payload = await api(`/api/workflows/delegations?${params}`);
+  state.workflowDelegations = payload.delegations || [];
+  renderWorkflowDelegations();
+}
+
+function openWorkflowDelegationModal() {
+  const form = $('#workflowDelegationForm'); form.reset();
+  form.elements.delegatorUserId.innerHTML = workflowUserOptions();
+  form.elements.delegateUserId.innerHTML = workflowUserOptions();
+  form.elements.workflowKey.innerHTML = `<option value="">All workflows</option>${state.workflowDefinitions.filter((item) => item.status === 'published').map((item) => `<option value="${escapeHtml(item.workflowKey)}">${escapeHtml(item.name)}</option>`).join('')}`;
+  form.elements.scopeRole.innerHTML = `<option value="">Any role</option>${[...new Set(state.users.map((user) => user.role).filter(Boolean))].sort().map((role) => `<option value="${escapeHtml(role)}">${escapeHtml(titleCaseMessage(role))}</option>`).join('')}`;
+  form.elements.scopeDepartmentId.innerHTML = `<option value="">Any department</option>${state.departmentNodes.filter((node) => node.enabled !== false).map((node) => `<option value="${node.id}">${escapeHtml(node.name)}</option>`).join('')}`;
+  const start = new Date(Date.now() + 3600000); const end = new Date(start.getTime() + 86400000);
+  const localValue = (date) => new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  form.elements.startsAt.value = localValue(start); form.elements.endsAt.value = localValue(end);
+  openWorkflowModal('workflowDelegationModal', 'select');
+}
+
+async function saveWorkflowDelegation(event) {
+  event.preventDefault(); const form = event.currentTarget; const values = Object.fromEntries(new FormData(form));
+  await api('/api/workflows/delegations', { method: 'POST', body: JSON.stringify({ ...values, delegatorUserId: Number(values.delegatorUserId), delegateUserId: Number(values.delegateUserId), scopeDepartmentId: values.scopeDepartmentId ? Number(values.scopeDepartmentId) : null, startsAt: new Date(values.startsAt).toISOString(), endsAt: new Date(values.endsAt).toISOString() }) });
+  closeWorkflowModal('workflowDelegationModal'); await loadWorkflowDelegations(); toast('Delegation Created.');
+}
+
+async function cancelWorkflowDelegation(id) {
+  const confirmed = await showConfirmationModal({ title: 'Cancel delegation', message: 'Stop this coverage schedule? Existing decisions remain in the audit history.', confirmLabel: 'Cancel delegation' });
+  if (!confirmed) return; await api(`/api/workflows/delegations/${id}/cancel`, { method: 'POST', body: '{}' }); await loadWorkflowDelegations(); toast('Delegation Cancelled.');
+}
+
+function openWorkflowReassignModal(requestKey) {
+  const item = state.workflowMonitoring.items.find((entry) => entry.requestKey === requestKey); if (!item) return;
+  const form = $('#workflowReassignForm'); form.reset(); form.elements.requestKey.value = requestKey;
+  form.elements.assignmentId.innerHTML = item.assignments.map((assignment) => `<option value="${assignment.id}">${escapeHtml(assignment.approverName)}</option>`).join('');
+  form.elements.replacementUserId.innerHTML = workflowUserOptions(); openWorkflowModal('workflowReassignModal', 'select');
+}
+
+async function reassignWorkflowAssignment(event) {
+  event.preventDefault(); const form = event.currentTarget; const values = Object.fromEntries(new FormData(form));
+  await api(`/api/workflows/assignments/${Number(values.assignmentId)}/reassign`, { method: 'POST', headers: { 'Idempotency-Key': workflowIdempotencyKey('reassign') }, body: JSON.stringify({ replacementUserId: Number(values.replacementUserId), reason: values.reason }) });
+  closeWorkflowModal('workflowReassignModal'); await loadWorkflowMonitoring(); toast(`Approval ${values.requestKey} Reassigned.`);
+}
+
+function openWorkflowSubmitModal() {
+  const published = state.workflowDefinitions.filter((definition) => definition.status === 'published');
+  const form = $('#workflowSubmitForm');
+  form.reset();
+  form.elements.workflowKey.innerHTML = published.map((definition) => `<option value="${escapeHtml(definition.workflowKey)}">${escapeHtml(definition.name)} · ${escapeHtml(definition.sourceModuleKey)}</option>`).join('');
+  if (!published.length) return toast('No Published Workflow Is Available. Contact An Administrator.', 'error');
+  syncWorkflowSubmitBinding();
+  openWorkflowModal('workflowSubmitModal', 'select');
+}
+
+function configureWorkflowAttachmentInput(container, policy = {}, purpose) {
+  const input = container?.querySelector('input[type="file"]');
+  if (!container || !input) return;
+  const enabled = policy.mode && policy.mode !== 'disabled' && (!policy.actions?.length || policy.actions.includes(purpose));
+  container.hidden = !enabled;
+  input.required = enabled && policy.mode === 'required';
+  input.accept = (policy.allowedTypes || []).join(',');
+  input.value = '';
+  container.querySelector('small').textContent = enabled ? `${titleCaseMessage(policy.mode)} · up to ${policy.maxFileCount || 1} file(s), ${Math.max(1, Math.round((policy.maxFileSize || 5242880) / 1048576))} MB each.` : '';
+}
+
+function syncWorkflowSubmitBinding() {
+  const definition = state.workflowDefinitions.find((item) => item.workflowKey === $('#workflowSubmitForm').elements.workflowKey.value);
+  $('#workflowSubmitBinding').innerHTML = definition ? `<strong>${escapeHtml(definition.sourceModuleKey)}</strong><span>New request ID will begin with ${escapeHtml(definition.requestPrefix)}.</span>` : 'Choose a workflow.';
+  configureWorkflowAttachmentInput($('#workflowSubmitAttachments'), definition?.submissionAttachmentPolicy, 'submission');
+}
+
+async function submitWorkflowRequest(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const definition = state.workflowDefinitions.find((item) => item.workflowKey === form.elements.workflowKey.value);
+  const body = new FormData(form);
+  body.set('sourceModuleKey', definition.sourceModuleKey);
+  const result = await api('/api/workflows/requests', {
+    method: 'POST',
+    headers: { 'Idempotency-Key': workflowIdempotencyKey('submit') },
+    body
+  });
+  closeWorkflowModal('workflowSubmitModal');
+  await loadWorkflowRequests();
+  await openWorkflowRequest(result.request.requestKey);
+  toast(`Request ${result.request.requestKey} Sent For Approval.`);
+}
+
+function openWorkflowDecision(action) {
+  const form = $('#workflowDecisionForm');
+  form.reset();
+  form.elements.requestKey.value = state.activeWorkflowRequestKey;
+  form.elements.action.value = action;
+  const labels = { approve: 'Approve request', reject: 'Reject request', return: 'Return for correction' };
+  $('#workflowDecisionTitle').textContent = labels[action];
+  $('#workflowDecisionHelp').textContent = action === 'approve' ? 'Confirm that this request meets the required approval criteria.' : 'A clear remark is required so the requester knows what happens next.';
+  $('#confirmWorkflowDecisionButton').textContent = action === 'return' ? 'Return for correction' : titleCaseMessage(action);
+  form.elements.remark.required = action !== 'approve';
+  configureWorkflowAttachmentInput($('#workflowDecisionAttachments'), state.activeWorkflowRequest?.attachmentPolicy, action === 'approve' ? 'approval' : action);
+  const responseForm = state.activeWorkflowRequest?.responseForm;
+  const responsePanel = $('#workflowDecisionResponseFields');
+  responsePanel.innerHTML = responseForm?.fields?.length ? `<div class="workflow-command-note"><strong>${escapeHtml(responseForm.formName || 'Approval response')}</strong><span>These answers are saved with your decision.</span></div>${responseForm.fields.map((field) => {
+    const type = ['number', 'int', 'decimals'].includes(field.type) ? 'number' : field.type === 'date' ? 'date' : field.type === 'checkbox' ? 'checkbox' : 'text';
+    if (type === 'checkbox') return `<label class="checkbox-label"><input type="checkbox" data-workflow-response-input="${escapeHtml(field.fieldKey)}"> ${escapeHtml(field.label)}${field.required ? ' *' : ''}</label>`;
+    if (['dropdownbox', 'select'].includes(field.type)) return `<label>${escapeHtml(field.label)}<select data-workflow-response-input="${escapeHtml(field.fieldKey)}" ${action === 'approve' && field.required ? 'required' : ''}><option value="">Choose an option</option>${(field.options || []).map((option) => { const value = typeof option === 'object' ? (option.value ?? option.label) : option; const label = typeof option === 'object' ? (option.label ?? option.value) : option; return `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`; }).join('')}</select></label>`;
+    if (field.type === 'textarea') return `<label>${escapeHtml(field.label)}<textarea rows="3" data-workflow-response-input="${escapeHtml(field.fieldKey)}" ${action === 'approve' && field.required ? 'required' : ''}></textarea></label>`;
+    return `<label>${escapeHtml(field.label)}<input type="${type}" data-workflow-response-input="${escapeHtml(field.fieldKey)}" ${action === 'approve' && field.required ? 'required' : ''}></label>`;
+  }).join('')}` : '';
+  openWorkflowModal('workflowDecisionModal', responseForm?.fields?.length ? '[data-workflow-response-input]' : 'textarea');
+}
+
+async function decideWorkflowRequest(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const action = form.elements.action.value;
+  const responses = Object.fromEntries([...form.querySelectorAll('[data-workflow-response-input]')].map((input) => [input.dataset.workflowResponseInput, input.type === 'checkbox' ? input.checked : input.value]));
+  const body = new FormData(form);
+  body.set('responses', JSON.stringify(responses));
+  await api(`/api/workflows/requests/${encodeURIComponent(form.elements.requestKey.value)}/decisions`, {
+    method: 'POST',
+    headers: { 'Idempotency-Key': workflowIdempotencyKey(action, form.elements.requestKey.value) },
+    body
+  });
+  closeWorkflowModal('workflowDecisionModal');
+  await loadWorkflowRequests();
+  await openWorkflowRequest(form.elements.requestKey.value);
+  toast(action === 'return' ? 'Request Returned For Correction.' : `Request ${titleCaseMessage(action)}d.`);
+}
+
+function openWorkflowLifecycle(action) {
+  const form = $('#workflowLifecycleForm');
+  form.reset();
+  form.elements.requestKey.value = state.activeWorkflowRequestKey;
+  form.elements.action.value = action;
+  const content = {
+    withdraw: ['Withdraw request', 'This ends the current request and preserves its complete history.', 'Withdraw'],
+    resubmit: ['Resubmit amended record', 'The source record will be read again, a new snapshot created, and approval will resume from the returning stage.', 'Resubmit'],
+    cancel: ['Cancel request', 'Administrative cancellation is recorded permanently and must include a reason.', 'Cancel request']
+  }[action];
+  $('#workflowLifecycleTitle').textContent = content[0];
+  $('#workflowLifecycleHelp').textContent = content[1];
+  $('#confirmWorkflowLifecycleButton').textContent = content[2];
+  form.elements.remark.required = action === 'cancel';
+  openWorkflowModal('workflowLifecycleModal', 'textarea');
+}
+
+async function runWorkflowLifecycle(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const action = form.elements.action.value;
+  const requestKey = form.elements.requestKey.value;
+  await api(`/api/workflows/requests/${encodeURIComponent(requestKey)}/${action}`, {
+    method: 'POST',
+    headers: { 'Idempotency-Key': workflowIdempotencyKey(action, requestKey) },
+    body: JSON.stringify({ remark: form.elements.remark.value.trim() || undefined })
+  });
+  closeWorkflowModal('workflowLifecycleModal');
+  await loadWorkflowRequests();
+  await openWorkflowRequest(requestKey);
+  toast(`Request ${titleCaseMessage(action)} Action Completed.`);
+}
+
+function activeDashboardSource() {
+  return state.dashboardDataSources.find((source) => source.dataSourceKey === state.activeDashboardSourceKey) || null;
+}
+
+function activeDashboard() {
+  return state.dashboards.find((dashboard) => dashboard.dashboardKey === state.activeDashboardKey) || null;
+}
+
+function filteredDashboards() {
+  const query = state.dashboardManagementSearch.trim().toLowerCase();
+  return state.dashboards.filter((dashboard) => (
+    (state.dashboardStatusFilter === 'all' || dashboard.status === state.dashboardStatusFilter)
+    && (!query || [dashboard.name, dashboard.dashboardKey, dashboard.description].some((value) => String(value || '').toLowerCase().includes(query)))
+  ));
+}
+
+function dashboardStatusCounts() {
+  return Object.fromEntries(['draft', 'published', 'archived'].map((status) => [status, state.dashboards.filter((dashboard) => dashboard.status === status).length]));
+}
+
+function renderDashboardManagement() {
+  const counts = dashboardStatusCounts();
+  $('#dashboardAllCount').textContent = state.dashboards.length;
+  $('#dashboardDraftCount').textContent = counts.draft;
+  $('#dashboardPublishedCount').textContent = counts.published;
+  $('#dashboardArchivedCount').textContent = counts.archived;
+  $('#dashboardSummaryTiles').innerHTML = [
+    ['Total', state.dashboards.length], ['Draft', counts.draft], ['Published', counts.published], ['Archived', counts.archived]
+  ].map(([label, value]) => `<div class="dashboard-summary-tile"><strong>${value}</strong><span>${label}</span></div>`).join('');
+  $$('.dashboard-status-filter [data-dashboard-status]').forEach((button) => button.classList.toggle('is-active', button.dataset.dashboardStatus === state.dashboardStatusFilter));
+  const rows = filteredDashboards();
+  $('#dashboardManagementRows').innerHTML = rows.map((dashboard) => `
+    <tr>
+      <td><strong>${escapeHtml(dashboard.name)}</strong><small>${escapeHtml(dashboard.dashboardKey)}${dashboard.description ? ` · ${escapeHtml(dashboard.description)}` : ''}</small></td>
+      <td><span class="status-pill status-${escapeHtml(dashboard.status)}">${escapeHtml(titleCaseMessage(dashboard.status))}</span></td>
+      <td>${dashboard.widgetCount || 0}</td>
+      <td>${dashboard.filterCount || 0}</td>
+      <td>${dashboard.updatedAt ? escapeHtml(new Date(dashboard.updatedAt).toLocaleString()) : '—'}</td>
+      <td><div class="table-action-group">
+        ${dashboard.status !== 'archived' ? `<button type="button" class="link-button" data-open-dashboard="${escapeHtml(dashboard.dashboardKey)}">Open builder</button><button type="button" class="link-button" data-edit-dashboard="${escapeHtml(dashboard.dashboardKey)}">Edit</button><button type="button" class="link-button" data-duplicate-dashboard="${escapeHtml(dashboard.dashboardKey)}">Duplicate</button><button type="button" class="link-button danger-link" data-archive-dashboard="${escapeHtml(dashboard.dashboardKey)}">Archive</button>` : `<button type="button" class="link-button" data-reopen-dashboard="${escapeHtml(dashboard.dashboardKey)}">Reopen as draft</button>`}
+      </div></td>
+    </tr>
+  `).join('') || '<tr><td colspan="6"><div class="empty-state"><h3>No dashboards in this view</h3><p>Create a dashboard or choose another lifecycle filter.</p></div></td></tr>';
+}
+
+async function loadDashboards() {
+  const payload = await api('/api/dashboards');
+  state.dashboards = payload.dashboards || [];
+  renderDashboardManagement();
+}
+
+function showDashboardManagement() {
+  state.dashboardManagementMode = 'list';
+  $('#dashboardManagement').hidden = false;
+  $('#dashboardBuilderStudio').hidden = true;
+}
+
+function dashboardAccessSelected(subjectType, permission) {
+  return (state.dashboardAccessDraft || [])
+    .filter((rule) => rule.subjectType === subjectType && rule[permission])
+    .map((rule) => String(rule.subjectKey));
+}
+
+function renderDashboardAccessRules() {
+  const roles = [...new Set(['admin', 'user', ...state.users.map((user) => user.role).filter(Boolean)])].map((value) => ({ value, label: titleCaseMessage(value), search: value }));
+  const users = permissionUserItems().filter((item) => state.users.some((user) => String(user.id) === item.value && user.status === 'active'));
+  const departments = permissionDepartmentItems();
+  const accessCard = (permission, title, description) => `
+    <section class="dashboard-access-card" data-dashboard-access-permission="${escapeHtml(permission)}">
+      <div class="dashboard-access-card-header"><h3>${escapeHtml(title)}</h3><small>${escapeHtml(description)}</small></div>
+      <div class="dashboard-access-audiences">
+        <section class="page-permission-access-column"><strong>Departments</strong>${renderPermissionPicker('departments', `dashboard_${permission}`, departments, dashboardAccessSelected('department', permission))}<small class="permission-inheritance-note">Selecting a unit includes users assigned to that unit and its descendants.</small></section>
+        <section class="page-permission-access-column"><strong>Roles</strong>${renderPermissionPicker('roles', `dashboard_${permission}`, roles, dashboardAccessSelected('role', permission))}</section>
+        <section class="page-permission-access-column"><strong>Specific users</strong>${renderPermissionPicker('users', `dashboard_${permission}`, users, dashboardAccessSelected('user', permission))}</section>
+      </div>
+    </section>`;
+  $('#dashboardAccessRules').innerHTML = `${accessCard('canView', 'View access', 'Controls who can discover and open the published dashboard.')}${accessCard('canConfigure', 'Configure access', 'Controls who can change this dashboard. Administrators always retain access.')}`;
+}
+
+function openDashboardAccessDrawer() {
+  state.dashboardAccessDraft = JSON.parse(JSON.stringify(state.dashboardConfiguration?.permissions || []));
+  renderDashboardAccessRules();
+  $('#dashboardAccessDrawer').hidden = false;
+  document.body.classList.add('modal-open');
+}
+
+function closeDashboardAccessDrawer() {
+  const drawer = $('#dashboardAccessDrawer');
+  if (!drawer || drawer.hidden) return;
+  drawer.hidden = true;
+  document.body.classList.remove('modal-open');
+}
+
+function renderDashboardVersions(versions = []) {
+  const list = $('#dashboardVersionList');
+  if (!list) return;
+  list.innerHTML = versions.map((version) => `<article class="version-timeline-card"><div class="version-timeline-heading"><div><strong>v${version.versionNumber} - ${escapeHtml(version.name || titleCaseMessage(version.action))}</strong><small>${escapeHtml(version.remark || 'No remark')}</small></div><time>${escapeHtml(new Date(version.createdAt).toLocaleString())}</time></div><div class="form-actions"><span class="status-pill">${escapeHtml(titleCaseMessage(version.action))}</span><button type="button" class="secondary" data-restore-dashboard-version="${version.id}">Restore as draft</button></div></article>`).join('') || '<div class="empty-state"><p>No checkpoints yet. Create one before making a major change.</p></div>';
+}
+
+async function loadDashboardVersions() {
+  const result = await api(`/api/dashboards/${encodeURIComponent(state.activeDashboardKey)}/versions`);
+  renderDashboardVersions(result.versions || []);
+}
+
+async function openDashboardLifecycleDrawer() {
+  $('#dashboardLifecycleForm').reset();
+  $('#dashboardVersionList').innerHTML = '<p class="muted">Loading versions...</p>';
+  $('#dashboardLifecycleDrawer').hidden = false;
+  document.body.classList.add('modal-open');
+  await loadDashboardVersions();
+}
+
+function closeDashboardLifecycleDrawer() {
+  const drawer = $('#dashboardLifecycleDrawer');
+  if (!drawer || drawer.hidden) return;
+  drawer.hidden = true;
+  document.body.classList.remove('modal-open');
+}
+
+async function createDashboardCheckpoint(event) {
+  event.preventDefault();
+  if (state.dashboardLayoutDirty) await saveDashboardLayout();
+  const form = event.currentTarget;
+  await api(`/api/dashboards/${encodeURIComponent(state.activeDashboardKey)}/versions`, { method: 'POST', body: JSON.stringify({ name: form.elements.name.value, remark: form.elements.remark.value }) });
+  form.reset();
+  await loadDashboardVersions();
+  toast('Dashboard Checkpoint Created.');
+}
+
+async function checkActiveDashboard() {
+  if (state.dashboardLayoutDirty) await saveDashboardLayout();
+  const result = await api(`/api/dashboards/${encodeURIComponent(state.activeDashboardKey)}/check`, { method: 'POST', body: '{}' });
+  if (result.valid) toast('Dashboard Check Passed.');
+  else toast(`Dashboard Check Failed: ${result.issues[0]?.message || 'Review the configuration.'}`, 'error');
+}
+
+function toggleDashboardPreview() {
+  state.dashboardPreviewMode = !state.dashboardPreviewMode;
+  $('#dashboardBuilderStudio').classList.toggle('is-previewing', state.dashboardPreviewMode);
+  $('#previewDashboardButton').textContent = state.dashboardPreviewMode ? 'Exit preview' : 'Preview';
+  state.selectedDashboardWidgetKey = '';
+  renderDashboardCanvas();
+}
+
+async function restoreDashboardVersion(versionId) {
+  const confirmed = await showConfirmationModal({ title: 'Restore dashboard version', message: 'Restore this version as the current draft? The published dashboard will remain unchanged.', confirmLabel: 'Restore as draft' });
+  if (!confirmed) return;
+  await api(`/api/dashboards/${encodeURIComponent(state.activeDashboardKey)}/versions/${encodeURIComponent(versionId)}/restore`, { method: 'POST', body: '{}' });
+  await openDashboardBuilderStudio(state.activeDashboardKey);
+  await loadDashboardVersions();
+  toast('Dashboard Version Restored As Draft.');
+}
+
+async function exportDashboardConfiguration() {
+  const payload = await api(`/api/dashboards/${encodeURIComponent(state.activeDashboardKey)}/export`);
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }));
+  link.download = `${state.activeDashboardKey}-dashboard-v${payload.formatVersion}.json`;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+async function importDashboardConfiguration(file) {
+  if (!file) return;
+  let payload;
+  try { payload = JSON.parse(await file.text()); } catch (_error) { throw new Error('Configuration file is not valid JSON'); }
+  const confirmed = await showConfirmationModal({ title: 'Import dashboard configuration', message: 'Replace the current draft with this validated configuration? The published dashboard will remain unchanged.', confirmLabel: 'Import draft' });
+  if (!confirmed) return;
+  await api(`/api/dashboards/${encodeURIComponent(state.activeDashboardKey)}/import`, { method: 'POST', body: JSON.stringify(payload) });
+  await openDashboardBuilderStudio(state.activeDashboardKey);
+  await loadDashboardVersions();
+  toast('Dashboard Configuration Imported.');
+}
+
+async function saveDashboardAccess(event) {
+  event.preventDefault();
+  const rules = new Map();
+  const subjectTypes = { departments: 'department', roles: 'role', users: 'user' };
+  $$('#dashboardAccessRules [data-dashboard-access-permission]').forEach((card) => {
+    const permission = card.dataset.dashboardAccessPermission;
+    card.querySelectorAll('[data-permission-picker]').forEach((picker) => {
+      const subjectType = subjectTypes[picker.dataset.permissionPicker];
+      checkedValues(picker).forEach((subjectKey) => {
+        const key = `${subjectType}:${subjectKey}`;
+        const rule = rules.get(key) || { subjectType, subjectKey, canView: false, canConfigure: false };
+        rule[permission] = true;
+        rules.set(key, rule);
+      });
+    });
+  });
+  state.dashboardAccessDraft = [...rules.values()];
+  state.dashboardConfiguration.permissions = state.dashboardAccessDraft;
+  state.dashboardLayoutDirty = true;
+  closeDashboardAccessDrawer();
+  renderDashboardCanvas();
+  await saveDashboardLayout();
+}
+
+async function publishActiveDashboard() {
+  if (state.dashboardLayoutDirty) await saveDashboardLayout();
+  const confirmed = await showConfirmationModal({ title: 'Publish dashboard', message: 'Publish an immutable snapshot of this dashboard? Later draft edits will not change the CRM page until you publish again.', confirmLabel: 'Publish dashboard' });
+  if (!confirmed) return;
+  const result = await api(`/api/dashboards/${encodeURIComponent(state.activeDashboardKey)}/publish`, { method: 'POST' });
+  await loadDashboards();
+  await openDashboardBuilderStudio(result.dashboard.dashboardKey);
+  toast(`Dashboard Published As Version ${result.version.versionNumber}.`);
+}
+
+async function loadPublishedDashboards() {
+  const result = await api('/api/dashboard-pages');
+  state.publishedDashboards = result.dashboards || [];
+  if (state.publishedDashboards.length) {
+    const rememberedKey = localStorage.getItem(`crm:last-dashboard:${state.user?.id || 'user'}`);
+    const primary = state.publishedDashboards.find((dashboard) => dashboard.dashboardKey === rememberedKey) || state.publishedDashboards[0];
+    await openPublishedDashboard(primary.dashboardKey);
+    return;
+  }
+  renderPublishedDashboardList();
+}
+
+function renderPublishedDashboardList() {
+  $('#publishedDashboardList').hidden = false;
+  $('#publishedDashboardPage').hidden = true;
+  $('#publishedDashboardNavigation').hidden = true;
+  $('#publishedDashboardPageTitle').textContent = 'Dashboards';
+  $('#publishedDashboardPageDescription').textContent = 'Published reporting available to your account.';
+  $('#publishedDashboardPageDescription').hidden = false;
+  $('#publishedDashboardList').innerHTML = state.publishedDashboards.map((dashboard) => `<button type="button" class="published-dashboard-card" data-open-published-dashboard="${escapeHtml(dashboard.dashboardKey)}"><span class="eyebrow">Published dashboard</span><strong>${escapeHtml(dashboard.name)}</strong><small>${escapeHtml(dashboard.description || dashboard.dashboardKey)}</small><em>Open dashboard &rarr;</em></button>`).join('') || '<div class="empty-state"><h3>No dashboards available</h3><p>Published dashboards appear here when a role, user, or department rule grants access.</p></div>';
+}
+
+async function loadPublishedDashboardWidget(widget, force = false) {
+  const parameters = dashboardWidgetParameters(widget);
+  const signature = JSON.stringify({ source: widget.dataSourceKey, config: widget.config, parameters, published: state.activePublishedDashboardKey });
+  if (!force && state.dashboardWidgetResults[widget.widgetKey]?.signature === signature && ['loading', 'ready', 'error'].includes(state.dashboardWidgetResults[widget.widgetKey].status)) return;
+  state.dashboardWidgetResults[widget.widgetKey] = { status: 'loading', signature };
+  renderPublishedDashboardCanvas();
+  try {
+    const result = await api(`/api/dashboard-pages/${encodeURIComponent(state.activePublishedDashboardKey)}/widgets/${encodeURIComponent(widget.widgetKey)}/execute`, { method: 'POST', body: JSON.stringify({ parameters, limit: widget.type === 'table' ? Math.min(100, dashboardWidgetConfig(widget).topN) : 500, forceRefresh: force }) });
+    state.dashboardWidgetResults[widget.widgetKey] = { status: 'ready', signature, ...result };
+    scheduleDashboardStaleRender(result.cache?.staleAt, true);
+  } catch (error) { state.dashboardWidgetResults[widget.widgetKey] = { status: 'error', signature, message: titleCaseMessage(error.message) }; }
+  renderPublishedDashboardCanvas();
+}
+
+function renderPublishedDashboardCanvas() {
+  const canvas = $('#publishedDashboardCanvas');
+  const widgets = state.dashboardConfiguration?.widgets || [];
+  canvas.innerHTML = widgets.map((widget) => { const layout = dashboardLayout(widget, 'desktop'); const result = state.dashboardWidgetResults[widget.widgetKey]; const refreshed = result?.cache?.refreshedAt ? new Date(result.cache.refreshedAt).toLocaleTimeString() : ''; const stale = result?.cache?.staleAt && Date.now() >= new Date(result.cache.staleAt).getTime(); const drillDown = widget.config?.drillDown?.targetKey ? `<button type="button" class="link-button" data-dashboard-drill-down="${escapeHtml(widget.widgetKey)}">Open details</button>` : ''; return `<article class="dashboard-widget-frame" style="grid-column:${layout.x + 1} / span ${layout.width};grid-row:${layout.y + 1} / span ${layout.height}"><header class="dashboard-widget-frame-header"><strong>${escapeHtml(widget.title)}</strong><span><small aria-live="polite">${refreshed ? `${stale ? 'Stale' : 'Updated'} ${escapeHtml(refreshed)}${result.cache.status === 'hit' ? ' (cached)' : ''}` : ''}</small>${drillDown}<button type="button" class="link-button" data-refresh-published-widget="${escapeHtml(widget.widgetKey)}">Refresh</button></span></header><div class="dashboard-widget-frame-body" aria-busy="${result?.status === 'loading'}">${renderDashboardWidgetResult(widget)}</div></article>`; }).join('');
+  const deepest = widgets.reduce((max, widget) => Math.max(max, dashboardLayout(widget, 'desktop').y + dashboardLayout(widget, 'desktop').height), 0);
+  canvas.style.height = `${Math.max(180, deepest * 88)}px`;
+  widgets.forEach((widget) => loadPublishedDashboardWidget(widget).catch(() => {}));
+}
+
+function scheduleDashboardStaleRender(staleAt, published = false) {
+  const delay = new Date(staleAt || 0).getTime() - Date.now();
+  if (!Number.isFinite(delay) || delay <= 0) return;
+  setTimeout(() => published ? renderPublishedDashboardCanvas() : renderDashboardCanvas(), delay + 50);
+}
+
+async function openDashboardWidgetDrillDown(widgetKey) {
+  const result = await api(`/api/dashboard-pages/${encodeURIComponent(state.activePublishedDashboardKey)}/widgets/${encodeURIComponent(widgetKey)}/drill-down`, { method: 'POST', body: JSON.stringify({ parameters: state.dashboardFilterValues }) });
+  if (result.type === 'dashboard') {
+    await openPublishedDashboard(result.targetKey);
+    Object.entries(result.parameters || {}).forEach(([key, value]) => { if (state.dashboardConfiguration.filters.some((filter) => filter.filterKey === key)) state.dashboardFilterValues[key] = value; });
+    state.dashboardWidgetResults = {};
+    renderPublishedDashboardCanvas();
+    return;
+  }
+  await openRuntimeModulePage(result.targetKey);
+}
+
+async function openPublishedDashboard(dashboardKey) {
+  const configuration = await api(`/api/dashboard-pages/${encodeURIComponent(dashboardKey)}`);
+  state.activePublishedDashboardKey = dashboardKey;
+  localStorage.setItem(`crm:last-dashboard:${state.user?.id || 'user'}`, dashboardKey);
+  state.dashboardConfiguration = { ...configuration, widgets: normalizeDashboardWidgets(configuration.widgets) };
+  state.dashboardLayoutViewport = 'desktop';
+  state.dashboardWidgetResults = {};
+  initializeDashboardFilterValues(configuration.filters || []);
+  $('#publishedDashboardList').hidden = true;
+  $('#publishedDashboardPage').hidden = false;
+  $('#publishedDashboardNavigation').hidden = false;
+  $('#publishedDashboardSelector').innerHTML = state.publishedDashboards.map((dashboard) => `<option value="${escapeHtml(dashboard.dashboardKey)}" ${dashboard.dashboardKey === dashboardKey ? 'selected' : ''}>${escapeHtml(dashboard.name)}</option>`).join('');
+  $('#publishedDashboardPageTitle').textContent = configuration.dashboard.name;
+  $('#publishedDashboardPageDescription').textContent = configuration.dashboard.description || '';
+  $('#publishedDashboardPageDescription').hidden = !configuration.dashboard.description;
+  const filters = configuration.filters || [];
+  $('#publishedDashboardFilters').hidden = !filters.length;
+  $('#publishedDashboardFilters').innerHTML = filters.map((filter) => `<div class="dashboard-filter-control"><label>${escapeHtml(filter.name)}</label>${dashboardFilterControl(filter)}</div>`).join('') + (filters.length ? '<button type="button" class="secondary" id="resetPublishedDashboardFilters">Reset filters</button>' : '');
+  renderPublishedDashboardCanvas();
+}
+
+const dashboardLayoutColumns = { desktop: 12, mobile: 4 };
+
+function dashboardLayout(widget, viewport = state.dashboardLayoutViewport) {
+  const columns = dashboardLayoutColumns[viewport];
+  const source = widget.layout?.[viewport] || widget.layout || {};
+  const width = Math.max(1, Math.min(columns, Number(source.width) || (viewport === 'mobile' ? 4 : 4)));
+  return {
+    x: Math.max(0, Math.min(columns - width, Number(source.x) || 0)),
+    y: Math.max(0, Number(source.y) || 0),
+    width,
+    height: Math.max(1, Math.min(20, Number(source.height) || 3))
+  };
+}
+
+function normalizeDashboardWidgets(widgets = []) {
+  return widgets.map((widget, index) => ({
+    ...widget,
+    widgetKey: widget.widgetKey || `widget_${Date.now()}_${index}`,
+    type: widget.type || 'placeholder',
+    title: widget.title || `Widget ${index + 1}`,
+    config: widget.config || {},
+    layout: {
+      desktop: dashboardLayout(widget, 'desktop'),
+      mobile: dashboardLayout(widget, 'mobile')
+    }
+  }));
+}
+
+function selectedDashboardWidget() {
+  return state.dashboardConfiguration?.widgets.find((widget) => widget.widgetKey === state.selectedDashboardWidgetKey) || null;
+}
+
+function dashboardSourceColumns(source) {
+  return (source?.columns || []).map((column) => column.name || column.key).filter(Boolean);
+}
+
+function dashboardSourceParameterNames(source) {
+  return (source?.parameters || []).map((parameter) => typeof parameter === 'string' ? parameter : parameter.name).filter(Boolean);
+}
+
+function dashboardFilterOptions(filter) {
+  return Array.isArray(filter.config?.options) ? filter.config.options : [];
+}
+
+function dashboardFilterValue(filter) {
+  if (filter.type === 'current_user') return state.user?.staffId || state.user?.id || '';
+  return state.dashboardFilterValues[filter.filterKey];
+}
+
+function dashboardWidgetParameters(widget) {
+  const source = state.dashboardDataSources.find((item) => item.dataSourceKey === widget.dataSourceKey);
+  const required = dashboardSourceParameterNames(source);
+  const parameters = {};
+  required.forEach((parameterName) => {
+    const filter = (state.dashboardConfiguration?.filters || []).find((item) => item.config?.dataSourceKey === widget.dataSourceKey && [item.config?.parameterName, item.config?.endParameterName].includes(parameterName));
+    if (!filter) return;
+    const value = dashboardFilterValue(filter);
+    const resolved = parameterName === filter.config.endParameterName ? value?.end : filter.type === 'date_range' ? value?.start : value;
+    parameters[parameterName] = (resolved === '' || (Array.isArray(resolved) && !resolved.length)) && !filter.config?.required ? null : resolved;
+  });
+  return parameters;
+}
+
+function updateDashboardFilterUrl() {
+  const url = new URL(window.location.href);
+  (state.dashboardConfiguration?.filters || []).forEach((filter) => {
+    const key = `dashboard_filter_${filter.filterKey}`;
+    const value = dashboardFilterValue(filter);
+    if (filter.config?.shareInUrl && value !== undefined && value !== '' && filter.type !== 'current_user') url.searchParams.set(key, JSON.stringify(value));
+    else url.searchParams.delete(key);
+  });
+  window.history.replaceState({}, '', url);
+}
+
+function initializeDashboardFilterValues(filters = []) {
+  const url = new URL(window.location.href);
+  state.dashboardFilterValues = {};
+  filters.forEach((filter) => {
+    const shared = filter.config?.shareInUrl ? url.searchParams.get(`dashboard_filter_${filter.filterKey}`) : null;
+    if (shared !== null) {
+      try { state.dashboardFilterValues[filter.filterKey] = JSON.parse(shared); return; } catch (_error) { /* use configured default */ }
+    }
+    if (filter.type === 'date_range') state.dashboardFilterValues[filter.filterKey] = filter.config?.defaultValue || { start: '', end: '' };
+    else if (filter.type === 'multi_select') state.dashboardFilterValues[filter.filterKey] = Array.isArray(filter.config?.defaultValue) ? filter.config.defaultValue : [];
+    else state.dashboardFilterValues[filter.filterKey] = filter.config?.defaultValue ?? '';
+  });
+}
+
+function dashboardFilterControl(filter) {
+  const value = dashboardFilterValue(filter);
+  const options = dashboardFilterOptions(filter);
+  if (filter.type === 'date_range') return `<div class="dashboard-filter-date-range"><input type="date" aria-label="${escapeHtml(filter.name)} start" data-dashboard-filter-key="${escapeHtml(filter.filterKey)}" data-dashboard-filter-part="start" value="${escapeHtml(value?.start || '')}"><span>to</span><input type="date" aria-label="${escapeHtml(filter.name)} end" data-dashboard-filter-key="${escapeHtml(filter.filterKey)}" data-dashboard-filter-part="end" value="${escapeHtml(value?.end || '')}"></div>`;
+  if (filter.type === 'dropdown') return `<select data-dashboard-filter-key="${escapeHtml(filter.filterKey)}"><option value="">All</option>${options.map((option) => `<option value="${escapeHtml(option.value)}" ${option.value === value ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select>`;
+  if (filter.type === 'multi_select') return `<select multiple size="${Math.min(4, Math.max(2, options.length))}" data-dashboard-filter-key="${escapeHtml(filter.filterKey)}">${options.map((option) => `<option value="${escapeHtml(option.value)}" ${(value || []).includes(option.value) ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select>`;
+  if (filter.type === 'organization_unit') return `<select data-dashboard-filter-key="${escapeHtml(filter.filterKey)}"><option value="">All departments</option>${state.departmentNodes.filter((node) => node.enabled !== false).map((node) => `<option value="${node.id}" ${String(node.id) === String(value) ? 'selected' : ''}>${escapeHtml(node.name)}</option>`).join('')}</select>`;
+  if (filter.type === 'current_user') return `<span class="dashboard-filter-readonly">${escapeHtml(state.user?.name || 'Current user')}</span>`;
+  return `<input type="search" data-dashboard-filter-key="${escapeHtml(filter.filterKey)}" value="${escapeHtml(value || '')}" placeholder="Search value">`;
+}
+
+function renderDashboardFilterBar() {
+  const bar = $('#dashboardFilterBar');
+  if (!bar || !state.dashboardConfiguration) return;
+  const filters = state.dashboardConfiguration.filters || [];
+  bar.hidden = !filters.length;
+  bar.innerHTML = filters.map((filter) => `<div class="dashboard-filter-control"><div><label>${escapeHtml(filter.name)}${filter.config?.required ? ' *' : ''}</label><button type="button" class="link-button" data-edit-dashboard-filter="${escapeHtml(filter.filterKey)}">Edit</button></div>${dashboardFilterControl(filter)}</div>`).join('') + (filters.length ? '<button type="button" class="secondary dashboard-filter-reset" id="resetDashboardFiltersButton">Reset filters</button>' : '');
+}
+
+function refreshWidgetsForDashboardFilter(filter) {
+  state.dashboardConfiguration.widgets.filter((widget) => widget.dataSourceKey === filter.config?.dataSourceKey).forEach((widget) => {
+    delete state.dashboardWidgetResults[widget.widgetKey];
+  });
+  updateDashboardFilterUrl();
+  renderDashboardCanvas();
+}
+
+function dashboardWidgetConfig(widget) {
+  const config = widget.config || {};
+  return { mappings: config.mappings || {}, aggregation: config.aggregation || 'sum', topN: Math.max(1, Math.min(100, Number(config.topN) || 10)), numberFormat: config.numberFormat || 'number', dateFormat: config.dateFormat || 'medium', color: config.color || '#6d50df', showLegend: config.showLegend !== false, showSubtotals: config.showSubtotals !== false, showGrandTotals: config.showGrandTotals !== false, sortDirection: config.sortDirection || 'desc', emptyLabel: config.emptyLabel || '(empty)', refreshSeconds: Number(config.refreshSeconds) || 0, ...config };
+}
+
+function formatDashboardValue(value, format = 'number') {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return value ?? 'â€”';
+  if (format === 'currency') return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'MYR', maximumFractionDigits: 2 }).format(number);
+  if (format === 'percentage') return new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 }).format(number / 100);
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(number);
+}
+
+function formatDashboardDimension(value, format = 'medium', empty = '(empty)') {
+  if (value === null || value === undefined || value === '') return empty;
+  const text = String(value);
+  if (!/^\d{4}-\d{2}-\d{2}/.test(text)) return text;
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) return text;
+  return new Intl.DateTimeFormat(undefined, format === 'month' ? { month: 'short', year: 'numeric' } : format === 'year' ? { year: 'numeric' } : { dateStyle: format === 'long' ? 'long' : 'medium' }).format(date);
+}
+
+function aggregateDashboardRows(rows, labelKey, valueKey, aggregation) {
+  const groups = new Map();
+  rows.forEach((row) => {
+    const label = labelKey ? String(row[labelKey] ?? 'Empty') : 'Total';
+    const value = Number(row[valueKey]);
+    const current = groups.get(label) || [];
+    if (Number.isFinite(value)) current.push(value);
+    else if (aggregation === 'count') current.push(1);
+    groups.set(label, current);
+  });
+  return [...groups].map(([label, values]) => ({ label, value: aggregation === 'count' ? values.length : aggregation === 'average' ? values.reduce((a, b) => a + b, 0) / (values.length || 1) : aggregation === 'minimum' ? Math.min(...values) : aggregation === 'maximum' ? Math.max(...values) : values.reduce((a, b) => a + b, 0) }));
+}
+
+function aggregateDashboardValues(values, aggregation) {
+  const numeric = values.map(Number).filter(Number.isFinite);
+  if (aggregation === 'count') return values.length;
+  if (!numeric.length) return 0;
+  if (aggregation === 'average') return numeric.reduce((sum, value) => sum + value, 0) / numeric.length;
+  if (aggregation === 'minimum') return Math.min(...numeric);
+  if (aggregation === 'maximum') return Math.max(...numeric);
+  return numeric.reduce((sum, value) => sum + value, 0);
+}
+
+function buildDashboardPivot(widget, rows) {
+  const config = dashboardWidgetConfig(widget);
+  const mappings = config.mappings || {};
+  const rowFields = mappings.pivotRows || [];
+  const columnFields = mappings.pivotColumns || [];
+  const valueFields = mappings.pivotValues || [];
+  if (!rowFields.length || !valueFields.length) return { error: 'Choose at least one row field and one value field.' };
+  const empty = config.emptyLabel || '(empty)';
+  const labelFor = (row, fields) => fields.map((field) => formatDashboardDimension(row[field], config.dateFormat, empty));
+  const columnKeys = [...new Set(rows.map((row) => labelFor(row, columnFields).join(' / ') || 'Value'))].sort((a, b) => a.localeCompare(b));
+  if (columnKeys.length * valueFields.length > 100) return { error: 'This pivot would create more than 100 value columns. Reduce the source or column fields.' };
+  const rowMap = new Map();
+  rows.forEach((row) => {
+    const labels = labelFor(row, rowFields);
+    const rowKey = labels.join(' / ');
+    const columnKey = labelFor(row, columnFields).join(' / ') || 'Value';
+    if (!rowMap.has(rowKey)) rowMap.set(rowKey, { labels, cells: new Map(), raw: [] });
+    const target = rowMap.get(rowKey); target.raw.push(row);
+    valueFields.forEach((field) => {
+      const key = `${columnKey}\u001f${field}`;
+      if (!target.cells.has(key)) target.cells.set(key, []);
+      target.cells.get(key).push(row[field]);
+    });
+  });
+  let pivotRows = [...rowMap.entries()].map(([key, entry]) => ({ key, ...entry }));
+  const rowTotal = (entry) => valueFields.reduce((sum, field) => sum + aggregateDashboardValues(entry.raw.map((row) => row[field]), config.aggregation), 0);
+  pivotRows.sort((a, b) => config.sortDirection === 'asc' ? rowTotal(a) - rowTotal(b) : rowTotal(b) - rowTotal(a));
+  pivotRows = pivotRows.slice(0, config.topN);
+  return { config, rowFields, columnFields, valueFields, columnKeys, rows: pivotRows, rowTotal, allRows: rows };
+}
+
+function renderDashboardPivot(widget, rows) {
+  const pivot = buildDashboardPivot(widget, rows);
+  if (pivot.error) return `<div class="dashboard-widget-message is-error"><strong>Invalid pivot mapping</strong><span>${escapeHtml(pivot.error)}</span></div>`;
+  const { config, rowFields, valueFields, columnKeys } = pivot;
+  const collapsed = new Set(config.collapsedRows || []);
+  const headers = columnKeys.flatMap((column) => valueFields.map((field) => ({ column, field })));
+  let previousGroup = null;
+  const body = [];
+  pivot.rows.forEach((entry) => {
+    const group = entry.labels[0];
+    if (group !== previousGroup) {
+      const groupRows = pivot.rows.filter((row) => row.labels[0] === group);
+      const canCollapse = rowFields.length > 1;
+      body.push(`<tr class="dashboard-pivot-group"><th colspan="${headers.length + 2}">${canCollapse ? `<button type="button" data-dashboard-pivot-toggle="${escapeHtml(group)}" aria-expanded="${!collapsed.has(group)}">${collapsed.has(group) ? '+' : 'âˆ’'}</button>` : ''}${escapeHtml(group)} <small>${groupRows.length} combination${groupRows.length === 1 ? '' : 's'}</small></th></tr>`);
+      previousGroup = group;
+    }
+    if (collapsed.has(group) && rowFields.length > 1) return;
+    const cells = headers.map(({ column, field }) => aggregateDashboardValues(entry.cells.get(`${column}\u001f${field}`) || [], config.aggregation));
+    body.push(`<tr><th>${escapeHtml(entry.labels.slice(rowFields.length > 1 ? 1 : 0).join(' / ') || entry.labels[0])}</th>${cells.map((value) => `<td>${escapeHtml(formatDashboardValue(value, config.numberFormat))}</td>`).join('')}${config.showGrandTotals ? `<td class="is-total">${escapeHtml(formatDashboardValue(pivot.rowTotal(entry), config.numberFormat))}</td>` : ''}</tr>`);
+    if (config.showSubtotals && rowFields.length > 1) {
+      const next = pivot.rows[pivot.rows.indexOf(entry) + 1];
+      if (!next || next.labels[0] !== group) {
+        const groupRows = pivot.rows.filter((row) => row.labels[0] === group);
+        body.push(`<tr class="dashboard-pivot-subtotal"><th>${escapeHtml(group)} subtotal</th>${headers.map(({ column, field }) => `<td>${escapeHtml(formatDashboardValue(aggregateDashboardValues(groupRows.flatMap((row) => row.cells.get(`${column}\u001f${field}`) || []), config.aggregation), config.numberFormat))}</td>`).join('')}${config.showGrandTotals ? `<td class="is-total">${escapeHtml(formatDashboardValue(groupRows.reduce((sum, row) => sum + pivot.rowTotal(row), 0), config.numberFormat))}</td>` : ''}</tr>`);
+      }
+    }
+  });
+  const grand = config.showGrandTotals ? `<tfoot><tr><th>Grand total</th>${headers.map(({ column, field }) => `<td>${escapeHtml(formatDashboardValue(aggregateDashboardValues(pivot.rows.flatMap((row) => row.cells.get(`${column}\u001f${field}`) || []), config.aggregation), config.numberFormat))}</td>`).join('')}<td>${escapeHtml(formatDashboardValue(valueFields.reduce((sum, field) => sum + aggregateDashboardValues(rows.map((row) => row[field]), config.aggregation), 0), config.numberFormat))}</td></tr></tfoot>` : '';
+  return `<div class="dashboard-widget-table dashboard-pivot-table"><table><thead><tr><th>${escapeHtml(rowFields.join(' / '))}</th>${headers.map(({ column, field }) => `<th>${escapeHtml(column)}<small>${escapeHtml(field)} - ${escapeHtml(config.aggregation)}</small></th>`).join('')}${config.showGrandTotals ? '<th>Row total</th>' : ''}</tr></thead><tbody>${body.join('')}</tbody>${grand}</table></div>`;
+}
+
+function renderDashboardWidgetResult(widget) {
+  const result = state.dashboardWidgetResults[widget.widgetKey];
+  if (!widget.dataSourceKey) return '<div class="dashboard-widget-message"><strong>Choose Dashboard Data</strong><span>Connect this widget in the settings panel.</span></div>';
+  if (!result || result.status === 'loading') return '<div class="dashboard-widget-message is-loading"><strong>Loading dataâ€¦</strong><span>Running the bounded saved source.</span></div>';
+  if (result.status === 'error') return `<div class="dashboard-widget-message is-error"><strong>Query failed</strong><span>${escapeHtml(result.message)}</span></div>`;
+  const rows = result.rows || [];
+  if (!rows.length) return '<div class="dashboard-widget-message"><strong>No results</strong><span>The data source returned no rows.</span></div>';
+  const config = dashboardWidgetConfig(widget);
+  if (widget.type === 'pivot') return renderDashboardPivot(widget, rows);
+  const { label, value, date, tableFields = [] } = config.mappings;
+  if (widget.type === 'table') {
+    const fields = tableFields.length ? tableFields : Object.keys(rows[0]).slice(0, 6);
+    const pageSize = Math.min(25, config.topN);
+    const page = Math.max(0, Math.min(Number(config.tablePage) || 0, Math.ceil(rows.length / pageSize) - 1));
+    const visible = rows.slice(page * pageSize, page * pageSize + pageSize);
+    return `<div class="dashboard-widget-table"><table><thead><tr>${fields.map((field) => `<th>${escapeHtml(field)}</th>`).join('')}</tr></thead><tbody>${visible.map((row) => `<tr>${fields.map((field) => `<td>${escapeHtml(row[field] ?? 'â€”')}</td>`).join('')}</tr>`).join('')}</tbody></table><div class="dashboard-widget-table-pager"><button type="button" class="secondary" data-dashboard-table-page="${page - 1}" ${page <= 0 ? 'disabled' : ''}>Previous</button><span>${page + 1} / ${Math.max(1, Math.ceil(rows.length / pageSize))}</span><button type="button" class="secondary" data-dashboard-table-page="${page + 1}" ${page >= Math.ceil(rows.length / pageSize) - 1 ? 'disabled' : ''}>Next</button></div></div>`;
+  }
+  const valueKey = value || Object.keys(rows[0]).find((key) => Number.isFinite(Number(rows[0][key])));
+  if (!valueKey) return '<div class="dashboard-widget-message is-error"><strong>Invalid mapping</strong><span>Choose a numeric value column.</span></div>';
+  if (widget.type === 'number') {
+    const items = aggregateDashboardRows(rows, '', valueKey, config.aggregation);
+    return `<div class="dashboard-kpi"><strong>${escapeHtml(formatDashboardValue(items[0]?.value || 0, config.numberFormat))}</strong><span>${escapeHtml(config.aggregation)} of ${escapeHtml(valueKey)}</span></div>`;
+  }
+  const labelKey = widget.type === 'line' ? (date || label) : label;
+  if (!labelKey) return '<div class="dashboard-widget-message is-error"><strong>Invalid mapping</strong><span>Choose a label or date column.</span></div>';
+  const items = aggregateDashboardRows(rows, labelKey, valueKey, config.aggregation).sort((a, b) => widget.type === 'line' ? String(a.label).localeCompare(String(b.label)) : b.value - a.value).slice(0, config.topN);
+  const max = Math.max(...items.map((item) => Math.abs(item.value)), 1);
+  if (widget.type === 'bar') return `<div class="dashboard-bar-chart">${items.map((item) => `<div><label title="${escapeHtml(item.label)}">${escapeHtml(item.label)}</label><span><i style="width:${Math.max(2, Math.abs(item.value) / max * 100)}%;background:${escapeHtml(config.color)}"></i></span><b>${escapeHtml(formatDashboardValue(item.value, config.numberFormat))}</b></div>`).join('')}</div>`;
+  if (widget.type === 'donut') {
+    const total = items.reduce((sum, item) => sum + Math.max(0, item.value), 0) || 1;
+    let offset = 0;
+    const colors = [config.color, '#2da6a6', '#f39a2e', '#d7678a', '#7c8799'];
+    const stops = items.map((item, index) => { const start = offset; offset += Math.max(0, item.value) / total * 100; return `${colors[index % colors.length]} ${start}% ${offset}%`; });
+    return `<div class="dashboard-donut"><div class="dashboard-donut-ring" style="background:conic-gradient(${stops.join(',')})"><span>${items.length}</span></div>${config.showLegend ? `<div class="dashboard-chart-legend">${items.map((item, index) => `<span><i style="background:${colors[index % colors.length]}"></i>${escapeHtml(item.label)}</span>`).join('')}</div>` : ''}</div>`;
+  }
+  const points = items.map((item, index) => `${items.length === 1 ? 50 : index / (items.length - 1) * 100},${92 - Math.max(0, item.value) / max * 82}`).join(' ');
+  return `<div class="dashboard-line-chart"><svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="Line chart"><polyline points="${points}" fill="none" stroke="${escapeHtml(config.color)}" stroke-width="3" vector-effect="non-scaling-stroke"></polyline></svg><div>${items.map((item) => `<span>${escapeHtml(item.label)}</span>`).join('')}</div></div>`;
+}
+
+async function loadDashboardWidgetPreview(widgetKey, force = false) {
+  const widget = state.dashboardConfiguration?.widgets.find((item) => item.widgetKey === widgetKey);
+  if (!widget?.dataSourceKey) return;
+  const parameters = dashboardWidgetParameters(widget);
+  const source = state.dashboardDataSources.find((item) => item.dataSourceKey === widget.dataSourceKey);
+  const missing = dashboardSourceParameterNames(source).find((name) => parameters[name] === undefined || parameters[name] === '' || (Array.isArray(parameters[name]) && !parameters[name].length));
+  const signature = JSON.stringify({ source: widget.dataSourceKey, config: widget.config, parameters });
+  if (missing) {
+    state.dashboardWidgetResults[widgetKey] = { status: 'error', signature, message: `Set the dashboard filter mapped to ${missing}.` };
+    renderDashboardCanvas();
+    return;
+  }
+  if (!force && state.dashboardWidgetResults[widgetKey]?.signature === signature && ['loading', 'ready', 'error'].includes(state.dashboardWidgetResults[widgetKey]?.status)) return;
+  state.dashboardWidgetResults[widgetKey] = { status: 'loading', signature };
+  renderDashboardCanvas();
+  try {
+    const config = dashboardWidgetConfig(widget);
+    const result = await api(`/api/dashboards/data-sources/${encodeURIComponent(widget.dataSourceKey)}/execute`, { method: 'POST', body: JSON.stringify({ parameters, limit: widget.type === 'table' ? Math.min(100, config.topN) : 500, forceRefresh: force, dashboardKey: state.activeDashboardKey, widgetKey }) });
+    state.dashboardWidgetResults[widgetKey] = { status: 'ready', signature, ...result };
+    scheduleDashboardStaleRender(result.cache?.staleAt);
+  } catch (error) {
+    state.dashboardWidgetResults[widgetKey] = { status: 'error', signature, message: titleCaseMessage(error.message) };
+  }
+  renderDashboardCanvas();
+}
+
+function dashboardLayoutSnapshot() {
+  return JSON.stringify(state.dashboardConfiguration?.widgets || []);
+}
+
+function markDashboardLayoutChanged(previousSnapshot) {
+  const current = dashboardLayoutSnapshot();
+  if (previousSnapshot && previousSnapshot !== current) {
+    state.dashboardLayoutHistory.push(previousSnapshot);
+    state.dashboardLayoutHistory = state.dashboardLayoutHistory.slice(-50);
+    state.dashboardLayoutFuture = [];
+  }
+  state.dashboardLayoutDirty = true;
+  renderDashboardCanvas();
+}
+
+function dashboardLayoutsOverlap(candidate, other) {
+  return candidate.x < other.x + other.width && candidate.x + candidate.width > other.x
+    && candidate.y < other.y + other.height && candidate.y + candidate.height > other.y;
+}
+
+function canPlaceDashboardWidget(widgetKey, layout) {
+  return !state.dashboardConfiguration.widgets.some((widget) => widget.widgetKey !== widgetKey
+    && dashboardLayoutsOverlap(layout, dashboardLayout(widget)));
+}
+
+function updateSelectedDashboardLayout(changes, record = true) {
+  const widget = selectedDashboardWidget();
+  if (!widget) return false;
+  const previous = dashboardLayoutSnapshot();
+  const columns = dashboardLayoutColumns[state.dashboardLayoutViewport];
+  const current = dashboardLayout(widget);
+  const width = Math.max(1, Math.min(columns, Number(changes.width ?? current.width)));
+  const candidate = {
+    x: Math.max(0, Math.min(columns - width, Number(changes.x ?? current.x))),
+    y: Math.max(0, Number(changes.y ?? current.y)),
+    width,
+    height: Math.max(1, Math.min(20, Number(changes.height ?? current.height)))
+  };
+  if (!canPlaceDashboardWidget(widget.widgetKey, candidate)) return false;
+  widget.layout[state.dashboardLayoutViewport] = candidate;
+  if (record) markDashboardLayoutChanged(previous); else renderDashboardCanvas();
+  return true;
+}
+
+function syncDashboardCanvasExtent() {
+  const canvas = $('#dashboardCanvas');
+  if (!canvas || !state.dashboardConfiguration) return;
+  const widgets = state.dashboardConfiguration.widgets || [];
+  const deepestRow = widgets.reduce((maximum, widget) => {
+    const layout = dashboardLayout(widget);
+    return Math.max(maximum, layout.y + layout.height);
+  }, 0);
+  const stageHeight = Math.max(0, canvas.parentElement?.clientHeight - 48 || 0);
+  const contentHeight = (deepestRow + 3) * 88 + 20;
+  canvas.style.minHeight = `${Math.max(720, stageHeight, contentHeight)}px`;
+  canvas.dataset.rows = String(Math.max(8, deepestRow + 3));
+}
+
+function renderDashboardCanvas() {
+  const canvas = $('#dashboardCanvas');
+  if (!canvas || !state.dashboardConfiguration) return;
+  const widgets = state.dashboardConfiguration.widgets;
+  renderDashboardFilterBar();
+  canvas.dataset.viewport = state.dashboardLayoutViewport;
+  canvas.innerHTML = widgets.map((widget) => {
+    const layout = dashboardLayout(widget);
+    return `<article class="dashboard-widget-frame ${widget.widgetKey === state.selectedDashboardWidgetKey ? 'is-selected' : ''}" data-dashboard-widget-key="${escapeHtml(widget.widgetKey)}" tabindex="0" style="grid-column:${layout.x + 1} / span ${layout.width};grid-row:${layout.y + 1} / span ${layout.height}"><header class="dashboard-widget-frame-header"><span class="dashboard-widget-grip" aria-hidden="true">&#8942;&#8942;</span><strong>${escapeHtml(widget.title)}</strong><code>${escapeHtml(titleCaseMessage(widget.type))} &middot; ${layout.width} &times; ${layout.height}</code></header><div class="dashboard-widget-frame-body">${renderDashboardWidgetResult(widget)}</div><button type="button" class="dashboard-widget-resize-handle" aria-label="Resize ${escapeHtml(widget.title)}"></button></article>`;
+  }).join('');
+  syncDashboardCanvasExtent();
+  $('#dashboardCanvasEmpty').hidden = widgets.length > 0;
+  $('#dashboardStudioSaveState').textContent = state.dashboardLayoutDirty ? 'Unsaved changes' : 'Saved';
+  $('#dashboardStudioSaveState').className = `dashboard-save-state${state.dashboardLayoutDirty ? ' is-dirty' : ''}`;
+  $('#undoDashboardLayoutButton').disabled = !state.dashboardLayoutHistory.length;
+  $('#redoDashboardLayoutButton').disabled = !state.dashboardLayoutFuture.length;
+  $$('[data-dashboard-viewport]').forEach((button) => button.classList.toggle('is-active', button.dataset.dashboardViewport === state.dashboardLayoutViewport));
+  const selected = selectedDashboardWidget();
+  $('#dashboardWidgetInspectorEmpty').hidden = Boolean(selected);
+  $('#dashboardWidgetInspectorForm').hidden = !selected;
+  if (selected) {
+    const layout = dashboardLayout(selected);
+    $('#dashboardSelectedWidgetKey').textContent = selected.widgetKey;
+    $('#dashboardWidgetTitle').value = selected.title;
+    $('#dashboardWidgetWidth').value = layout.width;
+    $('#dashboardWidgetWidth').max = dashboardLayoutColumns[state.dashboardLayoutViewport];
+    $('#dashboardWidgetHeight').value = layout.height;
+    renderDashboardWidgetInspector(selected);
+  }
+  widgets.filter((widget) => widget.dataSourceKey).forEach((widget) => loadDashboardWidgetPreview(widget.widgetKey).catch(() => {}));
+}
+
+function dashboardColumnOptions(columns, selected = '', allowEmpty = true) {
+  return `${allowEmpty ? '<option value="">Choose a column</option>' : ''}${columns.map((column) => `<option value="${escapeHtml(column)}" ${column === selected ? 'selected' : ''}>${escapeHtml(column)}</option>`).join('')}`;
+}
+
+function renderDashboardWidgetInspector(widget) {
+  const source = state.dashboardDataSources.find((item) => item.dataSourceKey === widget.dataSourceKey);
+  const columns = dashboardSourceColumns(source);
+  const config = dashboardWidgetConfig(widget);
+  const mappings = config.mappings;
+  $('#dashboardWidgetType').value = ['number', 'donut', 'bar', 'line', 'table', 'pivot'].includes(widget.type) ? widget.type : 'number';
+  $('#dashboardWidgetDataSource').innerHTML = `<option value="">Choose a data source</option>${state.dashboardDataSources.filter((item) => !item.archived).map((item) => `<option value="${escapeHtml(item.dataSourceKey)}" ${item.dataSourceKey === widget.dataSourceKey ? 'selected' : ''}>${escapeHtml(item.name)} - ${escapeHtml(item.dataSourceKey)}</option>`).join('')}`;
+  const field = (label, key) => `<label>${label}<select data-dashboard-mapping="${key}">${dashboardColumnOptions(columns, mappings[key] || '')}</select></label>`;
+  const multiField = (label, key, help) => `<label>${label}<select multiple size="${Math.min(6, Math.max(3, columns.length))}" data-dashboard-mapping="${key}">${columns.map((column) => `<option value="${escapeHtml(column)}" ${(mappings[key] || []).includes(column) ? 'selected' : ''}>${escapeHtml(column)}</option>`).join('')}</select>${help ? `<small>${help}</small>` : ''}</label>`;
+  $('#dashboardWidgetMappingFields').innerHTML = !widget.dataSourceKey ? '<p class="muted">Choose Dashboard Data to map its columns.</p>'
+    : widget.type === 'number' ? field('Value column', 'value')
+      : widget.type === 'line' ? `${field('Date / X-axis column', 'date')}${field('Value / Y-axis column', 'value')}`
+        : widget.type === 'table' ? `<label>Table columns<select multiple size="${Math.min(6, Math.max(3, columns.length))}" data-dashboard-mapping="tableFields">${columns.map((column) => `<option value="${escapeHtml(column)}" ${(mappings.tableFields || []).includes(column) ? 'selected' : ''}>${escapeHtml(column)}</option>`).join('')}</select></label>`
+          : widget.type === 'pivot' ? `${multiField('Row fields', 'pivotRows', 'Select in hierarchy order.')}${multiField('Column fields', 'pivotColumns', 'Optional. Leave empty for one Value column.')}${multiField('Value fields', 'pivotValues', 'Select one or more numeric fields.')}`
+          : `${field('Label column', 'label')}${field('Value column', 'value')}`;
+  $('#dashboardWidgetDisplayFields').innerHTML = `<label>Aggregation<select data-dashboard-config="aggregation"><option value="sum">Sum</option><option value="count">Count</option><option value="average">Average</option><option value="minimum">Minimum</option><option value="maximum">Maximum</option></select></label><label>Top rows<input type="number" min="1" max="100" value="${config.topN}" data-dashboard-config="topN"></label><label>Number format<select data-dashboard-config="numberFormat"><option value="number">Number</option><option value="currency">Currency (MYR)</option><option value="percentage">Percentage</option></select></label>${widget.type === 'pivot' ? `<label>Date labels<select data-dashboard-config="dateFormat"><option value="medium">Medium date</option><option value="long">Long date</option><option value="month">Month</option><option value="year">Year</option></select></label><label>Sort totals<select data-dashboard-config="sortDirection"><option value="desc">Largest first</option><option value="asc">Smallest first</option></select></label><label>Empty values<input maxlength="40" value="${escapeHtml(config.emptyLabel)}" data-dashboard-config="emptyLabel"></label><label class="checkbox-label"><input type="checkbox" ${config.showSubtotals ? 'checked' : ''} data-dashboard-config="showSubtotals"> Show subtotals</label><label class="checkbox-label"><input type="checkbox" ${config.showGrandTotals ? 'checked' : ''} data-dashboard-config="showGrandTotals"> Show grand totals</label>` : `<label>Colour<input type="color" value="${escapeHtml(config.color)}" data-dashboard-config="color"></label><label class="checkbox-label"><input type="checkbox" ${config.showLegend ? 'checked' : ''} data-dashboard-config="showLegend"> Show legend</label>`}<label>Drill-down type<select data-dashboard-config="drillDownType"><option value="">None</option><option value="module">CRM module page</option><option value="dashboard">Published dashboard</option></select></label><label>Drill-down stable key<input value="${escapeHtml(config.drillDown?.targetKey || '')}" data-dashboard-config="drillDownTarget" placeholder="customers"></label><label>Allowed filter keys<input value="${escapeHtml((config.drillDown?.allowedParameters || []).join(', '))}" data-dashboard-config="drillDownParameters" placeholder="status, owner"></label>`;
+  const aggregation = $('[data-dashboard-config="aggregation"]'); if (aggregation) aggregation.value = config.aggregation;
+  const numberFormat = $('[data-dashboard-config="numberFormat"]'); if (numberFormat) numberFormat.value = config.numberFormat;
+  const sortDirection = $('[data-dashboard-config="sortDirection"]'); if (sortDirection) sortDirection.value = config.sortDirection;
+  const dateFormat = $('[data-dashboard-config="dateFormat"]'); if (dateFormat) dateFormat.value = config.dateFormat;
+  const drillDownType = $('[data-dashboard-config="drillDownType"]'); if (drillDownType) drillDownType.value = config.drillDown?.type || '';
+  const result = state.dashboardWidgetResults[widget.widgetKey];
+  const stale = result?.cache?.staleAt && Date.now() >= new Date(result.cache.staleAt).getTime();
+  $('#dashboardWidgetPreviewStatus').textContent = result?.status === 'ready' ? `${result.page.returned} rows - ${result.durationMs} ms - ${stale ? 'Stale' : result.cache?.status === 'hit' ? 'Cached' : 'Updated'} ${result.cache?.refreshedAt ? new Date(result.cache.refreshedAt).toLocaleTimeString() : ''}` : result?.status === 'error' ? 'Preview failed' : widget.dataSourceKey ? 'Loading...' : 'Not connected';
+  $('#exportDashboardWidgetButton').hidden = !['table', 'pivot'].includes(widget.type) || result?.status !== 'ready';
+  $('#exportDashboardWidgetExcelButton').hidden = widget.type !== 'pivot' || result?.status !== 'ready';
+}
+
+function updateSelectedDashboardWidgetConfiguration(mutator) {
+  const widget = selectedDashboardWidget();
+  if (!widget) return;
+  const previous = dashboardLayoutSnapshot();
+  mutator(widget);
+  delete state.dashboardWidgetResults[widget.widgetKey];
+  markDashboardLayoutChanged(previous);
+}
+
+function exportSelectedDashboardWidgetCsv() {
+  const widget = selectedDashboardWidget();
+  const result = widget && state.dashboardWidgetResults[widget.widgetKey];
+  if (!widget || !['table', 'pivot'].includes(widget.type) || result?.status !== 'ready') return;
+  const config = dashboardWidgetConfig(widget);
+  const safeCell = (value) => {
+    let text = String(value ?? '');
+    if (/^[=+\-@]/.test(text)) text = `'${text}`;
+    return `"${text.replace(/"/g, '""')}"`;
+  };
+  let matrix;
+  if (widget.type === 'pivot') matrix = dashboardPivotExportMatrix(widget, result.rows);
+  else {
+    const fields = config.mappings.tableFields?.length ? config.mappings.tableFields : Object.keys(result.rows[0] || {}).slice(0, 6);
+    matrix = [fields, ...result.rows.slice(0, 100).map((row) => fields.map((field) => row[field]))];
+  }
+  const csv = matrix.map((row) => row.map(safeCell).join(',')).join('\r\n');
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  link.download = `${widget.widgetKey}.csv`;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+function dashboardPivotExportMatrix(widget, rows) {
+  const pivot = buildDashboardPivot(widget, rows);
+  if (pivot.error) return [['Pivot configuration error'], [pivot.error]];
+  const headers = pivot.columnKeys.flatMap((column) => pivot.valueFields.map((field) => ({ column, field })));
+  const matrix = [[pivot.rowFields.join(' / '), ...headers.map(({ column, field }) => `${column} - ${field}`), ...(pivot.config.showGrandTotals ? ['Row total'] : [])]];
+  pivot.rows.forEach((entry) => {
+    const values = headers.map(({ column, field }) => aggregateDashboardValues(entry.cells.get(`${column}\u001f${field}`) || [], pivot.config.aggregation));
+    matrix.push([entry.labels.join(' / '), ...values, ...(pivot.config.showGrandTotals ? [pivot.rowTotal(entry)] : [])]);
+  });
+  if (pivot.config.showGrandTotals) matrix.push(['Grand total', ...headers.map(({ column, field }) => aggregateDashboardValues(pivot.rows.flatMap((row) => row.cells.get(`${column}\u001f${field}`) || []), pivot.config.aggregation)), pivot.valueFields.reduce((sum, field) => sum + aggregateDashboardValues(rows.map((row) => row[field]), pivot.config.aggregation), 0)]);
+  return matrix;
+}
+
+function exportSelectedDashboardPivotExcel() {
+  const widget = selectedDashboardWidget();
+  const result = widget && state.dashboardWidgetResults[widget.widgetKey];
+  if (!widget || widget.type !== 'pivot' || result?.status !== 'ready') return;
+  const matrix = dashboardPivotExportMatrix(widget, result.rows);
+  const safeExcelCell = (cell) => /^[=+\-@]/.test(String(cell ?? '')) ? `'${cell}` : cell;
+  const html = `<html><head><meta charset="utf-8"></head><body><table>${matrix.map((row, rowIndex) => `<tr>${row.map((cell) => `<${rowIndex ? 'td' : 'th'}>${escapeHtml(safeExcelCell(cell))}</${rowIndex ? 'td' : 'th'}>`).join('')}</tr>`).join('')}</table></body></html>`;
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8' }));
+  link.download = `${widget.widgetKey}.xls`;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+function addDashboardWidget() {
+  const previous = dashboardLayoutSnapshot();
+  const index = state.dashboardConfiguration.widgets.length + 1;
+  const widgetKey = `widget_${Date.now().toString(36)}`;
+  const bottom = (viewport) => state.dashboardConfiguration.widgets.reduce((max, widget) => Math.max(max, dashboardLayout(widget, viewport).y + dashboardLayout(widget, viewport).height), 0);
+  state.dashboardConfiguration.widgets.push({ widgetKey, type: 'number', title: `Widget ${index}`, config: { mappings: {}, aggregation: 'sum', topN: 10, numberFormat: 'number', color: '#6d50df', showLegend: true }, layout: { desktop: { x: 0, y: bottom('desktop'), width: 4, height: 3 }, mobile: { x: 0, y: bottom('mobile'), width: 4, height: 3 } } });
+  state.selectedDashboardWidgetKey = widgetKey;
+  markDashboardLayoutChanged(previous);
+}
+
+function undoDashboardLayout() {
+  const snapshot = state.dashboardLayoutHistory.pop();
+  if (!snapshot) return;
+  state.dashboardLayoutFuture.push(dashboardLayoutSnapshot());
+  state.dashboardConfiguration.widgets = JSON.parse(snapshot);
+  if (!selectedDashboardWidget()) state.selectedDashboardWidgetKey = '';
+  state.dashboardLayoutDirty = true;
+  renderDashboardCanvas();
+}
+
+function redoDashboardLayout() {
+  const snapshot = state.dashboardLayoutFuture.pop();
+  if (!snapshot) return;
+  state.dashboardLayoutHistory.push(dashboardLayoutSnapshot());
+  state.dashboardConfiguration.widgets = JSON.parse(snapshot);
+  if (!selectedDashboardWidget()) state.selectedDashboardWidgetKey = '';
+  state.dashboardLayoutDirty = true;
+  renderDashboardCanvas();
+}
+
+function duplicateSelectedDashboardWidget() {
+  const source = selectedDashboardWidget();
+  if (!source) return;
+  const previous = dashboardLayoutSnapshot();
+  const copy = JSON.parse(JSON.stringify(source));
+  copy.widgetKey = `${source.widgetKey}_copy_${Date.now().toString(36)}`;
+  copy.title = `${source.title} Copy`;
+  ['desktop', 'mobile'].forEach((viewport) => {
+    const layout = dashboardLayout(copy, viewport);
+    copy.layout[viewport] = { ...layout, x: 0, y: state.dashboardConfiguration.widgets.reduce((max, widget) => Math.max(max, dashboardLayout(widget, viewport).y + dashboardLayout(widget, viewport).height), 0) };
+  });
+  state.dashboardConfiguration.widgets.push(copy);
+  state.selectedDashboardWidgetKey = copy.widgetKey;
+  markDashboardLayoutChanged(previous);
+}
+
+function removeSelectedDashboardWidget() {
+  if (!selectedDashboardWidget()) return;
+  const previous = dashboardLayoutSnapshot();
+  state.dashboardConfiguration.widgets = state.dashboardConfiguration.widgets.filter((widget) => widget.widgetKey !== state.selectedDashboardWidgetKey);
+  state.selectedDashboardWidgetKey = '';
+  markDashboardLayoutChanged(previous);
+}
+
+function startDashboardLayoutInteraction(event) {
+  const frame = event.target.closest('[data-dashboard-widget-key]');
+  if (!frame || event.button !== 0 || event.target.closest('button')) return;
+  state.selectedDashboardWidgetKey = frame.dataset.dashboardWidgetKey;
+  renderDashboardCanvas();
+  const widget = selectedDashboardWidget();
+  state.dashboardLayoutInteraction = {
+    widgetKey: widget.widgetKey,
+    mode: event.target.closest('.dashboard-widget-resize-handle') ? 'resize' : 'move',
+    startX: event.clientX,
+    startY: event.clientY,
+    startLayout: dashboardLayout(widget),
+    previousSnapshot: dashboardLayoutSnapshot()
+  };
+  event.preventDefault();
+}
+
+function moveDashboardLayoutInteraction(event) {
+  const interaction = state.dashboardLayoutInteraction;
+  if (!interaction) return;
+  const canvas = $('#dashboardCanvas');
+  const columns = dashboardLayoutColumns[state.dashboardLayoutViewport];
+  const gap = 10;
+  const cellWidth = (canvas.getBoundingClientRect().width - gap * (columns - 1)) / columns;
+  const deltaX = Math.round((event.clientX - interaction.startX) / (cellWidth + gap));
+  const deltaY = Math.round((event.clientY - interaction.startY) / 88);
+  state.selectedDashboardWidgetKey = interaction.widgetKey;
+  const changes = interaction.mode === 'resize'
+    ? { width: interaction.startLayout.width + deltaX, height: interaction.startLayout.height + deltaY }
+    : { x: interaction.startLayout.x + deltaX, y: interaction.startLayout.y + deltaY };
+  updateSelectedDashboardLayout(changes, false);
+}
+
+function endDashboardLayoutInteraction() {
+  const interaction = state.dashboardLayoutInteraction;
+  if (!interaction) return;
+  state.dashboardLayoutInteraction = null;
+  if (interaction.previousSnapshot !== dashboardLayoutSnapshot()) markDashboardLayoutChanged(interaction.previousSnapshot);
+}
+
+async function saveDashboardLayout() {
+  if (!state.dashboardConfiguration || !state.dashboardLayoutDirty) return;
+  const saveState = $('#dashboardStudioSaveState');
+  saveState.textContent = 'Savingâ€¦';
+  saveState.className = 'dashboard-save-state';
+  try {
+    const result = await api(`/api/dashboards/${encodeURIComponent(state.activeDashboardKey)}/configuration`, { method: 'PUT', body: JSON.stringify({ widgets: state.dashboardConfiguration.widgets, filters: state.dashboardConfiguration.filters || [], permissions: state.dashboardConfiguration.permissions || [] }) });
+    state.dashboardConfiguration = { ...state.dashboardConfiguration, ...result, widgets: normalizeDashboardWidgets(result.widgets || state.dashboardConfiguration.widgets) };
+    state.dashboardLayoutDirty = false;
+    state.dashboardLayoutHistory = [];
+    state.dashboardLayoutFuture = [];
+    renderDashboardCanvas();
+    await loadDashboards();
+    toast('Dashboard Layout Saved.');
+  } catch (error) {
+    saveState.textContent = 'Save failed';
+    saveState.className = 'dashboard-save-state is-error';
+    throw error;
+  }
+}
+
+async function openDashboardBuilderStudio(dashboardKey) {
+  state.dashboardManagementMode = 'studio';
+  $('#dashboardManagement').hidden = true;
+  $('#dashboardBuilderStudio').hidden = false;
+  $('#dashboardBuilderStudioTitle').textContent = 'Loading dashboardâ€¦';
+  $('#dashboardBuilderStudioKey').textContent = '';
+  $('#dashboardStudioSaveState').textContent = 'Loadingâ€¦';
+  $('#dashboardCanvas').innerHTML = '<div class="dashboard-canvas-loading">Loading saved layoutâ€¦</div>';
+  const [configuration, sources] = await Promise.all([
+    api(`/api/dashboards/${encodeURIComponent(dashboardKey)}`),
+    api('/api/dashboards/data-sources?archived=false')
+  ]);
+  state.dashboardDataSources = sources.dataSources || [];
+  state.activeDashboardKey = dashboardKey;
+  const dashboard = configuration.dashboard;
+  state.dashboardConfiguration = { ...configuration, widgets: normalizeDashboardWidgets(configuration.widgets) };
+  state.dashboardLayoutViewport = 'desktop';
+  state.selectedDashboardWidgetKey = '';
+  state.dashboardLayoutHistory = [];
+  state.dashboardLayoutFuture = [];
+  state.dashboardLayoutDirty = false;
+  state.dashboardPreviewMode = false;
+  $('#dashboardBuilderStudio').classList.remove('is-previewing');
+  $('#previewDashboardButton').textContent = 'Preview';
+  state.dashboardWidgetResults = {};
+  initializeDashboardFilterValues(configuration.filters || []);
+  $('#dashboardBuilderStudioTitle').textContent = dashboard.name;
+  $('#dashboardBuilderStudioKey').textContent = `${dashboard.dashboardKey} · ${titleCaseMessage(dashboard.status)}`;
+  renderDashboardCanvas();
+}
+
+function dashboardFilterParameterOptions(sourceKey, selected = '') {
+  const source = state.dashboardDataSources.find((item) => item.dataSourceKey === sourceKey);
+  return `<option value="">Choose a declared parameter</option>${dashboardSourceParameterNames(source).map((name) => `<option value="${escapeHtml(name)}" ${name === selected ? 'selected' : ''}>:${escapeHtml(name)}</option>`).join('')}`;
+}
+
+function updateDashboardFilterFormFields() {
+  const form = $('#dashboardFilterForm');
+  if (!form) return;
+  const type = form.elements.type.value;
+  const sourceKey = form.elements.dataSourceKey.value;
+  const currentParameter = form.elements.parameterName.value;
+  const currentEnd = form.elements.endParameterName.value;
+  form.elements.parameterName.innerHTML = dashboardFilterParameterOptions(sourceKey, currentParameter);
+  form.elements.endParameterName.innerHTML = dashboardFilterParameterOptions(sourceKey, currentEnd);
+  form.querySelector('.dashboard-filter-end-parameter').hidden = type !== 'date_range';
+  form.querySelector('.dashboard-filter-options-field').hidden = !['dropdown', 'multi_select'].includes(type);
+  form.querySelector('.dashboard-filter-default-field').hidden = ['current_user'].includes(type);
+  form.elements.endParameterName.required = type === 'date_range';
+  if (type === 'current_user') { form.elements.shareInUrl.checked = false; form.elements.shareInUrl.disabled = true; }
+  else form.elements.shareInUrl.disabled = false;
+}
+
+function openDashboardFilterDrawer(filterKey = '') {
+  const form = $('#dashboardFilterForm');
+  const filter = (state.dashboardConfiguration?.filters || []).find((item) => item.filterKey === filterKey) || null;
+  form.reset();
+  form.elements.editingFilterKey.value = filter?.filterKey || '';
+  form.elements.name.value = filter?.name || '';
+  form.elements.filterKey.value = filter?.filterKey || '';
+  form.elements.filterKey.readOnly = Boolean(filter);
+  form.elements.type.value = filter?.type || 'date_range';
+  form.elements.dataSourceKey.innerHTML = `<option value="">Choose Dashboard Data</option>${state.dashboardDataSources.filter((source) => !source.archived && dashboardSourceParameterNames(source).length).map((source) => `<option value="${escapeHtml(source.dataSourceKey)}" ${source.dataSourceKey === filter?.config?.dataSourceKey ? 'selected' : ''}>${escapeHtml(source.name)} - ${dashboardSourceParameterNames(source).map((name) => `:${name}`).join(', ')}</option>`).join('')}`;
+  form.elements.parameterName.innerHTML = dashboardFilterParameterOptions(filter?.config?.dataSourceKey, filter?.config?.parameterName);
+  form.elements.endParameterName.innerHTML = dashboardFilterParameterOptions(filter?.config?.dataSourceKey, filter?.config?.endParameterName);
+  form.elements.optionsText.value = dashboardFilterOptions(filter || {}).map((option) => option.value === option.label ? option.value : `${option.value}=${option.label}`).join('\n');
+  const defaultValue = filter?.config?.defaultValue;
+  form.elements.defaultValue.value = Array.isArray(defaultValue) ? defaultValue.join(', ') : typeof defaultValue === 'object' ? '' : defaultValue || '';
+  form.elements.required.checked = Boolean(filter?.config?.required);
+  form.elements.shareInUrl.checked = filter?.config?.shareInUrl !== false;
+  $('#dashboardFilterFormTitle').textContent = filter ? 'Edit filter' : 'Add filter';
+  $('#removeDashboardFilterButton').hidden = !filter;
+  updateDashboardFilterFormFields();
+  $('#dashboardFilterDrawer').hidden = false;
+  document.body.classList.add('modal-open');
+  form.elements.name.focus();
+}
+
+function closeDashboardFilterDrawer() {
+  const drawer = $('#dashboardFilterDrawer');
+  if (!drawer || drawer.hidden) return;
+  drawer.hidden = true;
+  document.body.classList.remove('modal-open');
+}
+
+function saveDashboardFilter(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const editingKey = form.elements.editingFilterKey.value;
+  const type = form.elements.type.value;
+  const options = form.elements.optionsText.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => { const [value, ...label] = line.split('='); return { value, label: label.join('=') || value }; });
+  const rawDefault = form.elements.defaultValue.value.trim();
+  const defaultValue = type === 'date_range' ? { start: '', end: '' } : type === 'multi_select' ? rawDefault.split(',').map((value) => value.trim()).filter(Boolean) : rawDefault;
+  const filter = {
+    filterKey: editingKey || form.elements.filterKey.value.trim(),
+    name: form.elements.name.value.trim(),
+    type,
+    config: { dataSourceKey: form.elements.dataSourceKey.value, parameterName: form.elements.parameterName.value, endParameterName: type === 'date_range' ? form.elements.endParameterName.value : '', options, defaultValue, required: form.elements.required.checked, shareInUrl: form.elements.shareInUrl.checked }
+  };
+  const filters = state.dashboardConfiguration.filters || [];
+  const index = filters.findIndex((item) => item.filterKey === editingKey);
+  if (index >= 0) filters[index] = filter; else filters.push(filter);
+  state.dashboardFilterValues[filter.filterKey] = defaultValue;
+  state.dashboardLayoutDirty = true;
+  closeDashboardFilterDrawer();
+  closeDashboardAccessDrawer();
+  refreshWidgetsForDashboardFilter(filter);
+  toast(editingKey ? 'Dashboard Filter Updated.' : 'Dashboard Filter Added.');
+}
+
+function removeDashboardFilter() {
+  const key = $('#dashboardFilterForm').elements.editingFilterKey.value;
+  const filter = state.dashboardConfiguration.filters.find((item) => item.filterKey === key);
+  if (!filter) return;
+  state.dashboardConfiguration.filters = state.dashboardConfiguration.filters.filter((item) => item.filterKey !== key);
+  delete state.dashboardFilterValues[key];
+  state.dashboardLayoutDirty = true;
+  closeDashboardFilterDrawer();
+  refreshWidgetsForDashboardFilter(filter);
+  toast('Dashboard Filter Removed.');
+}
+
+function resetDashboardFilters() {
+  initializeDashboardFilterValues(state.dashboardConfiguration.filters || []);
+  state.dashboardWidgetResults = {};
+  updateDashboardFilterUrl();
+  renderDashboardCanvas();
+}
+
+function openDashboardForm(mode = 'create', dashboardKey = '') {
+  const form = $('#dashboardForm');
+  const source = state.dashboards.find((dashboard) => dashboard.dashboardKey === dashboardKey) || null;
+  form.reset();
+  form.elements.mode.value = mode;
+  form.elements.sourceDashboardKey.value = source?.dashboardKey || '';
+  form.elements.name.value = mode === 'duplicate' ? `${source?.name || 'Dashboard'} Copy` : source?.name || '';
+  form.elements.dashboardKey.value = mode === 'duplicate' ? `${source?.dashboardKey || 'dashboard'}_copy` : source?.dashboardKey || '';
+  form.elements.dashboardKey.readOnly = mode === 'edit';
+  form.elements.description.value = source?.description || '';
+  $('#dashboardFormTitle').textContent = mode === 'edit' ? 'Dashboard settings' : mode === 'duplicate' ? 'Duplicate dashboard' : 'New dashboard';
+  $('#dashboardFormHelp').textContent = mode === 'duplicate' ? 'Copy the draft widgets, filters, permissions, and layout into a separate dashboard.' : mode === 'edit' ? 'Rename or describe this dashboard. Its stable key stays protected.' : 'Create a draft dashboard. Widgets and layouts are added in the builder.';
+  $('#saveDashboardButton').textContent = mode === 'edit' ? 'Save changes' : mode === 'duplicate' ? 'Duplicate dashboard' : 'Create dashboard';
+  $('#dashboardFormModal').hidden = false;
+  document.body.classList.add('modal-open');
+  form.elements.name.focus();
+}
+
+function closeDashboardFormModal() {
+  const modal = $('#dashboardFormModal');
+  if (!modal || modal.hidden) return;
+  modal.hidden = true;
+  document.body.classList.remove('modal-open');
+}
+
+async function saveDashboard(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const mode = form.elements.mode.value;
+  const sourceKey = form.elements.sourceDashboardKey.value;
+  const payload = { dashboardKey: form.elements.dashboardKey.value.trim() || undefined, name: form.elements.name.value.trim(), description: form.elements.description.value.trim() };
+  const path = mode === 'edit' ? `/api/dashboards/${encodeURIComponent(sourceKey)}` : mode === 'duplicate' ? `/api/dashboards/${encodeURIComponent(sourceKey)}/duplicate` : '/api/dashboards';
+  const result = await api(path, { method: mode === 'edit' ? 'PUT' : 'POST', body: JSON.stringify(payload) });
+  closeDashboardFormModal();
+  state.activeDashboardKey = result.dashboard.dashboardKey;
+  await loadDashboards();
+  if (state.dashboardManagementMode === 'studio') await openDashboardBuilderStudio(result.dashboard.dashboardKey);
+  toast(mode === 'edit' ? 'Dashboard Settings Saved.' : mode === 'duplicate' ? 'Dashboard Duplicated.' : 'Dashboard Draft Created.');
+}
+
+async function changeDashboardArchiveState(dashboardKey, reopen = false) {
+  const dashboard = state.dashboards.find((item) => item.dashboardKey === dashboardKey);
+  if (!dashboard) return;
+  if (!reopen) {
+    const confirmed = await showConfirmationModal({ title: 'Archive dashboard', message: `Archive ${dashboard.name}? It will leave the active dashboard list but can be reopened later.`, confirmLabel: 'Archive dashboard' });
+    if (!confirmed) return;
+  }
+  await api(`/api/dashboards/${encodeURIComponent(dashboardKey)}/${reopen ? 'reopen' : 'archive'}`, { method: 'POST' });
+  await loadDashboards();
+  toast(reopen ? 'Dashboard Reopened As Draft.' : 'Dashboard Archived.');
+}
+
+function filteredDashboardSources() {
+  const query = state.dashboardSourceSearch.trim().toLowerCase();
+  return state.dashboardDataSources.filter((source) => !source.archived && (!query || [source.name, source.dataSourceKey, source.viewName, source.description].some((value) => String(value || '').toLowerCase().includes(query))));
+}
+
+function renderDashboardSourceList() {
+  const list = $('#dashboardSourceList');
+  if (!list) return;
+  const sources = filteredDashboardSources();
+  $('#dashboardSourceCounts').textContent = state.dashboardSourcesLoading
+    ? 'Loading data sources…'
+    : `${sources.length} active source${sources.length === 1 ? '' : 's'} · ${state.dashboardViews.length} database view${state.dashboardViews.length === 1 ? '' : 's'}`;
+  list.innerHTML = state.dashboardSourcesLoading
+    ? '<div class="empty-state"><p>Loading registered sources…</p></div>'
+    : sources.map((source) => `
+      <button type="button" class="dashboard-source-list-item ${source.dataSourceKey === state.activeDashboardSourceKey ? 'is-selected' : ''}" data-dashboard-source-key="${escapeHtml(source.dataSourceKey)}">
+        <span><strong>${escapeHtml(source.name)}</strong><small>${escapeHtml(source.sourceType === 'sql_view' ? source.viewName : 'Guarded SELECT query')}</small></span>
+        <code>${escapeHtml(source.validationStatus || 'untested')}</code>
+      </button>
+    `).join('') || '<div class="empty-state"><h3>No registered sources</h3><p>Register a SQL view to make it available to dashboard widgets.</p></div>';
+}
+
+function dashboardColumnType(column) {
+  return column.dataType || column.columnType || column.type || 'unknown';
+}
+
+function renderDashboardPreview() {
+  const container = $('#dashboardPreviewResult');
+  const meta = $('#dashboardPreviewMeta');
+  if (!container || !meta) return;
+  const preview = state.dashboardPreview;
+  if (!preview) {
+    meta.textContent = '';
+    container.innerHTML = '<p class="muted">Run preview to inspect returned rows.</p>';
+    return;
+  }
+  meta.textContent = `${preview.page.returned} row${preview.page.returned === 1 ? '' : 's'} returned · ${preview.durationMs} ms · limit ${preview.page.limit}`;
+  if (!preview.rows.length) {
+    container.innerHTML = '<p class="muted">The source ran successfully but returned no rows.</p>';
+    return;
+  }
+  const columns = preview.columns.map((column) => column.name);
+  container.innerHTML = `<table><thead><tr>${columns.map((column) => `<th>${escapeHtml(column)}</th>`).join('')}</tr></thead><tbody>${preview.rows.map((row) => `<tr>${columns.map((column) => `<td>${escapeHtml(row[column] === null || row[column] === undefined ? '—' : typeof row[column] === 'object' ? JSON.stringify(row[column]) : row[column])}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+}
+
+function renderDashboardSourceDetail() {
+  const source = activeDashboardSource();
+  $('#dashboardSourceEmpty').hidden = Boolean(source);
+  $('#dashboardSourceDetail').hidden = !source;
+  if (!source) return;
+  $('#dashboardSourceTypeLabel').textContent = source.sourceType === 'sql_view' ? 'Registered SQL view' : 'Advanced guarded query';
+  $('#dashboardSourceTitle').textContent = source.name;
+  $('#dashboardSourceDescription').textContent = source.description || source.dataSourceKey;
+  $('#dashboardContractSource').textContent = source.sourceType === 'sql_view' ? source.viewName : 'Guarded SELECT';
+  $('#dashboardContractColumns').textContent = source.columns?.length ? `${source.columns.length} detected` : 'Not inspected';
+  $('#dashboardContractPreview').textContent = state.dashboardPreview ? `${state.dashboardPreview.page.returned} rows · ${state.dashboardPreview.durationMs} ms` : source.validationStatus === 'valid' ? 'Previously validated' : 'Not run';
+  $('#dashboardPreviewParametersLabel').hidden = source.sourceType !== 'select_query';
+  const columns = source.columns || [];
+  $('#dashboardSourceColumns').innerHTML = columns.map((column) => `<div class="dashboard-column-chip"><code title="${escapeHtml(column.name || column.key)}">${escapeHtml(column.name || column.key)}</code><span>${escapeHtml(dashboardColumnType(column))}</span></div>`).join('') || '<div class="empty-state"><p>No column metadata saved yet. Refresh columns to inspect this source.</p></div>';
+  renderDashboardPreview();
+}
+
+function renderDashboardSources() {
+  renderDashboardSourceList();
+  renderDashboardSourceDetail();
+}
+
+async function loadDashboardSources() {
+  state.dashboardSourcesLoading = true;
+  renderDashboardSourceList();
+  try {
+    const [sources, views] = await Promise.all([api('/api/dashboards/data-sources?archived=false'), api('/api/dashboards/views')]);
+    state.dashboardDataSources = sources.dataSources || [];
+    state.dashboardViews = views.views || [];
+    if (!state.dashboardDataSources.some((source) => source.dataSourceKey === state.activeDashboardSourceKey)) {
+      state.activeDashboardSourceKey = state.dashboardDataSources[0]?.dataSourceKey || '';
+    }
+  } finally {
+    state.dashboardSourcesLoading = false;
+    renderDashboardSources();
+  }
+}
+
+function dashboardViewOptions(selected = '') {
+  return `<option value="">Choose a database view</option>${state.dashboardViews.map((view) => `<option value="${escapeHtml(view.name)}" ${view.name === selected ? 'selected' : ''}>${escapeHtml(view.name)}</option>`).join('')}`;
+}
+
+function updateDashboardSourceFormMode() {
+  const form = $('#dashboardSourceForm');
+  if (!form) return;
+  const isView = form.elements.sourceType.value === 'sql_view';
+  form.querySelector('.dashboard-view-field').hidden = !isView;
+  form.querySelector('.dashboard-query-field').hidden = isView;
+  form.elements.viewName.required = isView;
+  form.elements.querySql.required = !isView;
+}
+
+function openDashboardSourceDrawer(dataSourceKey = '') {
+  const form = $('#dashboardSourceForm');
+  const source = state.dashboardDataSources.find((item) => item.dataSourceKey === dataSourceKey) || null;
+  form.reset();
+  form.elements.editingDataSourceKey.value = source?.dataSourceKey || '';
+  form.elements.sourceType.value = source?.sourceType || 'sql_view';
+  form.elements.name.value = source?.name || '';
+  form.elements.dataSourceKey.value = source?.dataSourceKey || '';
+  form.elements.dataSourceKey.readOnly = Boolean(source);
+  form.elements.viewName.innerHTML = dashboardViewOptions(source?.viewName || '');
+  form.elements.querySql.value = source?.querySql || '';
+  form.elements.rowLimit.value = source?.rowLimit || 1000;
+  form.elements.timeoutMs.value = source?.timeoutMs || 10000;
+  form.elements.description.value = source?.description || '';
+  $('#dashboardSourceFormTitle').textContent = source ? 'Edit data source' : 'Register data source';
+  updateDashboardSourceFormMode();
+  $('#dashboardSourceDrawer').hidden = false;
+  document.body.classList.add('modal-open');
+  form.elements.name.focus();
+}
+
+function closeDashboardSourceDrawer() {
+  const drawer = $('#dashboardSourceDrawer');
+  if (!drawer || drawer.hidden) return;
+  resetModalFullscreen(drawer);
+  drawer.hidden = true;
+  document.body.classList.remove('modal-open');
+}
+
+async function saveDashboardSource(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const editingKey = form.elements.editingDataSourceKey.value;
+  const payload = {
+    dataSourceKey: form.elements.dataSourceKey.value.trim() || undefined,
+    name: form.elements.name.value.trim(),
+    description: form.elements.description.value.trim(),
+    sourceType: form.elements.sourceType.value,
+    viewName: form.elements.sourceType.value === 'sql_view' ? form.elements.viewName.value : undefined,
+    querySql: form.elements.sourceType.value === 'select_query' ? form.elements.querySql.value.trim() : undefined,
+    rowLimit: Number(form.elements.rowLimit.value),
+    timeoutMs: Number(form.elements.timeoutMs.value)
+  };
+  const result = await api(editingKey ? `/api/dashboards/data-sources/${encodeURIComponent(editingKey)}` : '/api/dashboards/data-sources', { method: editingKey ? 'PUT' : 'POST', body: JSON.stringify(payload) });
+  state.activeDashboardSourceKey = result.dataSource.dataSourceKey;
+  state.dashboardPreview = null;
+  closeDashboardSourceDrawer();
+  await loadDashboardSources();
+  toast(editingKey ? 'Dashboard Data Source Updated.' : 'Dashboard Data Source Registered.');
+}
+
+async function runDashboardSourcePreview(refreshColumns = false) {
+  const source = activeDashboardSource();
+  if (!source) return;
+  let parameters = {};
+  if (source.sourceType === 'select_query') {
+    try { parameters = JSON.parse($('#dashboardPreviewParameters').value || '{}'); }
+    catch (_error) { throw new Error('Preview parameters must be valid JSON.'); }
+  }
+  const result = await api(`/api/dashboards/data-sources/${encodeURIComponent(source.dataSourceKey)}/execute`, { method: 'POST', body: JSON.stringify({ parameters, limit: Math.min(source.rowLimit || 1000, 50) }) });
+  state.dashboardPreview = result;
+  const columns = result.columns.map((column) => ({ name: column.name, type: column.type, table: column.table || '' }));
+  if (refreshColumns || !source.columns?.length) {
+    const updated = await api(`/api/dashboards/data-sources/${encodeURIComponent(source.dataSourceKey)}`, { method: 'PUT', body: JSON.stringify({ columns }) });
+    const index = state.dashboardDataSources.findIndex((item) => item.dataSourceKey === source.dataSourceKey);
+    if (index >= 0) state.dashboardDataSources[index] = updated.dataSource;
+  }
+  renderDashboardSourceDetail();
+  toast(refreshColumns ? 'Columns Refreshed.' : 'Preview Ready.');
+}
+
+async function archiveDashboardSource() {
+  const source = activeDashboardSource();
+  if (!source) return;
+  const confirmed = await showConfirmationModal({ title: 'Archive data source', message: `Archive ${source.name}? It will no longer be available for new dashboard widgets.`, confirmLabel: 'Archive source' });
+  if (!confirmed) return;
+  await api(`/api/dashboards/data-sources/${encodeURIComponent(source.dataSourceKey)}/archive`, { method: 'POST' });
+  state.activeDashboardSourceKey = '';
+  state.dashboardPreview = null;
+  await loadDashboardSources();
+  toast('Dashboard Data Source Archived.');
 }
 
 function toggleAdminMenu() {
@@ -3698,8 +6361,11 @@ function setSession(token, user, rememberSession = state.rememberSession) {
   writeStoredSession(token, user, state.rememberSession);
   $('#sessionLabel').textContent = `${user.name} · ${user.role}`;
   $('#logoutButton').hidden = false;
+  $('#notificationHub').hidden = false;
   $('[data-view="usersView"]').hidden = user.role !== 'admin';
   $('[data-view="sysadminView"]').hidden = user.role !== 'admin';
+  $('[data-view="workflowMonitoringView"]').hidden = user.role !== 'admin';
+  $('[data-view="workflowDelegationView"]').hidden = user.role !== 'admin';
 }
 
 function clearSession() {
@@ -3711,8 +6377,12 @@ function clearSession() {
   clearStoredSession();
   $('#sessionLabel').textContent = 'Not signed in';
   $('#logoutButton').hidden = true;
+  $('#notificationHub').hidden = true;
+  window.clearInterval(state.notificationTimer); state.notificationTimer = null;
   $('[data-view="usersView"]').hidden = false;
   $('[data-view="sysadminView"]').hidden = false;
+  $('[data-view="workflowMonitoringView"]').hidden = false;
+  $('[data-view="workflowDelegationView"]').hidden = false;
   showView('loginView');
 }
 
@@ -7044,7 +9714,7 @@ function formatImportResult(result, refreshFailed = false) {
 }
 
 async function loadBootstrap() {
-  const [countries, users, customerConfig, userConfig, browserButtons, adminModules, publishedModules, departments] = await Promise.all([
+  const [countries, users, customerConfig, userConfig, browserButtons, adminModules, publishedModules, departments, workflowCatalog] = await Promise.all([
     api('/api/countries'),
     api('/api/users').catch((error) => {
       if (state.user?.role === 'admin') throw error;
@@ -7058,7 +9728,8 @@ async function loadBootstrap() {
     api(state.user?.role === 'admin' ? '/api/sysadmin/browser-buttons' : '/api/browser-buttons'),
     state.user?.role === 'admin' ? api('/api/sysadmin/modules') : Promise.resolve({ modules: [] }),
     api('/api/modules').catch(() => ({ modules: [] })),
-    state.user?.role === 'admin' ? api('/api/departments') : Promise.resolve({ nodes: [] })
+    state.user?.role === 'admin' ? api('/api/departments') : Promise.resolve({ nodes: [] }),
+    api('/api/workflows/catalog').catch(() => ({ definitions: [] }))
   ]);
 
   state.countries = countries.countries;
@@ -7067,6 +9738,7 @@ async function loadBootstrap() {
   state.adminModules = adminModules.modules || [];
   state.publishedModules = publishedModules.modules || [];
   state.departmentNodes = departments.nodes || [];
+  state.workflowDefinitions = workflowCatalog.definitions || [];
   syncConfigModuleCatalog();
   state.customerFields = customerConfig.fields;
   state.customerPermissions = customerConfig.permissions || {};
@@ -7085,6 +9757,9 @@ async function loadBootstrap() {
   renderFieldConfig();
   syncCustomerModuleActions();
   await loadCustomers();
+  await loadNotifications();
+  window.clearInterval(state.notificationTimer);
+  state.notificationTimer = window.setInterval(() => runWorkflowUi(loadNotifications), 30000);
 }
 
 async function loadCustomers() {
@@ -7304,6 +9979,13 @@ function configureAuthUi() {
 }
 
 function bindEvents() {
+  $('#notificationBell')?.addEventListener('click', () => toggleNotificationDrawer());
+  $('#notificationUnreadOnly')?.addEventListener('change', (event) => { state.notificationUnreadOnly = event.target.checked; runWorkflowUi(loadNotifications); });
+  $('#markAllNotificationsRead')?.addEventListener('click', () => runWorkflowUi(async () => { await api('/api/notifications/read-all', { method: 'POST', body: '{}' }); await loadNotifications(); }));
+  $('#notificationList')?.addEventListener('click', (event) => { const button = event.target.closest('[data-notification-id]'); if (!button) return; const item = state.notifications.find((entry) => entry.id === Number(button.dataset.notificationId)); if (item) runWorkflowUi(() => openNotification(item)); });
+  $('#emailSettingsForm')?.addEventListener('submit', (event) => runWorkflowUi(() => saveEmailSettings(event)));
+  $('#emailSettingsForm select[name="provider"]')?.addEventListener('change', syncEmailProviderExamples);
+  $('#sendTestEmail')?.addEventListener('click', () => runWorkflowUi(sendEmailSettingsTest));
   $('#loginForm').addEventListener('submit', async (event) => {
     event.preventDefault();
     const rememberMe = Boolean(event.currentTarget.elements.rememberMe?.checked);
@@ -7351,6 +10033,10 @@ function bindEvents() {
     button.addEventListener('click', () => {
       if (!state.token) return showView('loginView');
       showView(button.dataset.view);
+      if (button.dataset.view === 'dashboardPagesView') loadPublishedDashboards().catch((error) => toast(titleCaseMessage(error.message), 'error'));
+      if (button.dataset.view === 'workflowRequestsView') runWorkflowUi(loadWorkflowRequests);
+      if (button.dataset.view === 'workflowMonitoringView') runWorkflowUi(loadWorkflowMonitoring);
+      if (button.dataset.view === 'workflowDelegationView') runWorkflowUi(loadWorkflowDelegations);
     });
   });
   $('#publishedModuleNav')?.addEventListener('click', (event) => {
@@ -7398,6 +10084,21 @@ function bindEvents() {
           toast(titleCaseMessage(error.message), 'error');
         }
       }
+      if (button.dataset.adminSection === 'adminDashboardSourcesSection') {
+        try {
+          await loadDashboardSources();
+        } catch (error) {
+          toast(titleCaseMessage(error.message), 'error');
+        }
+      }
+      if (button.dataset.adminSection === 'adminDashboardBuilderSection') {
+        try {
+          showDashboardManagement();
+          await loadDashboards();
+        } catch (error) {
+          toast(titleCaseMessage(error.message), 'error');
+        }
+      }
       if (button.dataset.adminSection === 'adminActionFlowSection') {
         try {
           await loadActionFlows();
@@ -7405,7 +10106,443 @@ function bindEvents() {
           toast(titleCaseMessage(error.message), 'error');
         }
       }
+      if (button.dataset.adminSection === 'adminWorkflowSection') {
+        try {
+          await loadWorkflowDefinitions();
+        } catch (error) {
+          toast(titleCaseMessage(error.message), 'error');
+        }
+      }
     });
+  });
+  $('#newWorkflowRequestButton')?.addEventListener('click', openWorkflowSubmitModal);
+  $('#refreshWorkflowMonitoring')?.addEventListener('click', () => runWorkflowUi(state.workflowMonitoringTab === 'history' ? loadWorkflowReport : loadWorkflowMonitoring));
+  $('#runWorkflowSlaButton')?.addEventListener('click', () => runWorkflowUi(runWorkflowSlaCheck));
+  $('#workflowMonitoringStatus')?.addEventListener('change', (event) => { state.workflowMonitoringStatus = event.target.value; runWorkflowUi(loadWorkflowMonitoring); });
+  $('#workflowMonitoringSla')?.addEventListener('change', (event) => { state.workflowMonitoringSla = event.target.value; runWorkflowUi(loadWorkflowMonitoring); });
+  $('#workflowMonitoringSearch')?.addEventListener('input', (event) => { state.workflowMonitoringSearch = event.target.value.trim(); window.clearTimeout(event.target.workflowSearchTimer); event.target.workflowSearchTimer = window.setTimeout(() => runWorkflowUi(loadWorkflowMonitoring), 250); });
+  $$('[data-workflow-monitoring-tab]').forEach((button) => button.addEventListener('click', () => runWorkflowUi(() => selectWorkflowMonitoringTab(button.dataset.workflowMonitoringTab))));
+  ['Search', 'Requester', 'Approver'].forEach((name) => $(`#workflowReport${name}`)?.addEventListener('input', debounce((event) => { state.workflowReportFilters[name.charAt(0).toLowerCase() + name.slice(1)] = event.target.value.trim(); runWorkflowUi(loadWorkflowReport); }, 250)));
+  [['Workflow', 'workflowKey'], ['Status', 'status'], ['Department', 'departmentId'], ['DateFrom', 'dateFrom'], ['DateTo', 'dateTo']].forEach(([name, key]) => $(`#workflowReport${name}`)?.addEventListener('change', (event) => { state.workflowReportFilters[key] = event.target.value; runWorkflowUi(loadWorkflowReport); }));
+  $('#exportWorkflowHistory')?.addEventListener('click', () => runWorkflowUi(exportWorkflowReport));
+  $('#clearWorkflowReportFilters')?.addEventListener('click', clearWorkflowReportFilters);
+  $('#workflowMonitoringView')?.addEventListener('click', (event) => {
+    const request = event.target.closest('[data-monitoring-request]');
+    const reminder = event.target.closest('[data-monitoring-remind]');
+    const reassign = event.target.closest('[data-monitoring-reassign]');
+    const filter = event.target.closest('[data-monitoring-sla-filter]');
+    if (request) runWorkflowUi(() => openMonitoredWorkflowRequest(request.dataset.monitoringRequest));
+    if (reminder) runWorkflowUi(() => sendWorkflowReminder(reminder.dataset.monitoringRemind));
+    if (reassign) openWorkflowReassignModal(reassign.dataset.monitoringReassign);
+    if (filter) { state.workflowMonitoringSla = filter.dataset.monitoringSlaFilter; $('#workflowMonitoringSla').value = state.workflowMonitoringSla; runWorkflowUi(loadWorkflowMonitoring); }
+  });
+  $('#newWorkflowDelegationButton')?.addEventListener('click', openWorkflowDelegationModal);
+  $('#workflowDelegationForm')?.addEventListener('submit', (event) => runWorkflowUi(() => saveWorkflowDelegation(event)));
+  $('#closeWorkflowDelegationModal')?.addEventListener('click', () => closeWorkflowModal('workflowDelegationModal'));
+  $('#cancelWorkflowDelegationModal')?.addEventListener('click', () => closeWorkflowModal('workflowDelegationModal'));
+  $('#workflowDelegationStatus')?.addEventListener('change', (event) => { state.workflowDelegationStatus = event.target.value; runWorkflowUi(loadWorkflowDelegations); });
+  $('#workflowDelegationSearch')?.addEventListener('input', debounce((event) => { state.workflowDelegationSearch = event.target.value.trim(); runWorkflowUi(loadWorkflowDelegations); }, 200));
+  $('#workflowDelegationList')?.addEventListener('click', (event) => { const button = event.target.closest('[data-cancel-workflow-delegation]'); if (button) runWorkflowUi(() => cancelWorkflowDelegation(button.dataset.cancelWorkflowDelegation)); });
+  $('#workflowReassignForm')?.addEventListener('submit', (event) => runWorkflowUi(() => reassignWorkflowAssignment(event)));
+  $('#closeWorkflowReassignModal')?.addEventListener('click', () => closeWorkflowModal('workflowReassignModal'));
+  $('#cancelWorkflowReassignModal')?.addEventListener('click', () => closeWorkflowModal('workflowReassignModal'));
+  $('#workflowSubmitForm')?.elements.workflowKey.addEventListener('change', syncWorkflowSubmitBinding);
+  $('#workflowSubmitForm')?.addEventListener('submit', (event) => runWorkflowUi(() => submitWorkflowRequest(event)));
+  $('#closeWorkflowSubmitModal')?.addEventListener('click', () => closeWorkflowModal('workflowSubmitModal'));
+  $('#cancelWorkflowSubmitModal')?.addEventListener('click', () => closeWorkflowModal('workflowSubmitModal'));
+  $('#workflowDecisionForm')?.addEventListener('submit', (event) => runWorkflowUi(() => decideWorkflowRequest(event)));
+  $('#closeWorkflowDecisionModal')?.addEventListener('click', () => closeWorkflowModal('workflowDecisionModal'));
+  $('#cancelWorkflowDecisionModal')?.addEventListener('click', () => closeWorkflowModal('workflowDecisionModal'));
+  $('#workflowLifecycleForm')?.addEventListener('submit', (event) => runWorkflowUi(() => runWorkflowLifecycle(event)));
+  $('#closeWorkflowLifecycleModal')?.addEventListener('click', () => closeWorkflowModal('workflowLifecycleModal'));
+  $('#cancelWorkflowLifecycleModal')?.addEventListener('click', () => closeWorkflowModal('workflowLifecycleModal'));
+  $('#workflowRequestList')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-workflow-request]');
+    if (button) runWorkflowUi(() => openWorkflowRequest(button.dataset.workflowRequest));
+  });
+  $('#workflowRequestDetail')?.addEventListener('click', (event) => {
+    const decision = event.target.closest('[data-workflow-decision]');
+    const lifecycle = event.target.closest('[data-workflow-lifecycle]');
+    const attachment = event.target.closest('[data-workflow-attachment-download]');
+    if (decision) openWorkflowDecision(decision.dataset.workflowDecision);
+    if (lifecycle) openWorkflowLifecycle(lifecycle.dataset.workflowLifecycle);
+    if (attachment) runWorkflowUi(() => downloadWorkflowAttachment(attachment.dataset.workflowAttachmentDownload));
+  });
+  $$('.workflow-request-tabs [data-workflow-request-mode]').forEach((button) => button.addEventListener('click', () => {
+    state.workflowRequestMode = button.dataset.workflowRequestMode;
+    $$('.workflow-request-tabs [data-workflow-request-mode]').forEach((item) => item.classList.toggle('is-active', item === button));
+    renderWorkflowRequestList();
+  }));
+  $('#workflowRequestStatus')?.addEventListener('change', (event) => {
+    state.workflowRequestStatus = event.target.value;
+    renderWorkflowRequestList();
+  });
+  $('#workflowRequestSearch')?.addEventListener('input', debounce((event) => {
+    state.workflowRequestSearch = event.target.value.trim();
+    renderWorkflowRequestList();
+  }, 180));
+  $('#newWorkflowDefinitionButton')?.addEventListener('click', () => {
+    state.activeWorkflowKey = '';
+    renderWorkflowDefinitionList();
+    showWorkflowDefinition(null);
+  });
+  $('#emptyNewWorkflowDefinitionButton')?.addEventListener('click', () => {
+    state.activeWorkflowKey = '';
+    showWorkflowDefinition(null);
+  });
+  $('#workflowDefinitionSearch')?.addEventListener('input', debounce((event) => {
+    state.workflowDefinitionSearch = event.target.value.trim();
+    renderWorkflowDefinitionList();
+  }, 180));
+  $('#workflowDefinitionList')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-workflow-definition]');
+    if (!button) return;
+    state.activeWorkflowKey = button.dataset.workflowDefinition;
+    renderWorkflowDefinitionList();
+    showWorkflowDefinition(activeWorkflowDefinition());
+  });
+  $('#workflowDefinitionForm')?.addEventListener('submit', (event) => runWorkflowUi(() => saveWorkflowDefinition(event)));
+  $('#workflowDefinitionForm')?.elements.name.addEventListener('input', syncWorkflowStableKey);
+  $('#workflowDefinitionForm')?.elements.sourceModuleKey.addEventListener('change', () => renderWorkflowCanvasInspector());
+  $('#workflowDefinitionForm')?.elements.requestFormKey.addEventListener('change', () => renderWorkflowCanvasInspector());
+  $$('[data-add-workflow-node]').forEach((button) => button.addEventListener('click', () => addWorkflowCanvasNode(button.dataset.addWorkflowNode)));
+  $('#workflowConnectButton')?.addEventListener('click', () => {
+    state.workflowConnectFrom = state.workflowConnectFrom ? '' : state.selectedWorkflowNodeId;
+    if (!state.workflowConnectFrom) toast('Select a source node, then click Connect.', 'error');
+    renderWorkflowCanvas();
+  });
+  $('#workflowZoomOut')?.addEventListener('click', () => { state.workflowCanvasZoom = Math.max(.4, state.workflowCanvasZoom - .1); renderWorkflowCanvas(); });
+  $('#workflowZoomIn')?.addEventListener('click', () => { state.workflowCanvasZoom = Math.min(1.6, state.workflowCanvasZoom + .1); renderWorkflowCanvas(); });
+  $('#workflowFitCanvas')?.addEventListener('click', fitWorkflowCanvas);
+  $('#openWorkflowRouteDesigner')?.addEventListener('click', openWorkflowRouteDesigner);
+  $('#closeWorkflowRouteDesigner')?.addEventListener('click', closeWorkflowRouteDesigner);
+  $('#saveWorkflowRouteDesigner')?.addEventListener('click', () => runWorkflowUi(saveWorkflowRouteDesigner));
+  $('#workflowInspectorToggle')?.addEventListener('click', () => setWorkflowInspectorCollapsed(!state.workflowInspectorCollapsed));
+  $('#workflowCanvas')?.addEventListener('click', (event) => {
+    const nodeButton = event.target.closest('[data-workflow-node-id]');
+    const edgeButton = event.target.closest('[data-workflow-edge-id]');
+    if (nodeButton) {
+      const nodeId = nodeButton.dataset.workflowNodeId;
+      if (state.workflowConnectFrom && state.workflowConnectFrom !== nodeId) return connectWorkflowNodes(state.workflowConnectFrom, nodeId);
+      state.selectedWorkflowNodeId = nodeId;
+      state.selectedWorkflowEdgeId = '';
+      if (state.workflowRouteDesignerOpen) setWorkflowInspectorCollapsed(false);
+      renderWorkflowCanvas();
+    } else if (edgeButton) {
+      state.selectedWorkflowEdgeId = edgeButton.dataset.workflowEdgeId;
+      state.selectedWorkflowNodeId = '';
+      if (state.workflowRouteDesignerOpen) setWorkflowInspectorCollapsed(false);
+      renderWorkflowCanvas();
+    }
+  });
+  $('#workflowCanvas')?.addEventListener('pointerdown', (event) => {
+    const button = event.target.closest('[data-workflow-node-id]');
+    if (!button || state.workflowConnectFrom) return;
+    const node = state.workflowBuilderGraph.nodes.find((item) => item.id === button.dataset.workflowNodeId);
+    if (!node) return;
+    state.workflowCanvasDrag = { nodeId: node.id, startX: event.clientX, startY: event.clientY, x: Number(node.x), y: Number(node.y) };
+    button.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  });
+  $('#workflowCanvasViewport')?.addEventListener('pointerdown', (event) => {
+    if (event.target.closest('[data-workflow-node-id], [data-workflow-edge-id]')) return;
+    const viewport = event.currentTarget;
+    state.workflowCanvasPan = { startX: event.clientX, startY: event.clientY, left: viewport.scrollLeft, top: viewport.scrollTop };
+    viewport.classList.add('is-panning');
+    viewport.setPointerCapture?.(event.pointerId);
+  });
+  window.addEventListener('pointermove', (event) => {
+    if (state.workflowCanvasDrag) {
+      const drag = state.workflowCanvasDrag;
+      const node = state.workflowBuilderGraph.nodes.find((item) => item.id === drag.nodeId);
+      if (node) {
+        node.x = Math.max(0, drag.x + ((event.clientX - drag.startX) / state.workflowCanvasZoom));
+        node.y = Math.max(0, drag.y + ((event.clientY - drag.startY) / state.workflowCanvasZoom));
+        renderWorkflowCanvas();
+      }
+    }
+    if (state.workflowCanvasPan) {
+      const viewport = $('#workflowCanvasViewport');
+      viewport.scrollLeft = state.workflowCanvasPan.left - (event.clientX - state.workflowCanvasPan.startX);
+      viewport.scrollTop = state.workflowCanvasPan.top - (event.clientY - state.workflowCanvasPan.startY);
+    }
+  });
+  window.addEventListener('pointerup', () => {
+    state.workflowCanvasDrag = null;
+    state.workflowCanvasPan = null;
+    $('#workflowCanvasViewport')?.classList.remove('is-panning');
+  });
+  $('#workflowCanvasInspector')?.addEventListener('change', (event) => {
+    if (event.target.dataset.workflowNodeField) updateWorkflowInspectorField(event.target.dataset.workflowNodeField, event.target);
+    if (event.target.dataset.workflowEdgeConditionField) updateWorkflowEdgeCondition(event.target);
+    if (event.target.dataset.workflowApproverType) toggleWorkflowApproverRule(event.target);
+    if (event.target.matches('[data-workflow-record-approver-fields]')) updateWorkflowRecordApproverFields(event.target);
+    if (event.target.dataset.workflowResponseField) updateWorkflowResponseMapping(event.target);
+  });
+  $('#workflowCanvasInspector')?.addEventListener('input', (event) => {
+    if (event.target.matches('[data-workflow-approver-search-input]')) filterWorkflowApproverOptions(event.target);
+  });
+  $('#workflowCanvasInspector')?.addEventListener('click', (event) => {
+    if (event.target.closest('[data-clear-workflow-approver-search]')) {
+      const input = $('#workflowCanvasInspector [data-workflow-approver-search-input]');
+      if (input) {
+        input.value = '';
+        filterWorkflowApproverOptions(input);
+        input.focus();
+      }
+    }
+    if (event.target.closest('[data-remove-workflow-node]')) removeSelectedWorkflowNode();
+    if (event.target.closest('[data-remove-workflow-edge]')) {
+      state.workflowBuilderGraph.edges = state.workflowBuilderGraph.edges.filter((edge) => edge.id !== state.selectedWorkflowEdgeId);
+      state.selectedWorkflowEdgeId = '';
+      renderWorkflowCanvas();
+    }
+    const group = event.target.closest('[data-workflow-edge-condition-group]');
+    const edge = state.workflowBuilderGraph.edges.find((item) => item.id === state.selectedWorkflowEdgeId);
+    if (group && edge) {
+      edge.condition ||= { group: 'all', rules: [{ fieldKey: '', operator: 'equals', value: '' }] };
+      edge.condition.group = group.dataset.workflowEdgeConditionGroup;
+      renderWorkflowCanvas();
+    }
+    if (event.target.closest('[data-add-workflow-edge-condition]') && edge) {
+      edge.condition ||= { group: 'all', rules: [] };
+      edge.condition.rules.push({ fieldKey: '', operator: 'equals', value: '' });
+      renderWorkflowCanvas();
+    }
+    const removeRule = event.target.closest('[data-remove-workflow-edge-condition]');
+    if (removeRule && edge) {
+      edge.condition.rules.splice(Number(removeRule.dataset.removeWorkflowEdgeCondition), 1);
+      renderWorkflowCanvas();
+    }
+  });
+  $('#checkWorkflowDefinitionButton')?.addEventListener('click', () => runWorkflowUi(checkWorkflowDefinition));
+  $('#publishWorkflowDefinitionButton')?.addEventListener('click', () => runWorkflowUi(publishWorkflowDefinition));
+  $('#checkpointWorkflowDefinitionButton')?.addEventListener('click', () => runWorkflowUi(checkpointWorkflowDefinition));
+  $('#cloneWorkflowDefinitionButton')?.addEventListener('click', () => runWorkflowUi(cloneWorkflowDefinition));
+  $('#archiveWorkflowDefinitionButton')?.addEventListener('click', () => runWorkflowUi(archiveWorkflowDefinition));
+  $('#newDashboardSourceButton')?.addEventListener('click', () => openDashboardSourceDrawer());
+  $('#emptyNewDashboardSourceButton')?.addEventListener('click', () => openDashboardSourceDrawer());
+  $('#editDashboardSourceButton')?.addEventListener('click', () => openDashboardSourceDrawer(state.activeDashboardSourceKey));
+  $('#closeDashboardSourceDrawer')?.addEventListener('click', closeDashboardSourceDrawer);
+  $('#cancelDashboardSourceDrawer')?.addEventListener('click', closeDashboardSourceDrawer);
+  $('#dashboardSourceDrawer')?.addEventListener('click', (event) => { if (event.target === event.currentTarget) closeDashboardSourceDrawer(); });
+  $('#dashboardSourceForm')?.addEventListener('submit', (event) => saveDashboardSource(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  $('#dashboardSourceForm [name="sourceType"]')?.addEventListener('change', updateDashboardSourceFormMode);
+  $('#dashboardSourceSearch')?.addEventListener('input', (event) => { state.dashboardSourceSearch = event.currentTarget.value; renderDashboardSourceList(); });
+  $('#dashboardSourceList')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-dashboard-source-key]');
+    if (!button) return;
+    state.activeDashboardSourceKey = button.dataset.dashboardSourceKey;
+    state.dashboardPreview = null;
+    renderDashboardSources();
+  });
+  $('#runDashboardPreviewButton')?.addEventListener('click', () => runDashboardSourcePreview(false).catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  $('#refreshDashboardColumnsButton')?.addEventListener('click', () => runDashboardSourcePreview(true).catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  $('#archiveDashboardSourceButton')?.addEventListener('click', () => archiveDashboardSource().catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  $('#newDashboardButton')?.addEventListener('click', () => openDashboardForm('create'));
+  $('#closeDashboardFormModal')?.addEventListener('click', closeDashboardFormModal);
+  $('#cancelDashboardFormModal')?.addEventListener('click', closeDashboardFormModal);
+  $('#dashboardFormModal')?.addEventListener('click', (event) => { if (event.target === event.currentTarget) closeDashboardFormModal(); });
+  $('#dashboardForm')?.addEventListener('submit', (event) => saveDashboard(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  $('#dashboardManagementSearch')?.addEventListener('input', (event) => { state.dashboardManagementSearch = event.currentTarget.value; renderDashboardManagement(); });
+  $('.dashboard-status-filter')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-dashboard-status]');
+    if (!button) return;
+    state.dashboardStatusFilter = button.dataset.dashboardStatus;
+    renderDashboardManagement();
+  });
+  $('#dashboardManagementRows')?.addEventListener('click', (event) => {
+    const open = event.target.closest('[data-open-dashboard]');
+    const edit = event.target.closest('[data-edit-dashboard]');
+    const duplicate = event.target.closest('[data-duplicate-dashboard]');
+    const archive = event.target.closest('[data-archive-dashboard]');
+    const reopen = event.target.closest('[data-reopen-dashboard]');
+    if (open) openDashboardBuilderStudio(open.dataset.openDashboard).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+    else if (edit) openDashboardForm('edit', edit.dataset.editDashboard);
+    else if (duplicate) openDashboardForm('duplicate', duplicate.dataset.duplicateDashboard);
+    else if (archive) changeDashboardArchiveState(archive.dataset.archiveDashboard).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+    else if (reopen) changeDashboardArchiveState(reopen.dataset.reopenDashboard, true).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  });
+  $('#backToDashboardManagement')?.addEventListener('click', showDashboardManagement);
+  $('#dashboardStudioEditButton')?.addEventListener('click', () => openDashboardForm('edit', state.activeDashboardKey));
+  $('#dashboardStudioPreviewButton')?.addEventListener('click', () => toast('Dashboard Preview Will Be Available After Widgets Are Added.', 'error'));
+  $('#dashboardStudioDataButton')?.addEventListener('click', () => {
+    showAdminSection('adminDashboardSourcesSection');
+    loadDashboardSources().catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  });
+  $('#dashboardAccessButton')?.addEventListener('click', openDashboardAccessDrawer);
+  $('#previewDashboardButton')?.addEventListener('click', toggleDashboardPreview);
+  $('#checkDashboardButton')?.addEventListener('click', () => checkActiveDashboard().catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  $('#dashboardLifecycleButton')?.addEventListener('click', () => openDashboardLifecycleDrawer().catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  $('#closeDashboardLifecycleDrawer')?.addEventListener('click', closeDashboardLifecycleDrawer);
+  $('#cancelDashboardLifecycleDrawer')?.addEventListener('click', closeDashboardLifecycleDrawer);
+  $('#dashboardLifecycleDrawer')?.addEventListener('click', (event) => { if (event.target === event.currentTarget) closeDashboardLifecycleDrawer(); });
+  $('#dashboardLifecycleForm')?.addEventListener('submit', (event) => createDashboardCheckpoint(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  $('#dashboardVersionList')?.addEventListener('click', (event) => { const button = event.target.closest('[data-restore-dashboard-version]'); if (button) restoreDashboardVersion(button.dataset.restoreDashboardVersion).catch((error) => toast(titleCaseMessage(error.message), 'error')); });
+  $('#exportDashboardConfigurationButton')?.addEventListener('click', () => exportDashboardConfiguration().catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  $('#importDashboardConfigurationInput')?.addEventListener('change', (event) => importDashboardConfiguration(event.target.files?.[0]).catch((error) => toast(titleCaseMessage(error.message), 'error')).finally(() => { event.target.value = ''; }));
+  $('#closeDashboardAccessDrawer')?.addEventListener('click', closeDashboardAccessDrawer);
+  $('#cancelDashboardAccessDrawer')?.addEventListener('click', closeDashboardAccessDrawer);
+  $('#dashboardAccessDrawer')?.addEventListener('click', (event) => { if (event.target === event.currentTarget) closeDashboardAccessDrawer(); });
+  $('#dashboardAccessForm')?.addEventListener('submit', (event) => saveDashboardAccess(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  $('#dashboardAccessRules')?.addEventListener('input', (event) => {
+    const search = event.target.closest('[data-permission-search]');
+    if (search) filterPermissionPicker(search.closest('[data-permission-picker]'));
+  });
+  $('#dashboardAccessRules')?.addEventListener('change', (event) => {
+    const checkbox = event.target.closest('[data-permission-picker] input[type="checkbox"]');
+    if (checkbox) updatePermissionPickerCount(checkbox.closest('[data-permission-picker]'));
+  });
+  $('#publishDashboardButton')?.addEventListener('click', () => publishActiveDashboard().catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  $('#addDashboardFilterButton')?.addEventListener('click', () => openDashboardFilterDrawer());
+  $('#closeDashboardFilterDrawer')?.addEventListener('click', closeDashboardFilterDrawer);
+  $('#cancelDashboardFilterDrawer')?.addEventListener('click', closeDashboardFilterDrawer);
+  $('#dashboardFilterDrawer')?.addEventListener('click', (event) => { if (event.target === event.currentTarget) closeDashboardFilterDrawer(); });
+  $('#dashboardFilterForm')?.addEventListener('submit', saveDashboardFilter);
+  $('#dashboardFilterForm [name="type"]')?.addEventListener('change', updateDashboardFilterFormFields);
+  $('#dashboardFilterForm [name="dataSourceKey"]')?.addEventListener('change', updateDashboardFilterFormFields);
+  $('#removeDashboardFilterButton')?.addEventListener('click', removeDashboardFilter);
+  $('#dashboardFilterBar')?.addEventListener('click', (event) => {
+    const edit = event.target.closest('[data-edit-dashboard-filter]');
+    if (edit) openDashboardFilterDrawer(edit.dataset.editDashboardFilter);
+    if (event.target.closest('#resetDashboardFiltersButton')) resetDashboardFilters();
+  });
+  $('#dashboardFilterBar')?.addEventListener('change', (event) => {
+    const control = event.target.closest('[data-dashboard-filter-key]');
+    if (!control) return;
+    const filter = state.dashboardConfiguration.filters.find((item) => item.filterKey === control.dataset.dashboardFilterKey);
+    if (!filter) return;
+    if (control.dataset.dashboardFilterPart) state.dashboardFilterValues[filter.filterKey] = { ...(state.dashboardFilterValues[filter.filterKey] || {}), [control.dataset.dashboardFilterPart]: control.value };
+    else state.dashboardFilterValues[filter.filterKey] = control.multiple ? [...control.selectedOptions].map((option) => option.value) : control.value;
+    refreshWidgetsForDashboardFilter(filter);
+  });
+  $('#addDashboardWidgetButton')?.addEventListener('click', addDashboardWidget);
+  $('#emptyAddDashboardWidgetButton')?.addEventListener('click', addDashboardWidget);
+  $('#saveDashboardLayoutButton')?.addEventListener('click', () => saveDashboardLayout().catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  $('#undoDashboardLayoutButton')?.addEventListener('click', undoDashboardLayout);
+  $('#redoDashboardLayoutButton')?.addEventListener('click', redoDashboardLayout);
+  $('.dashboard-viewport-switch')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-dashboard-viewport]');
+    if (!button) return;
+    state.dashboardLayoutViewport = button.dataset.dashboardViewport;
+    renderDashboardCanvas();
+  });
+  $('#dashboardCanvas')?.addEventListener('click', (event) => {
+    const pageButton = event.target.closest('[data-dashboard-table-page]');
+    const pivotToggle = event.target.closest('[data-dashboard-pivot-toggle]');
+    const frame = event.target.closest('[data-dashboard-widget-key]');
+    if (!frame) return;
+    state.selectedDashboardWidgetKey = frame.dataset.dashboardWidgetKey;
+    if (pivotToggle) {
+      const widget = selectedDashboardWidget();
+      const config = dashboardWidgetConfig(widget);
+      const collapsed = new Set(config.collapsedRows || []);
+      if (collapsed.has(pivotToggle.dataset.dashboardPivotToggle)) collapsed.delete(pivotToggle.dataset.dashboardPivotToggle); else collapsed.add(pivotToggle.dataset.dashboardPivotToggle);
+      const previous = dashboardLayoutSnapshot();
+      widget.config = { ...config, collapsedRows: [...collapsed] };
+      markDashboardLayoutChanged(previous);
+      return;
+    }
+    if (pageButton) {
+      updateSelectedDashboardWidgetConfiguration((widget) => { widget.config = { ...dashboardWidgetConfig(widget), tablePage: Number(pageButton.dataset.dashboardTablePage) }; });
+      return;
+    }
+    renderDashboardCanvas();
+  });
+  $('#dashboardCanvas')?.addEventListener('pointerdown', startDashboardLayoutInteraction);
+  document.addEventListener('pointermove', moveDashboardLayoutInteraction);
+  document.addEventListener('pointerup', endDashboardLayoutInteraction);
+  window.addEventListener('resize', syncDashboardCanvasExtent);
+  $('#dashboardCanvas')?.addEventListener('keydown', (event) => {
+    const frame = event.target.closest('[data-dashboard-widget-key]');
+    if (!frame || !['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+    state.selectedDashboardWidgetKey = frame.dataset.dashboardWidgetKey;
+    const layout = dashboardLayout(selectedDashboardWidget());
+    const delta = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] }[event.key];
+    updateSelectedDashboardLayout(event.shiftKey ? { width: layout.width + delta[0], height: layout.height + delta[1] } : { x: layout.x + delta[0], y: layout.y + delta[1] });
+    event.preventDefault();
+  });
+  $('#dashboardWidgetTitle')?.addEventListener('change', (event) => {
+    const widget = selectedDashboardWidget();
+    const title = event.currentTarget.value.trim();
+    if (!widget || !title || widget.title === title) return;
+    const previous = dashboardLayoutSnapshot();
+    widget.title = title;
+    markDashboardLayoutChanged(previous);
+  });
+  $('#dashboardWidgetWidth')?.addEventListener('change', (event) => updateSelectedDashboardLayout({ width: event.currentTarget.value }));
+  $('#dashboardWidgetHeight')?.addEventListener('change', (event) => updateSelectedDashboardLayout({ height: event.currentTarget.value }));
+  $('.dashboard-widget-keyboard-controls')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-dashboard-move]');
+    const widget = selectedDashboardWidget();
+    if (!button || !widget) return;
+    const layout = dashboardLayout(widget);
+    const changes = { up: { y: layout.y - 1 }, down: { y: layout.y + 1 }, left: { x: layout.x - 1 }, right: { x: layout.x + 1 } }[button.dataset.dashboardMove];
+    updateSelectedDashboardLayout(changes);
+  });
+  $('#duplicateDashboardWidgetButton')?.addEventListener('click', duplicateSelectedDashboardWidget);
+  $('#removeDashboardWidgetButton')?.addEventListener('click', removeSelectedDashboardWidget);
+  $('#dashboardWidgetType')?.addEventListener('change', (event) => updateSelectedDashboardWidgetConfiguration((widget) => { widget.type = event.currentTarget.value; widget.config = { ...dashboardWidgetConfig(widget), mappings: {} }; }));
+  $('#dashboardWidgetDataSource')?.addEventListener('change', (event) => updateSelectedDashboardWidgetConfiguration((widget) => { widget.dataSourceKey = event.currentTarget.value; widget.config = { ...dashboardWidgetConfig(widget), mappings: {} }; }));
+  $('#dashboardWidgetMappingFields')?.addEventListener('change', (event) => {
+    const control = event.target.closest('[data-dashboard-mapping]');
+    if (!control) return;
+    updateSelectedDashboardWidgetConfiguration((widget) => {
+      const config = dashboardWidgetConfig(widget);
+      config.mappings[control.dataset.dashboardMapping] = control.multiple ? [...control.selectedOptions].map((option) => option.value) : control.value;
+      widget.config = config;
+    });
+  });
+  $('#dashboardWidgetDisplayFields')?.addEventListener('change', (event) => {
+    const control = event.target.closest('[data-dashboard-config]');
+    if (!control) return;
+    updateSelectedDashboardWidgetConfiguration((widget) => {
+      const config = dashboardWidgetConfig(widget);
+      const key = control.dataset.dashboardConfig;
+      if (key === 'drillDownType') config.drillDown = { ...(config.drillDown || {}), type: control.value };
+      else if (key === 'drillDownTarget') config.drillDown = { ...(config.drillDown || {}), targetKey: control.value.trim() };
+      else if (key === 'drillDownParameters') config.drillDown = { ...(config.drillDown || {}), allowedParameters: control.value.split(',').map((value) => value.trim()).filter(Boolean) };
+      else config[key] = control.type === 'checkbox' ? control.checked : control.type === 'number' ? Number(control.value) : control.value;
+      widget.config = config;
+    });
+  });
+  $('#refreshDashboardWidgetButton')?.addEventListener('click', () => {
+    const widget = selectedDashboardWidget();
+    if (widget) loadDashboardWidgetPreview(widget.widgetKey, true).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  });
+  $('#exportDashboardWidgetButton')?.addEventListener('click', exportSelectedDashboardWidgetCsv);
+  $('#exportDashboardWidgetExcelButton')?.addEventListener('click', exportSelectedDashboardPivotExcel);
+  $('#publishedDashboardList')?.addEventListener('click', (event) => {
+    const open = event.target.closest('[data-open-published-dashboard]');
+    if (open) openPublishedDashboard(open.dataset.openPublishedDashboard).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  });
+  $('#backToPublishedDashboardList')?.addEventListener('click', renderPublishedDashboardList);
+  $('#publishedDashboardSelector')?.addEventListener('change', (event) => openPublishedDashboard(event.currentTarget.value).catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  $('#publishedDashboardCanvas')?.addEventListener('click', (event) => {
+    const refresh = event.target.closest('[data-refresh-published-widget]');
+    if (refresh) {
+      const widget = state.dashboardConfiguration?.widgets.find((item) => item.widgetKey === refresh.dataset.refreshPublishedWidget);
+      if (widget) loadPublishedDashboardWidget(widget, true).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+      return;
+    }
+    const drillDown = event.target.closest('[data-dashboard-drill-down]');
+    if (drillDown) openDashboardWidgetDrillDown(drillDown.dataset.dashboardDrillDown).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  });
+  $('#publishedDashboardFilters')?.addEventListener('change', (event) => {
+    const control = event.target.closest('[data-dashboard-filter-key]');
+    if (!control) return;
+    const filter = state.dashboardConfiguration.filters.find((item) => item.filterKey === control.dataset.dashboardFilterKey);
+    if (!filter) return;
+    if (control.dataset.dashboardFilterPart) state.dashboardFilterValues[filter.filterKey] = { ...(state.dashboardFilterValues[filter.filterKey] || {}), [control.dataset.dashboardFilterPart]: control.value };
+    else state.dashboardFilterValues[filter.filterKey] = control.multiple ? [...control.selectedOptions].map((option) => option.value) : control.value;
+    state.dashboardWidgetResults = {};
+    renderPublishedDashboardCanvas();
+  });
+  $('#publishedDashboardFilters')?.addEventListener('click', (event) => {
+    if (!event.target.closest('#resetPublishedDashboardFilters')) return;
+    initializeDashboardFilterValues(state.dashboardConfiguration.filters || []);
+    state.dashboardWidgetResults = {};
+    renderPublishedDashboardCanvas();
   });
   $('#newActionFlowButton')?.addEventListener('click', createActionFlow);
   $('#createManagedActionFlowButton')?.addEventListener('click', createActionFlow);
@@ -7439,8 +10576,8 @@ function bindEvents() {
     if (checkButton) {
       api(`/api/action-flows/${encodeURIComponent(checkButton.dataset.checkManagedFlow)}/check`, { method: 'POST' })
         .then((result) => {
-          if (result.check?.valid) toast('Action Flow Check Passed.');
-          else toast(titleCaseMessage(result.check?.errors?.[0] || 'Action Flow Needs Attention.'), 'error');
+          if (result.check?.valid) toast('Automation Flow Check Passed.');
+          else toast(titleCaseMessage(result.check?.errors?.[0] || 'Automation Flow Needs Attention.'), 'error');
         })
         .catch((error) => toast(titleCaseMessage(error.message), 'error'));
     }
@@ -8310,7 +11447,16 @@ function bindEvents() {
     toggleModalFullscreen(fullscreenButton);
   });
   document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && state.workflowRouteDesignerOpen) {
+      closeWorkflowRouteDesigner();
+      return;
+    }
     if (event.key !== 'Escape') return;
+    if (!$('#notificationDrawer').hidden) {
+      toggleNotificationDrawer(false);
+      $('#notificationBell').focus();
+      return;
+    }
     if (!$('#actionFlowCreateModal').hidden) {
       closeActionFlowCreateModal();
       return;

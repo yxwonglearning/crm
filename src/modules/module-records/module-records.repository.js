@@ -1,4 +1,5 @@
 const { pool } = require('../../database/pool');
+const workflowProtection = require('../workflows/workflows.protection');
 
 function assertSafeIdentifier(identifier) {
   if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(String(identifier || ''))) {
@@ -143,6 +144,10 @@ async function createRecord(moduleKey, customFields, userId) {
 
 async function updateRecord(moduleKey, id, customFields, userId) {
   assertSafeIdentifier(moduleKey);
+  const existing = await findRecordById(moduleKey, id);
+  if (existing) {
+    await workflowProtection.assertUpdateAllowed(moduleKey, id, existing.customFields, customFields);
+  }
   const [result] = await pool.execute(
     `UPDATE ${sqlIdentifier(moduleKey)}
      SET custom_fields = ?, updated_by = ?
@@ -155,6 +160,7 @@ async function updateRecord(moduleKey, id, customFields, userId) {
 async function deleteRecords(moduleKey, ids) {
   assertSafeIdentifier(moduleKey);
   if (!ids.length) return 0;
+  for (const id of ids) await workflowProtection.assertDeleteAllowed(moduleKey, id);
   const placeholders = ids.map(() => '?').join(', ');
   const [result] = await pool.execute(
     `DELETE FROM ${sqlIdentifier(moduleKey)} WHERE id IN (${placeholders})`,

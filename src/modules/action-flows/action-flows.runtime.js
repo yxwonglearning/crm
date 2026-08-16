@@ -788,7 +788,7 @@ function triggerNode(definition) {
 async function assertRuntimeModule(moduleKey) {
   const config = await moduleConfig.getModuleConfig(moduleKey);
   if (!config?.module || config.module.system || config.module.status !== 'published') {
-    throw new AppError('Action Flow runtime only supports published custom modules in this slice', 422);
+    throw new AppError('Automation Flow runtime only supports published custom modules in this slice', 422);
   }
   return config;
 }
@@ -960,7 +960,7 @@ async function executeNodeWithRetry(node, context) {
     try {
       const result = await executeNode(node, context);
       if (result?.status === 'failed') {
-        const error = new AppError(result.error || 'Action Flow step failed', 422);
+        const error = new AppError(result.error || 'Automation Flow step failed', 422);
         error.result = result;
         throw error;
       }
@@ -1046,7 +1046,7 @@ async function executePath(definition, initialNode, context, steps, visited = ne
       const onError = node.config?.onError || 'stop';
       const errorTarget = onError === 'error_branch' ? nextNode(definition, node.id, 'error') : null;
       const handled = onError === 'continue' || Boolean(errorTarget);
-      const output = { ...(error.result || {}), status: 'failed', error: error.message || 'Action Flow step failed', attempts: error.attempts || attempts, handled };
+      const output = { ...(error.result || {}), status: 'failed', error: error.message || 'Automation Flow step failed', attempts: error.attempts || attempts, handled };
       appendStep(steps, node, stepStartedAt, new Date(), output.attempts, output);
       context.outputs[node.id] = output;
       if (!handled) throw error;
@@ -1062,7 +1062,18 @@ async function executePath(definition, initialNode, context, steps, visited = ne
 }
 
 async function executeFlow(flow, trigger) {
-  const executionId = await repository.createExecution(flow, trigger);
+  const eventExecution = trigger.triggerType === 'workflow_event'
+    ? await repository.createEventExecution(flow, trigger)
+    : null;
+  if (eventExecution?.replayed) {
+    return {
+      executionId: eventExecution.id,
+      status: eventExecution.execution?.status || 'running',
+      steps: eventExecution.execution?.result?.steps || [],
+      replayed: true
+    };
+  }
+  const executionId = eventExecution?.id || await repository.createExecution(flow, trigger);
   const definition = flow.definition || {};
   const start = triggerNode(definition);
   const steps = [];
@@ -1102,7 +1113,7 @@ async function executeFlow(flow, trigger) {
       startedAt: executionStartedAt.toISOString(),
       finishedAt: new Date().toISOString(),
       steps,
-      error: error.message || 'Action Flow execution failed'
+      error: error.message || 'Automation Flow execution failed'
     });
     throw error;
   }
@@ -1173,10 +1184,10 @@ async function runScheduledFlows(now = new Date()) {
 function startScheduler(intervalMs = 30000) {
   if (schedulerTimer) return schedulerTimer;
   schedulerTimer = setInterval(() => {
-    runScheduledFlows().catch((error) => console.error('Action Flow scheduler failed:', error.message));
+    runScheduledFlows().catch((error) => console.error('Automation Flow scheduler failed:', error.message));
   }, Math.max(Number(intervalMs) || 30000, 1000));
   schedulerTimer.unref?.();
-  runScheduledFlows().catch((error) => console.error('Action Flow scheduler failed:', error.message));
+  runScheduledFlows().catch((error) => console.error('Automation Flow scheduler failed:', error.message));
   return schedulerTimer;
 }
 

@@ -3,7 +3,7 @@ const assert = require('assert/strict');
 const XLSX = require('xlsx');
 
 const { createApp } = require('../../src/app');
-const { pool } = require('../../src/database/pool');
+const { pool, dashboardPool } = require('../../src/database/pool');
 const { config } = require('../../src/shared/config');
 const actionFlowRuntime = require('../../src/modules/action-flows/action-flows.runtime');
 
@@ -652,7 +652,7 @@ async function main() {
     assert.ok(exported.buffer.length > 1000, 'Module export should be a non-empty workbook');
   });
 
-  await smoke('Phase 5 action flow management and REST connector smoke', async () => {
+  await smoke('Phase 5 automation flow management and REST connector smoke', async () => {
     const restCalls = [];
     const restServer = http.createServer(async (req, res) => {
       let body = '';
@@ -832,7 +832,7 @@ async function main() {
       const createFlow = await request('POST', '/api/action-flows', {
         json: {
           flowKey,
-          name: 'Smoke Action Flow',
+          name: 'Smoke Automation Flow',
           status: 'draft',
           triggerType: 'record_created',
           triggerModule: createdModuleKey,
@@ -846,11 +846,11 @@ async function main() {
           }
         }
       });
-      expectStatus(createFlow, 201, 'create action flow');
+      expectStatus(createFlow, 201, 'create automation flow');
       assert.equal(createFlow.body.flow.flowKey, flowKey);
 
       const check = await request('POST', `/api/action-flows/${flowKey}/check`);
-      expectStatus(check, 200, 'check action flow');
+      expectStatus(check, 200, 'check automation flow');
       assert.equal(check.body.check.valid, true);
 
       const structuredConditionDefinition = {
@@ -910,7 +910,7 @@ async function main() {
       assert.ok(missingNoBranchCheck.body.check.errors.some((error) => error.includes('needs a No branch')));
 
       const list = await request('GET', `/api/action-flows?search=${encodeURIComponent(flowKey)}`);
-      expectStatus(list, 200, 'list action flows');
+      expectStatus(list, 200, 'list automation flows');
       assert.ok(list.body.flows.some((flow) => flow.flowKey === flowKey));
 
       const runtimeFlowKey = `${runId}_runtime_flow`;
@@ -931,28 +931,28 @@ async function main() {
           }
         }
       });
-      expectStatus(runtimeFlow, 201, 'create enabled runtime action flow');
+      expectStatus(runtimeFlow, 201, 'create enabled runtime automation flow');
 
       const initialFlowVersions = await request('GET', `/api/action-flows/${runtimeFlowKey}/versions`);
-      expectStatus(initialFlowVersions, 200, 'list initial action flow versions');
+      expectStatus(initialFlowVersions, 200, 'list initial automation flow versions');
       assert.equal(initialFlowVersions.body.versions.length, 1);
       const baselineFlowVersionId = initialFlowVersions.body.versions[0].id;
       const checkpointFlowVersion = await request('POST', `/api/action-flows/${runtimeFlowKey}/versions`, {
         json: { remark: 'Smoke draft checkpoint' }
       });
-      expectStatus(checkpointFlowVersion, 201, 'save action flow version checkpoint');
+      expectStatus(checkpointFlowVersion, 201, 'save automation flow version checkpoint');
       assert.equal(checkpointFlowVersion.body.versions[0].action, 'checkpoint');
       const publishFlowVersion = await request('POST', `/api/action-flows/${runtimeFlowKey}/publish`, {
         json: { remark: 'Smoke published version' }
       });
-      expectStatus(publishFlowVersion, 200, 'publish action flow version');
+      expectStatus(publishFlowVersion, 200, 'publish automation flow version');
       assert.equal(publishFlowVersion.body.flow.status, 'enabled');
       assert.equal(publishFlowVersion.body.flow.publishedVersion, publishFlowVersion.body.flow.currentVersion);
       const publishedVersionNumber = publishFlowVersion.body.flow.publishedVersion;
       const restoreFlowVersion = await request('POST', `/api/action-flows/${runtimeFlowKey}/versions/${baselineFlowVersionId}/restore`, {
         json: { remark: 'Smoke restore verification' }
       });
-      expectStatus(restoreFlowVersion, 200, 'restore action flow version');
+      expectStatus(restoreFlowVersion, 200, 'restore automation flow version');
       assert.equal(restoreFlowVersion.body.versions[0].action, 'restored');
       assert.equal(restoreFlowVersion.body.flow.publishedVersion, publishedVersionNumber, 'restore should leave the published version live');
       assert.ok(restoreFlowVersion.body.flow.currentVersion > publishedVersionNumber, 'restore should create a new draft version');
@@ -975,7 +975,7 @@ async function main() {
           }
         }
       });
-      expectStatus(restRuntimeFlow, 201, 'create enabled REST runtime action flow');
+      expectStatus(restRuntimeFlow, 201, 'create enabled REST runtime automation flow');
 
       const restErrorFlowKey = `${runId}_rest_error_flow`;
       const restErrorFlow = await request('POST', '/api/action-flows', {
@@ -1050,7 +1050,7 @@ async function main() {
       const mappingRunOnce = await request('POST', `/api/action-flows/${mappingFlowKey}/run-once`, {
         json: { recordId: 9001, record: { id: 9001, title: 'Run Once', amount: 8 } }
       });
-      expectStatus(mappingRunOnce, 200, 'run action flow once');
+      expectStatus(mappingRunOnce, 200, 'run automation flow once');
       assert.equal(mappingRunOnce.body.execution.status, 'success');
       assert.ok(mappingRunOnce.body.execution.executionId);
       assert.equal(mappingRunOnce.body.execution.trigger.runOnce, true);
@@ -1069,7 +1069,7 @@ async function main() {
             nodes: [
               { id: 'trigger_1', category: 'trigger', type: 'record_created', label: 'When Created', config: { moduleKey: createdModuleKey } },
               { id: 'transform_1', category: 'data_mapping', type: 'transform_value', label: 'Normalize title', config: { outputName: 'cleanTitle', sourceValue: 'current record.title', operation: 'uppercase' } },
-              { id: 'task_1', category: 'task_notification', type: 'create_task', label: 'Create follow-up task', config: { title: 'Review {{ outputs.transform_1.values.cleanTitle }}', description: 'Created by action flow', assignee: String(createdUserId), priority: 'high' } },
+              { id: 'task_1', category: 'task_notification', type: 'create_task', label: 'Create follow-up task', config: { title: 'Review {{ outputs.transform_1.values.cleanTitle }}', description: 'Created by automation flow', assignee: String(createdUserId), priority: 'high' } },
               { id: 'notification_1', category: 'task_notification', type: 'send_notification', label: 'Notify owner', config: { recipient: String(createdUserId), title: 'Task created', message: 'Review {{ outputs.transform_1.values.cleanTitle }}' } },
               { id: 'end_1', category: 'end', type: 'end', label: 'End', config: {} }
             ],
@@ -1229,11 +1229,11 @@ async function main() {
       assert.ok(restCalls.some((call) => call.url === '/fail'));
 
       const executions = await request('GET', `/api/action-flows/executions?flowKey=${encodeURIComponent(runtimeFlowKey)}`);
-      expectStatus(executions, 200, 'list action flow executions');
+      expectStatus(executions, 200, 'list automation flow executions');
       assert.ok(executions.body.executions.some((execution) => execution.status === 'success'));
 
       const restExecutions = await request('GET', `/api/action-flows/executions?flowKey=${encodeURIComponent(restRuntimeFlowKey)}`);
-      expectStatus(restExecutions, 200, 'list REST action flow executions');
+      expectStatus(restExecutions, 200, 'list REST automation flow executions');
       const restExecution = restExecutions.body.executions.find((execution) => execution.status === 'success');
       assert.ok(restExecution, 'REST runtime flow should record a successful execution');
       const restStep = restExecution.result.steps.find((step) => step.type === 'call_rest_api');
@@ -1372,11 +1372,11 @@ async function main() {
       }
 
       const deleteFlow = await request('DELETE', `/api/action-flows/${flowKey}`);
-      expectStatus(deleteFlow, 200, 'delete action flow');
+      expectStatus(deleteFlow, 200, 'delete automation flow');
       const deleteRuntimeFlow = await request('DELETE', `/api/action-flows/${runtimeFlowKey}`);
-      expectStatus(deleteRuntimeFlow, 200, 'delete runtime action flow');
+      expectStatus(deleteRuntimeFlow, 200, 'delete runtime automation flow');
       const deleteRestRuntimeFlow = await request('DELETE', `/api/action-flows/${restRuntimeFlowKey}`);
-      expectStatus(deleteRestRuntimeFlow, 200, 'delete REST runtime action flow');
+      expectStatus(deleteRestRuntimeFlow, 200, 'delete REST runtime automation flow');
       const deleteRestErrorFlow = await request('DELETE', `/api/action-flows/${restErrorFlowKey}`);
       expectStatus(deleteRestErrorFlow, 200, 'delete REST error mapping flow');
       const deleteMappingFlow = await request('DELETE', `/api/action-flows/${mappingFlowKey}`);
@@ -1406,16 +1406,18 @@ async function main() {
     }
   });
 
-  await smoke('planned Phase 7/8/9 route absence smoke', async () => {
-    const plannedRoutes = [
-      ['/api/dashboards', 'Phase 7 Dashboard Builder'],
-      ['/api/workflows', 'Phase 8 Workflow Module'],
-      ['/api/ai/assistant', 'Phase 9 AI Agent Assistant']
-    ];
-    for (const [path, label] of plannedRoutes) {
-      const response = await request('GET', path);
-      expectStatus(response, 404, label);
-    }
+  await smoke('Phase 8 Workflow API authentication smoke', async () => {
+    const unauthenticated = await request('GET', '/api/workflows/definitions', { auth: false });
+    expectStatus(unauthenticated, 401, 'unauthenticated Workflow definitions');
+
+    const definitions = await request('GET', '/api/workflows/definitions');
+    expectStatus(definitions, 200, 'authenticated Workflow definitions');
+    assert.ok(Array.isArray(definitions.body.definitions));
+  });
+
+  await smoke('planned Phase 9 route absence smoke', async () => {
+    const response = await request('GET', '/api/ai/assistant');
+    expectStatus(response, 404, 'Phase 9 AI Agent Assistant');
   });
 
   log('\nBackend smoke suite passed.');
@@ -1433,4 +1435,5 @@ main()
       await new Promise((resolve) => server.close(resolve));
     }
     await pool.end();
+    await dashboardPool.end();
   });

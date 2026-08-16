@@ -19,13 +19,31 @@
         <nav class="nav">
           <button class="nav-button is-active" data-view="customersView">Customers</button>
           <button class="nav-button" data-view="usersView">Users</button>
+          <button class="nav-button" data-view="dashboardPagesView">Dashboards</button>
+          <button class="nav-button" data-view="workflowRequestsView">Approval Requests</button>
+          <button class="nav-button" data-view="workflowMonitoringView">Workflow Monitoring</button>
+          <button class="nav-button" data-view="workflowDelegationView">Approval Delegation</button>
           <div id="publishedModuleNav"></div>
           <button class="nav-button" data-view="sysadminView">Admin Portal</button>
         </nav>
         <button id="logoutButton" class="secondary full-width" hidden>Sign out</button>
       </aside>
 
-      <section class="workspace">
+      <section class="app-frame">
+        <header class="app-header" aria-label="Application header">
+          <div class="app-header-utilities">
+            <div id="notificationHub" class="notification-hub" hidden>
+              <button type="button" id="notificationBell" class="notification-bell" aria-label="Notifications" aria-expanded="false" aria-controls="notificationDrawer"><span aria-hidden="true">🔔</span><b id="notificationBadge" hidden>0</b></button>
+              <aside id="notificationDrawer" class="notification-drawer" hidden aria-label="Notification centre">
+                <div class="notification-drawer-heading"><div><span class="eyebrow">Updates</span><h2>Notifications</h2></div><button type="button" class="link-button" id="markAllNotificationsRead">Mark all read</button></div>
+                <label class="notification-unread-filter"><input id="notificationUnreadOnly" type="checkbox"> Unread only</label>
+                <div id="notificationList" class="notification-list"></div>
+              </aside>
+            </div>
+          </div>
+        </header>
+
+        <section class="workspace">
         <section id="loginView" class="auth-panel">
           <div class="login-hero">
             <div class="login-copy">
@@ -221,6 +239,85 @@
           </div>
         </section>
 
+        <section id="workflowDelegationView" class="view workflow-delegation-view" hidden>
+          <header class="toolbar"><div><span class="eyebrow">Coverage schedule</span><h1>Approval delegation</h1><p>Temporarily route approvals to a trusted replacement. Without a schedule, normal workflow approvers remain unchanged.</p></div><button type="button" id="newWorkflowDelegationButton">Create delegation</button></header>
+          <div class="workflow-delegation-note"><strong>Optional by design</strong><span>Delegation only applies during its effective dates and matching workflow scope.</span></div>
+          <div class="workflow-delegation-tools"><input id="workflowDelegationSearch" type="search" placeholder="Search approver, replacement, or reason"><select id="workflowDelegationStatus"><option value="all">All schedules</option><option value="active">Active</option><option value="scheduled">Scheduled</option><option value="expired">Expired</option><option value="cancelled">Cancelled</option></select></div>
+          <div id="workflowDelegationList" class="workflow-delegation-list"></div>
+        </section>
+
+        <section id="dashboardPagesView" class="view dashboard-pages-view" hidden>
+          <header class="toolbar"><div><h1 id="publishedDashboardPageTitle">Dashboards</h1><p id="publishedDashboardPageDescription">Published reporting available to your account.</p></div><div id="publishedDashboardNavigation" class="published-dashboard-navigation" hidden><label>Dashboard<select id="publishedDashboardSelector" aria-label="Switch dashboard"></select></label><button type="button" class="secondary" id="backToPublishedDashboardList">All dashboards</button></div></header>
+          <div id="publishedDashboardList" class="published-dashboard-list"></div>
+          <div id="publishedDashboardPage" class="published-dashboard-page" hidden><div id="publishedDashboardFilters" class="dashboard-filter-bar"></div><div id="publishedDashboardCanvas" class="dashboard-canvas published-dashboard-canvas"></div></div>
+        </section>
+
+        <section id="workflowRequestsView" class="view workflow-requests-view" hidden>
+          <header class="toolbar workflow-toolbar">
+            <div><span class="eyebrow">Approval Workflow</span><h1>Approval requests</h1><p>Submit records, respond to assigned approvals, and follow every decision.</p></div>
+            <button type="button" id="newWorkflowRequestButton">New approval request</button>
+          </header>
+          <div id="workflowRequestSummary" class="workflow-summary-grid"></div>
+          <div class="workflow-request-layout">
+            <aside class="workflow-request-list-panel">
+              <div class="workflow-request-tabs" role="tablist" aria-label="Approval request views">
+                <button type="button" class="is-active" data-workflow-request-mode="requests">Requests</button>
+                <button type="button" data-workflow-request-mode="inbox">Awaiting my approval</button>
+              </div>
+              <div class="workflow-request-tools">
+                <input id="workflowRequestSearch" type="search" placeholder="Search request ID or workflow">
+                <select id="workflowRequestStatus" aria-label="Filter requests by status">
+                  <option value="all">All statuses</option><option value="pending">Pending</option><option value="returned">Returned</option>
+                  <option value="approved">Approved</option><option value="rejected">Rejected</option><option value="withdrawn">Withdrawn</option><option value="cancelled">Cancelled</option>
+                </select>
+              </div>
+              <div id="workflowRequestList" class="workflow-request-list"></div>
+            </aside>
+            <main id="workflowRequestDetail" class="workflow-request-detail">
+              <div class="empty-state"><h3>Select a request</h3><p>Choose a request to review its approval rail, protected snapshot, and decision history.</p></div>
+            </main>
+          </div>
+        </section>
+
+        <section id="workflowMonitoringView" class="view workflow-monitoring-view" hidden>
+          <header class="toolbar workflow-monitoring-toolbar">
+            <div><span class="eyebrow">Operations control</span><h1>Workflow monitoring</h1><p>Track live routes and inspect the permanent approval record.</p></div>
+            <div class="toolbar-actions"><span id="workflowMonitoringUpdated" class="muted"></span><button type="button" id="refreshWorkflowMonitoring">Refresh</button></div>
+          </header>
+          <div class="workflow-monitoring-tabs" role="tablist" aria-label="Workflow monitoring sections">
+            <button type="button" class="is-active" role="tab" aria-selected="true" data-workflow-monitoring-tab="live">Live monitoring</button>
+            <button type="button" role="tab" aria-selected="false" data-workflow-monitoring-tab="history">History &amp; reports</button>
+          </div>
+          <section id="workflowMonitoringLivePanel" class="workflow-monitoring-panel">
+            <div id="workflowMonitoringSummary" class="workflow-monitoring-summary"></div>
+            <div class="workflow-monitoring-board">
+              <div class="workflow-monitoring-filters">
+                <input id="workflowMonitoringSearch" type="search" placeholder="Search request, workflow, or requester">
+                <select id="workflowMonitoringStatus" aria-label="Filter by request status"><option value="all">All request statuses</option><option value="pending">Pending</option><option value="returned">Returned</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="withdrawn">Withdrawn</option><option value="cancelled">Cancelled</option></select>
+                <select id="workflowMonitoringSla" aria-label="Filter by SLA status"><option value="all">All SLA states</option><option value="overdue">Overdue</option><option value="due_soon">Due within 24 hours</option><option value="on_track">On track</option></select>
+                <button type="button" class="secondary" id="runWorkflowSlaButton">Check deadlines now</button>
+              </div>
+              <div class="workflow-monitoring-table-wrap"><table class="workflow-monitoring-table"><thead><tr><th>Request</th><th>Current stage</th><th>People</th><th>Timing</th><th>SLA</th><th></th></tr></thead><tbody id="workflowMonitoringRows"></tbody></table></div>
+            </div>
+          </section>
+          <section id="workflowMonitoringHistoryPanel" class="workflow-monitoring-panel" hidden>
+            <div class="workflow-report-heading"><div><span class="eyebrow">Audit ledger</span><h2>History &amp; reports</h2><p>Filter requests, open their complete approval timeline, or export the current view.</p></div><button type="button" class="secondary" id="exportWorkflowHistory">Export CSV</button></div>
+            <div class="workflow-report-filters">
+              <input id="workflowReportSearch" type="search" placeholder="Request ID or workflow">
+              <select id="workflowReportWorkflow" aria-label="Filter by workflow"><option value="">All workflows</option></select>
+              <select id="workflowReportStatus" aria-label="Filter by request status"><option value="all">All statuses</option><option value="pending">Pending</option><option value="returned">Returned</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="withdrawn">Withdrawn</option><option value="cancelled">Cancelled</option></select>
+              <input id="workflowReportRequester" type="search" placeholder="Requester name or email">
+              <input id="workflowReportApprover" type="search" placeholder="Approver name or email">
+              <select id="workflowReportDepartment" aria-label="Filter by requester department"><option value="">All departments</option></select>
+              <label><span>From</span><input id="workflowReportDateFrom" type="date"></label>
+              <label><span>To</span><input id="workflowReportDateTo" type="date"></label>
+              <button type="button" class="secondary" id="clearWorkflowReportFilters">Clear filters</button>
+            </div>
+            <div class="workflow-report-result-bar"><strong id="workflowReportCount">0 requests</strong><span>Exports include the filters currently shown.</span></div>
+            <div class="workflow-monitoring-table-wrap"><table class="workflow-monitoring-table workflow-report-table"><thead><tr><th>Request</th><th>Requester</th><th>Department</th><th>Status</th><th>Submitted</th><th>Completed</th><th></th></tr></thead><tbody id="workflowReportRows"></tbody></table></div>
+          </section>
+        </section>
+
         <div id="browserLookupModal" class="modal-backdrop" hidden>
           <div class="panel modal-card browser-lookup-modal-card">
             <div class="modal-header">
@@ -254,13 +351,25 @@
           <div class="admin-layout">
             <aside class="admin-menu">
               <button type="button" class="admin-collapse-button" id="toggleAdminMenu" aria-label="Collapse admin menu">‹</button>
-              <button type="button" class="admin-section-button is-active" data-admin-section="adminModulesSection" data-short="M">
-                <span>Modules</span>
-                <small>CRM objects and publish state</small>
+              <button type="button" class="admin-section-button" data-admin-section="adminDashboardBuilderSection" data-short="D">
+                <span>Dashboard Builder</span>
+                <small>Dashboards and publish state</small>
+              </button>
+              <button type="button" class="admin-section-button" data-admin-section="adminDashboardSourcesSection" data-short="DB">
+                <span>Dashboard Data</span>
+                <small>SQL views and data sources</small>
               </button>
               <button type="button" class="admin-section-button" data-admin-section="adminDepartmentsSection" data-short="D">
                 <span>Departments</span>
                 <small>Organization hierarchy</small>
+              </button>
+              <button type="button" class="admin-section-button" data-admin-section="adminPagesSection" data-short="P">
+                <span>Pages</span>
+                <small>Published user-facing pages</small>
+              </button>
+              <button type="button" class="admin-section-button is-active" data-admin-section="adminModulesSection" data-short="M">
+                <span>Modules</span>
+                <small>CRM objects and publish state</small>
               </button>
               <button type="button" class="admin-section-button" data-admin-section="adminFormsSection" data-short="F">
                 <span>Form Builder</span>
@@ -270,23 +379,46 @@
                 <span>Browser Buttons</span>
                 <small>Master-data lookups</small>
               </button>
-              <button type="button" class="admin-section-button" data-admin-section="adminPagesSection" data-short="P">
-                <span>Pages</span>
-                <small>Published user-facing pages</small>
-              </button>
               <button type="button" class="admin-section-button" data-admin-section="adminActionFlowSection" data-short="A">
-                <span>Action Flow</span>
+                <span>Automation Flow</span>
                 <small>Triggers, conditions, actions</small>
               </button>
-              <button type="button" class="admin-section-button" data-admin-section="adminPermissionsSection" data-short="R">
-                <span>Permissions</span>
-                <small>Access control per module</small>
+              <button type="button" class="admin-section-button" data-admin-section="adminWorkflowSection" data-short="W">
+                <span>Approval Workflow</span>
+                <small>Stages, approvers, and publish state</small>
               </button>
               <button type="button" class="admin-section-button" data-admin-section="adminApiSection" data-short="API">
                 <span>API</span>
                 <small>Connectors and endpoints</small>
               </button>
+              <button type="button" class="admin-section-button" data-admin-section="adminPermissionsSection" data-short="R">
+                <span>Permissions</span>
+                <small>Access control per module</small>
+              </button>
+              <button type="button" class="admin-section-button" data-admin-section="adminEmailSettingsSection" data-short="E">
+                <span>Email Settings</span>
+                <small>Workflow delivery provider</small>
+              </button>
             </aside>
+
+            <section id="adminEmailSettingsSection" class="admin-section" hidden>
+              <div class="email-settings-shell">
+                <header class="email-settings-heading"><div><span class="eyebrow">Delivery channel</span><h2>Email Settings</h2><p>Connect one central sender for optional approval emails. Internal notifications work without this setup.</p></div><span id="emailSettingsStatus" class="email-settings-status is-untested">Not configured</span></header>
+                <form id="emailSettingsForm" class="email-settings-form">
+                  <section class="email-settings-card"><div class="email-settings-card-title"><span>01</span><div><h3>Provider</h3><p>Choose the service used by your organization.</p></div></div><div class="email-settings-grid">
+                    <label>Provider<select name="provider"><option value="gmail">Gmail test account</option><option value="google_workspace">Google Workspace relay</option><option value="microsoft_365">Microsoft 365</option><option value="generic_smtp">Generic SMTP</option></select></label>
+                    <label class="checkbox-label email-enabled"><input name="enabled" type="checkbox"><span><strong>Enable email delivery</strong><small>Workflow processing continues if email is unavailable.</small></span></label>
+                  </div></section>
+                  <section class="email-settings-card"><div class="email-settings-card-title"><span>02</span><div><h3>Sender identity</h3><p>Recipients always see this central workflow sender.</p></div></div><div class="email-settings-grid">
+                    <label>Sender name<input name="senderName" placeholder="Ampères CRM"></label><label>Sender email<input name="senderEmail" type="email" placeholder="yourname@gmail.com"></label><label>Reply-to (optional)<input name="replyTo" type="email" placeholder="optional@company.com"></label>
+                  </div></section>
+                  <section class="email-settings-card"><div class="email-settings-card-title"><span>03</span><div><h3>Connection</h3><p id="emailProviderHelp">For Gmail, use a Google App Password instead of your normal password.</p></div></div><div class="email-settings-grid">
+                    <label data-email-smtp>SMTP host<input name="host" placeholder="smtp.gmail.com"></label><label data-email-smtp>Port<input name="port" type="number" min="1" max="65535" placeholder="587"></label><label data-email-smtp>Security<select name="security"><option value="starttls">STARTTLS</option><option value="ssl">SSL/TLS</option><option value="none">None</option></select></label><label data-email-smtp>Username<input name="username" placeholder="yourname@gmail.com"></label><label data-email-graph hidden>Tenant ID<input name="tenantId" placeholder="00000000-0000-0000-0000-000000000000"></label><label data-email-graph hidden>Client ID<input name="clientId" placeholder="00000000-0000-0000-0000-000000000000"></label><label><span id="emailSecretLabel">App password / SMTP password</span><input name="secret" type="password" autocomplete="new-password" placeholder="16-character Google App Password"><small id="emailSecretHint">Leave blank to keep the saved password.</small></label>
+                  </div></section>
+                  <div class="email-settings-actions"><button type="submit">Save settings</button><div class="email-test-control"><input id="emailTestRecipient" type="email" placeholder="test-recipient@example.com"><button type="button" class="secondary" id="sendTestEmail">Send test email</button></div></div>
+                </form>
+              </div>
+            </section>
 
             <section id="adminModulesSection" class="admin-section">
               <div class="builder-layout">
@@ -618,12 +750,12 @@
             <section id="adminActionFlowSection" class="admin-section" hidden>
               <div id="actionFlowManagement" class="action-flow-management">
                 <div class="action-flow-management-layout">
-                  <aside class="action-flow-management-rail" aria-label="Action Flow filters">
+                  <aside class="action-flow-management-rail" aria-label="Automation Flow filters">
                     <div class="action-flow-management-rail-heading">
                       <strong>Flow Management</strong>
                       <small>Browse by status</small>
                     </div>
-                    <div class="action-flow-filter-tabs" role="tablist" aria-label="Filter Action Flows">
+                    <div class="action-flow-filter-tabs" role="tablist" aria-label="Filter Automation Flows">
                       <button type="button" class="is-active" data-action-flow-filter="all"><span>All flows</span><strong id="actionFlowTotalCount">0</strong></button>
                       <button type="button" data-action-flow-filter="enabled"><span>Enabled</span><strong id="actionFlowEnabledCount">0</strong></button>
                       <button type="button" data-action-flow-filter="draft"><span>Draft</span><strong id="actionFlowDraftCount">0</strong></button>
@@ -635,7 +767,7 @@
                     <div class="action-flow-management-heading">
                       <div>
                         <span class="action-flow-management-kicker">Automation</span>
-                        <h2>Action Flow</h2>
+                        <h2>Automation Flow</h2>
                         <p>Manage automations, review their status, and open the canvas when you are ready to build.</p>
                       </div>
                       <button type="button" id="createManagedActionFlowButton"><span aria-hidden="true">+</span> Create flow</button>
@@ -659,9 +791,9 @@
               <div id="actionFlowStudio" class="action-flow-studio" hidden>
                 <header class="action-flow-toolbar">
                   <div class="action-flow-title-block">
-                    <button type="button" class="action-flow-back-button" id="backToActionFlowManagement" aria-label="Back to Action Flow management">←</button>
+                    <button type="button" class="action-flow-back-button" id="backToActionFlowManagement" aria-label="Back to Automation Flow management">←</button>
                     <span class="action-flow-kicker">Flow studio</span>
-                    <div><h2 id="actionFlowTitle">Action Flow</h2><span id="actionFlowSaveState">Select a flow to begin</span></div>
+                    <div><h2 id="actionFlowTitle">Automation Flow</h2><span id="actionFlowSaveState">Select a flow to begin</span></div>
                   </div>
                   <div class="action-flow-toolbar-actions">
                     <button type="button" class="secondary" id="actionFlowVersionsButton" disabled>Versions</button>
@@ -683,10 +815,10 @@
                 </div>
 
                 <div class="action-flow-workspace">
-                  <aside class="action-flow-library" aria-label="Action Flow library">
+                  <aside class="action-flow-library" aria-label="Automation Flow library">
                     <div class="action-flow-library-heading">
-                      <div><strong>Action flows</strong><small>Choose a flow to edit</small></div>
-                      <button type="button" class="action-flow-icon-button" id="newActionFlowButton" aria-label="Create action flow">+</button>
+                      <div><strong>Automation flows</strong><small>Choose a flow to edit</small></div>
+                      <button type="button" class="action-flow-icon-button" id="newActionFlowButton" aria-label="Create automation flow">+</button>
                     </div>
                     <label class="action-flow-search"><span aria-hidden="true">⌕</span><input id="actionFlowSearch" type="search" placeholder="Search flows"></label>
                     <div id="actionFlowList" class="action-flow-list"></div>
@@ -702,7 +834,7 @@
                       <button type="button" id="actionFlowFit" aria-label="Fit flow">Fit</button>
                     </div>
                     <div id="actionFlowCanvasViewport" class="action-flow-canvas-viewport">
-                      <div id="actionFlowCanvas" class="action-flow-canvas" aria-label="Action Flow canvas"></div>
+                      <div id="actionFlowCanvas" class="action-flow-canvas" aria-label="Automation Flow canvas"></div>
                     </div>
                     <div class="action-flow-canvas-legend" aria-hidden="true"><span><i class="legend-trigger"></i>Trigger</span><span><i class="legend-action"></i>Action</span><span><i class="legend-logic"></i>Logic</span></div>
                   </main>
@@ -711,6 +843,98 @@
                     <div class="action-flow-inspector-empty"><span>◎</span><strong>Select a module</strong><p>Choose a module on the canvas to review its role in this flow.</p></div>
                   </aside>
                 </div>
+              </div>
+            </section>
+
+            <section id="adminWorkflowSection" class="admin-section workflow-admin-section" hidden>
+              <div class="workflow-admin-layout">
+                <aside class="workflow-definition-rail">
+                  <div class="workflow-definition-rail-heading">
+                    <div><span class="eyebrow">Approval Workflow</span><h2>Definitions</h2></div>
+                    <button type="button" id="newWorkflowDefinitionButton" aria-label="New workflow definition">+</button>
+                  </div>
+                  <input id="workflowDefinitionSearch" type="search" placeholder="Search workflows">
+                  <div id="workflowDefinitionList" class="workflow-definition-list"></div>
+                </aside>
+                <main class="workflow-definition-workspace">
+                  <div id="workflowDefinitionEmpty" class="empty-state"><h3>Design an approval route</h3><p>Create a definition, configure its ordered stages, check it, then publish the immutable version used by new requests.</p><button type="button" id="emptyNewWorkflowDefinitionButton">Create workflow</button></div>
+                  <form id="workflowDefinitionForm" hidden>
+                    <header class="workflow-definition-header">
+                      <div><span class="eyebrow" id="workflowDefinitionLifecycle">Draft definition</span><h2 id="workflowDefinitionTitle">New workflow</h2><p id="workflowDefinitionPrefix" class="muted">The readable request prefix is assigned automatically.</p></div>
+                      <div class="table-action-group">
+                        <button type="button" class="secondary" id="cloneWorkflowDefinitionButton">Clone</button>
+                        <button type="button" class="secondary" id="checkpointWorkflowDefinitionButton">Checkpoint</button>
+                        <button type="button" class="secondary" id="checkWorkflowDefinitionButton">Check</button>
+                        <button type="submit" id="saveWorkflowDefinitionButton">Save draft</button>
+                        <button type="button" id="publishWorkflowDefinitionButton">Publish</button>
+                      </div>
+                    </header>
+                    <input name="editingWorkflowKey" type="hidden">
+                    <section class="workflow-config-card">
+                      <div class="workflow-config-card-heading"><div><span class="workflow-config-index">01</span><div><h3>Request binding</h3><p>Name the workflow and choose the record module it governs.</p></div></div><span id="workflowDefinitionStatus" class="status-pill status-draft">Draft</span></div>
+                      <div class="workflow-metadata-grid">
+                        <label>Workflow name<input name="name" maxlength="160" placeholder="Leave application approval" required></label>
+                        <label><span>Stable key <span class="muted">(automatic)</span></span><input name="workflowKey" maxlength="80" placeholder="Generated from workflow name" readonly required></label>
+                        <label>Source module<select name="sourceModuleKey" required></select></label>
+                        <label>Default form<select name="requestFormKey"></select></label>
+                        <label class="workflow-description-field">Description<textarea name="description" rows="3" maxlength="500" placeholder="Explain when this approval route is used."></textarea></label>
+                      </div>
+                    </section>
+                    <section class="workflow-config-card">
+                      <div class="workflow-config-card-heading"><div><span class="workflow-config-index">02</span><div><h3>Record policy</h3><p>Choose how the source record is protected while approval is pending.</p></div></div></div>
+                      <div class="workflow-policy-grid">
+                        <label>Lock scope<select name="lockScope"><option value="record">Lock the full record</option><option value="fields">Lock selected fields</option></select></label>
+                        <label>Locked field keys<input name="lockedFields" placeholder="amount, start_date, end_date"></label>
+                        <label>Snapshot field keys<input name="snapshotFields" placeholder="amount, requester_name"></label>
+                        <label class="checkbox-label"><input name="allowCancellation" type="checkbox"> Allow administrative cancellation</label>
+                      </div>
+                    </section>
+                    <section class="workflow-config-card workflow-stage-card workflow-visual-builder-card">
+                      <div class="workflow-config-card-heading workflow-route-heading">
+                        <div>
+                          <button type="button" class="workflow-route-back" id="closeWorkflowRouteDesigner" aria-label="Back to workflow details">←</button>
+                          <span class="workflow-config-index">03</span>
+                          <div><span class="workflow-route-kicker">Route designer</span><h3>Approval route</h3><p>Drag nodes freely, connect branches, then configure the selected node or line.</p></div>
+                        </div>
+                        <div class="workflow-route-heading-actions"><span id="workflowCanvasSaveState" class="muted">Canvas ready</span><button type="button" class="secondary workflow-route-save" id="saveWorkflowRouteDesigner">Save changes</button><span class="workflow-route-save-notice" id="workflowRouteSaveNotice" role="status" aria-live="polite"><span>✓</span> Changes saved</span><button type="button" id="openWorkflowRouteDesigner">Open route designer</button></div>
+                      </div>
+                      <div class="workflow-route-summary">
+                        <div><strong id="workflowRouteStageCount">0</strong><span>Approval stages</span></div>
+                        <div><strong id="workflowRouteConnectionCount">0</strong><span>Connections</span></div>
+                        <div><strong id="workflowRouteConditionCount">0</strong><span>Conditional paths</span></div>
+                        <p>Open the dedicated workspace to arrange the route and configure its nodes, forms, approvers and conditions.</p>
+                      </div>
+                      <div class="workflow-canvas-toolbar">
+                        <div class="workflow-node-palette" aria-label="Workflow node palette">
+                          <button type="button" class="secondary" data-add-workflow-node="start"><span class="workflow-palette-glyph is-start">S</span>Start</button>
+                          <button type="button" class="secondary" id="addWorkflowStageButton" data-add-workflow-node="approval"><span class="workflow-palette-glyph is-approval">A</span>Approval</button>
+                          <button type="button" class="secondary" data-add-workflow-node="end"><span class="workflow-palette-glyph is-end">E</span>End</button>
+                          <button type="button" class="secondary" id="workflowConnectButton">Connect</button>
+                        </div>
+                        <div class="workflow-canvas-controls" aria-label="Workflow canvas controls">
+                          <button type="button" class="secondary" id="workflowZoomOut" aria-label="Zoom out">−</button>
+                          <output id="workflowZoomLabel">100%</output>
+                          <button type="button" class="secondary" id="workflowZoomIn" aria-label="Zoom in">+</button>
+                          <button type="button" class="secondary" id="workflowFitCanvas">Fit</button>
+                          <button type="button" class="secondary workflow-inspector-toggle" id="workflowInspectorToggle" aria-expanded="true">Hide settings</button>
+                        </div>
+                      </div>
+                      <div class="workflow-builder-shell">
+                        <div id="workflowCanvasViewport" class="workflow-canvas-viewport">
+                          <div id="workflowCanvas" class="workflow-canvas" aria-label="Approval workflow canvas"></div>
+                        </div>
+                        <aside id="workflowCanvasInspector" class="workflow-canvas-inspector" aria-label="Workflow selection configuration"></aside>
+                      </div>
+                      <div id="workflowStageEditor" hidden></div>
+                    </section>
+                    <section class="workflow-config-card">
+                      <div class="workflow-config-card-heading"><div><span class="workflow-config-index">04</span><div><h3>Linked Automation Flows</h3><p>Published Automation Flows can react after this workflow records an event.</p></div></div></div>
+                      <div id="workflowLinkedAutomationFlows" class="workflow-stage-editor"></div>
+                    </section>
+                    <section id="workflowCheckPanel" class="workflow-check-panel" hidden></section>
+                    <footer class="workflow-definition-footer"><button type="button" class="secondary danger-link" id="archiveWorkflowDefinitionButton">Archive workflow</button><span class="muted">Published requests retain the exact version with which they started.</span></footer>
+                  </form>
+                </main>
               </div>
             </section>
 
@@ -787,6 +1011,166 @@
                         </table>
                       </div>
                     </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section id="adminDashboardBuilderSection" class="admin-section" hidden>
+              <div id="dashboardManagement" class="dashboard-management">
+                <div class="dashboard-management-layout">
+                  <aside class="dashboard-management-rail">
+                    <button type="button" id="newDashboardButton">New dashboard</button>
+                    <div id="dashboardSummaryTiles" class="dashboard-summary-tiles"></div>
+                    <nav class="dashboard-status-filter" aria-label="Dashboard status filters">
+                      <button type="button" class="is-active" data-dashboard-status="all"><span>All dashboards</span><strong id="dashboardAllCount">0</strong></button>
+                      <button type="button" data-dashboard-status="draft"><span>Draft</span><strong id="dashboardDraftCount">0</strong></button>
+                      <button type="button" data-dashboard-status="published"><span>Published</span><strong id="dashboardPublishedCount">0</strong></button>
+                      <button type="button" data-dashboard-status="archived"><span>Archived</span><strong id="dashboardArchivedCount">0</strong></button>
+                    </nav>
+                  </aside>
+                  <div class="dashboard-management-main">
+                    <div class="section-heading dashboard-management-heading">
+                      <div><span class="eyebrow">Dashboard Builder</span><h2>Dashboards</h2><p>Create reporting workspaces and prepare them for publishing.</p></div>
+                      <label class="dashboard-management-search"><span aria-hidden="true">⌕</span><input id="dashboardManagementSearch" type="search" placeholder="Search dashboards"></label>
+                    </div>
+                    <div class="table-wrap config-table-wrap">
+                      <table class="config-table dashboard-management-table">
+                        <thead><tr><th>Dashboard</th><th>Status</th><th>Widgets</th><th>Filters</th><th>Updated</th><th>Actions</th></tr></thead>
+                        <tbody id="dashboardManagementRows"></tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div id="dashboardBuilderStudio" class="dashboard-builder-studio" hidden>
+                <header class="dashboard-builder-studio-header">
+                  <button type="button" class="secondary" id="backToDashboardManagement">← Dashboards</button>
+                  <div><span class="eyebrow">Dashboard draft</span><h2 id="dashboardBuilderStudioTitle">Dashboard</h2><p id="dashboardBuilderStudioKey" class="muted"></p></div>
+                  <div class="table-action-group"><span id="dashboardStudioSaveState" class="dashboard-save-state">Saved</span><button type="button" class="secondary" id="previewDashboardButton">Preview</button><button type="button" class="secondary" id="checkDashboardButton">Check</button><button type="button" class="secondary" id="dashboardLifecycleButton">Version history</button><button type="button" class="secondary" id="dashboardAccessButton">Access</button><button type="button" class="secondary" id="dashboardStudioEditButton">Dashboard settings</button><button type="button" id="saveDashboardLayoutButton">Save draft</button><button type="button" id="publishDashboardButton">Publish</button></div>
+                </header>
+                <div class="dashboard-canvas-toolbar">
+                  <div class="dashboard-canvas-add-group"><button type="button" id="addDashboardWidgetButton">+ Add widget frame</button><button type="button" class="secondary" id="addDashboardFilterButton">+ Add filter</button><button type="button" class="secondary" id="dashboardStudioDataButton">Dashboard Data</button></div>
+                  <div class="dashboard-canvas-history"><button type="button" class="secondary" id="undoDashboardLayoutButton" aria-label="Undo layout change">Undo</button><button type="button" class="secondary" id="redoDashboardLayoutButton" aria-label="Redo layout change">Redo</button></div>
+                  <div class="dashboard-viewport-switch" role="group" aria-label="Dashboard layout preview"><button type="button" class="is-active" data-dashboard-viewport="desktop">Desktop · 12 columns</button><button type="button" data-dashboard-viewport="mobile">Mobile · 4 columns</button></div>
+                </div>
+                <div id="dashboardFilterBar" class="dashboard-filter-bar" aria-label="Dashboard filters"></div>
+                <div class="dashboard-canvas-workspace">
+                  <main class="dashboard-canvas-stage">
+                    <div id="dashboardCanvas" class="dashboard-canvas" data-viewport="desktop" aria-label="Dashboard layout canvas"></div>
+                    <div id="dashboardCanvasEmpty" class="dashboard-canvas-empty">
+                      <div class="dashboard-builder-shell-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+                      <span class="eyebrow">Empty dashboard</span>
+                      <h3>Add the first widget frame.</h3>
+                      <p>Arrange the layout now. Data mapping and chart rendering arrive with the standard widget item.</p>
+                      <button type="button" id="emptyAddDashboardWidgetButton">Add widget frame</button>
+                    </div>
+                  </main>
+                  <aside id="dashboardWidgetInspector" class="dashboard-widget-inspector">
+                    <div id="dashboardWidgetInspectorEmpty"><span class="eyebrow">Widget settings</span><h3>Select a frame</h3><p class="muted">Choose a widget on the canvas to rename, move, resize, duplicate, or remove it.</p></div>
+                    <div id="dashboardWidgetInspectorForm" hidden>
+                      <span class="eyebrow">Selected widget</span><h3 id="dashboardSelectedWidgetKey">Widget</h3>
+                      <label>Title<input id="dashboardWidgetTitle" maxlength="160"></label>
+                      <label>Widget type<select id="dashboardWidgetType"><option value="number">Number / KPI</option><option value="donut">Donut</option><option value="bar">Bar</option><option value="line">Line</option><option value="table">Table</option><option value="pivot">Pivot table</option></select></label>
+                      <label>Dashboard data<select id="dashboardWidgetDataSource"><option value="">Choose a data source</option></select></label>
+                      <div id="dashboardWidgetMappingFields" class="dashboard-widget-mapping-fields"></div>
+                      <details class="dashboard-widget-display-options"><summary>Display options</summary><div id="dashboardWidgetDisplayFields"></div></details>
+                      <div class="dashboard-widget-data-actions"><button type="button" class="secondary" id="refreshDashboardWidgetButton">Refresh preview</button><button type="button" class="secondary" id="exportDashboardWidgetButton" hidden>Export CSV</button><button type="button" class="secondary" id="exportDashboardWidgetExcelButton" hidden>Export Excel</button><span id="dashboardWidgetPreviewStatus" class="muted" aria-live="polite"></span></div>
+                      <div class="dashboard-widget-measurements"><label>Width<input id="dashboardWidgetWidth" type="number" min="1" max="12"></label><label>Height<input id="dashboardWidgetHeight" type="number" min="1" max="20"></label></div>
+                      <fieldset class="dashboard-widget-keyboard-controls"><legend>Move by one grid cell</legend><div><button type="button" class="secondary" data-dashboard-move="up" aria-label="Move widget up">↑</button></div><div><button type="button" class="secondary" data-dashboard-move="left" aria-label="Move widget left">←</button><button type="button" class="secondary" data-dashboard-move="down" aria-label="Move widget down">↓</button><button type="button" class="secondary" data-dashboard-move="right" aria-label="Move widget right">→</button></div></fieldset>
+                      <div class="dashboard-widget-inspector-actions"><button type="button" class="secondary" id="duplicateDashboardWidgetButton">Duplicate</button><button type="button" class="secondary danger-link" id="removeDashboardWidgetButton">Remove</button></div>
+                    </div>
+                  </aside>
+                </div>
+              </div>
+            </section>
+
+            <div id="dashboardFilterDrawer" class="modal-backdrop drawer-backdrop" hidden>
+              <form id="dashboardFilterForm" class="panel modal-card dashboard-filter-drawer has-fixed-modal-regions">
+                <header class="modal-header"><div><span class="eyebrow">Dashboard filter</span><h2 id="dashboardFilterFormTitle">Add filter</h2><p>Map a visible control to a declared saved-query parameter.</p></div><button type="button" class="secondary" id="closeDashboardFilterDrawer">Close</button></header>
+                <div class="modal-scroll-body">
+                  <input type="hidden" name="editingFilterKey">
+                  <label>Filter name<input name="name" required maxlength="160" placeholder="Created date"></label>
+                  <label>Stable key<input name="filterKey" required maxlength="80" placeholder="created_date"></label>
+                  <label>Filter type<select name="type"><option value="date_range">Date range</option><option value="dropdown">Dropdown</option><option value="multi_select">Multi-select</option><option value="search">Search text</option><option value="current_user">Current user</option><option value="organization_unit">Department / organization</option></select></label>
+                  <label>Target Dashboard Data<select name="dataSourceKey" required></select></label>
+                  <label>Parameter name<select name="parameterName" required></select></label>
+                  <label class="dashboard-filter-end-parameter">End-date parameter<select name="endParameterName"></select></label>
+                  <label class="dashboard-filter-options-field">Options <textarea name="optionsText" rows="5" placeholder="active=Active&#10;inactive=Inactive"></textarea><small>One option per line. Use value=Label when they differ.</small></label>
+                  <label class="dashboard-filter-default-field">Default value<input name="defaultValue" placeholder="Optional"></label>
+                  <label class="checkbox-label"><input type="checkbox" name="required"> Required before widgets run</label>
+                  <label class="checkbox-label"><input type="checkbox" name="shareInUrl" checked> Keep non-sensitive value in the page URL</label>
+                  <div class="dashboard-source-safety-note"><strong>Safe parameter boundary</strong><p>Filter values are sent as bound parameters. They never modify saved SQL text.</p></div>
+                </div>
+                <footer class="form-actions"><button type="button" class="secondary danger-link" id="removeDashboardFilterButton" hidden>Remove filter</button><span></span><button type="button" class="secondary" id="cancelDashboardFilterDrawer">Cancel</button><button type="submit">Save filter</button></footer>
+              </form>
+            </div>
+
+            <div id="dashboardAccessDrawer" class="modal-backdrop drawer-backdrop" hidden>
+              <form id="dashboardAccessForm" class="panel modal-card dashboard-filter-drawer has-fixed-modal-regions">
+                <header class="modal-header"><div><span class="eyebrow">Dashboard access</span><h2>View and configure permissions</h2><p>Published dashboards are private unless a rule grants access.</p></div><button type="button" class="secondary" id="closeDashboardAccessDrawer">Close</button></header>
+                <div class="modal-scroll-body"><div id="dashboardAccessRules" class="dashboard-access-rules"></div><div class="dashboard-source-safety-note"><strong>Secure default</strong><p>No matching permission means no access. Admins retain configuration access.</p></div></div>
+                <footer class="form-actions"><button type="button" class="secondary" id="cancelDashboardAccessDrawer">Cancel</button><button type="submit">Save access</button></footer>
+              </form>
+            </div>
+
+            <div id="dashboardLifecycleDrawer" class="modal-backdrop drawer-backdrop" hidden>
+              <form id="dashboardLifecycleForm" class="panel modal-card dashboard-filter-drawer has-fixed-modal-regions">
+                <header class="modal-header"><div><span class="eyebrow">Dashboard lifecycle</span><h2>Version history</h2><p>Create checkpoints, export configuration, or restore an earlier draft.</p></div><button type="button" class="secondary" id="closeDashboardLifecycleDrawer">Close</button></header>
+                <div class="modal-scroll-body dashboard-lifecycle-body">
+                  <section class="dashboard-access-card"><div class="dashboard-access-card-header"><h3>Create checkpoint</h3><small>Capture the current draft with a name and remark.</small></div><label>Checkpoint name<input name="name" maxlength="160" required placeholder="Before sales layout update"></label><label>Remark<textarea name="remark" rows="4" maxlength="500" placeholder="What changed and why"></textarea></label><button type="submit">Create checkpoint</button></section>
+                  <section class="dashboard-access-card"><div class="dashboard-access-card-header"><h3>Configuration file</h3><small>Versioned JSON contains configuration only—never credentials or query results.</small></div><button type="button" class="secondary" id="exportDashboardConfigurationButton">Export JSON</button><label>Import JSON<input type="file" id="importDashboardConfigurationInput" accept="application/json,.json"></label></section>
+                  <section><div class="dashboard-access-card-header"><h3>Saved versions</h3><small>Restoring creates a new draft checkpoint and does not change the published version.</small></div><div id="dashboardVersionList" class="version-timeline"></div></section>
+                </div>
+                <footer class="form-actions"><button type="button" class="secondary" id="cancelDashboardLifecycleDrawer">Close</button></footer>
+              </form>
+            </div>
+
+            <section id="adminDashboardSourcesSection" class="admin-section" hidden>
+              <div class="dashboard-source-layout">
+                <aside class="dashboard-source-catalogue">
+                  <div class="dashboard-source-catalogue-heading">
+                    <div><span class="eyebrow">Dashboard Builder</span><h2>Data sources</h2></div>
+                    <button type="button" id="newDashboardSourceButton">New source</button>
+                  </div>
+                  <label class="dashboard-source-search"><span aria-hidden="true">⌕</span><input id="dashboardSourceSearch" type="search" placeholder="Search sources"></label>
+                  <div class="dashboard-source-counts" id="dashboardSourceCounts"></div>
+                  <div id="dashboardSourceList" class="dashboard-source-list" aria-live="polite"></div>
+                </aside>
+
+                <div class="dashboard-source-main">
+                  <div id="dashboardSourceEmpty" class="dashboard-source-empty">
+                    <div class="dashboard-source-empty-mark" aria-hidden="true">SQL</div>
+                    <span class="eyebrow">No source selected</span>
+                    <h2>Turn a database view into a dashboard contract.</h2>
+                    <p>Register an existing SQL view, inspect the columns it returns, then run a bounded preview before connecting it to a widget.</p>
+                    <button type="button" id="emptyNewDashboardSourceButton">Register a SQL view</button>
+                  </div>
+
+                  <div id="dashboardSourceDetail" hidden>
+                    <div class="dashboard-source-detail-heading">
+                      <div><span class="eyebrow" id="dashboardSourceTypeLabel">SQL view</span><h2 id="dashboardSourceTitle">Data source</h2><p id="dashboardSourceDescription" class="muted"></p></div>
+                      <div class="table-action-group"><button type="button" class="secondary" id="editDashboardSourceButton">Edit source</button><button type="button" class="secondary" id="archiveDashboardSourceButton">Archive</button></div>
+                    </div>
+
+                    <div class="dashboard-contract-strip" aria-label="Data-source readiness">
+                      <div><span>01</span><small>Source</small><strong id="dashboardContractSource">Registered</strong></div>
+                      <div><span>02</span><small>Columns</small><strong id="dashboardContractColumns">Not inspected</strong></div>
+                      <div><span>03</span><small>Preview</small><strong id="dashboardContractPreview">Not run</strong></div>
+                    </div>
+
+                    <section class="dashboard-source-card">
+                      <div class="dashboard-source-card-heading"><div><span class="eyebrow">Data contract</span><h3>Available columns</h3><p class="muted">These fields become widget labels, values, dates, and groups.</p></div><button type="button" class="secondary" id="refreshDashboardColumnsButton">Refresh columns</button></div>
+                      <div id="dashboardSourceColumns" class="dashboard-column-grid"></div>
+                    </section>
+
+                    <section class="dashboard-source-card dashboard-preview-card">
+                      <div class="dashboard-source-card-heading"><div><span class="eyebrow">Bounded execution</span><h3>Result preview</h3><p class="muted">Preview uses the source row limit and never changes CRM data.</p></div><button type="button" id="runDashboardPreviewButton">Run preview</button></div>
+                      <label id="dashboardPreviewParametersLabel" class="dashboard-preview-parameters" hidden>Parameters (JSON)<textarea id="dashboardPreviewParameters" rows="3" spellcheck="false">{}</textarea></label>
+                      <div id="dashboardPreviewMeta" class="dashboard-preview-meta"></div>
+                      <div id="dashboardPreviewResult" class="dashboard-preview-result"><p class="muted">Run preview to inspect returned rows.</p></div>
+                    </section>
                   </div>
                 </div>
               </div>
@@ -1585,6 +1969,12 @@
           </div>
         </section>
 
+        </section>
+        <footer class="app-footer">
+          <span>Amperes CRM</span>
+          <span class="app-footer-status"><i aria-hidden="true"></i> Private workspace</span>
+          <span>Built for Amperes Electronics</span>
+        </footer>
       </section>
     </main>
 
@@ -1697,7 +2087,7 @@
     <div id="actionFlowCreateModal" class="modal-backdrop" hidden>
       <form id="actionFlowCreateForm" class="panel modal-card narrow-modal confirmation-modal-card action-flow-create-modal-card" role="dialog" aria-modal="true" aria-labelledby="actionFlowCreateTitle" aria-describedby="actionFlowCreateHelp">
         <div class="modal-header">
-          <h2 id="actionFlowCreateTitle">Create Action Flow</h2>
+          <h2 id="actionFlowCreateTitle">Create Automation Flow</h2>
           <div class="modal-title-actions">
             <button type="button" class="icon-button" id="closeActionFlowCreateModal" aria-label="Close">x</button>
           </div>
@@ -1729,10 +2119,10 @@
     </div>
 
     <div id="actionFlowVersionsDrawer" class="modal-backdrop drawer-backdrop" hidden>
-      <aside class="panel version-history-drawer" aria-label="Action Flow Version History">
+      <aside class="panel version-history-drawer" aria-label="Automation Flow Version History">
         <div class="modal-header">
           <div>
-            <span class="eyebrow">Action Flow history</span>
+            <span class="eyebrow">Automation Flow history</span>
             <h2 id="actionFlowVersionsTitle">Version History</h2>
             <p class="muted">Save named checkpoints, publish a tested version, or restore an earlier design safely.</p>
           </div>
@@ -1748,7 +2138,7 @@
             <div class="form-actions end-actions"><button type="button" id="createActionFlowVersionButton">Save Version</button></div>
           </section>
           <section class="version-history-section">
-            <div class="section-heading-row"><div><span class="eyebrow">Saved versions</span><h3>Action Flow timeline</h3></div><span class="muted" id="actionFlowVersionsCount">0 versions</span></div>
+            <div class="section-heading-row"><div><span class="eyebrow">Saved versions</span><h3>Automation Flow timeline</h3></div><span class="muted" id="actionFlowVersionsCount">0 versions</span></div>
             <div class="version-timeline" id="actionFlowVersionsList"></div>
           </section>
         </div>
@@ -1766,6 +2156,87 @@
         <label>Description<textarea name="description" rows="4" maxlength="255"></textarea></label>
         <label class="checkbox-label"><input name="enabled" type="checkbox" checked> Enabled</label>
         <div class="form-actions end-actions"><button type="submit">Save</button><button type="button" class="secondary" id="cancelDepartmentNodeModal">Cancel</button></div>
+      </form>
+    </div>
+    <div id="dashboardSourceDrawer" class="modal-backdrop drawer-backdrop" hidden>
+      <form id="dashboardSourceForm" class="panel dashboard-source-drawer" role="dialog" aria-modal="true" aria-labelledby="dashboardSourceFormTitle">
+        <div class="modal-header">
+          <div><span class="eyebrow">Dashboard data contract</span><h2 id="dashboardSourceFormTitle">Register data source</h2><p class="muted">Choose an existing SQL view or add an advanced guarded SELECT query.</p></div>
+          <div class="modal-title-actions"><button type="button" class="icon-button fullscreen-button" data-modal-fullscreen aria-label="Enlarge to full screen" aria-pressed="false" title="Enlarge to full screen"></button><button type="button" class="icon-button" id="closeDashboardSourceDrawer" aria-label="Close">x</button></div>
+        </div>
+        <div class="dashboard-source-form-body">
+          <input name="editingDataSourceKey" type="hidden">
+          <div class="dashboard-source-form-grid">
+            <label>Source type<select name="sourceType"><option value="sql_view">SQL view</option><option value="select_query">Guarded SELECT query</option></select></label>
+            <label>Display name<input name="name" maxlength="160" placeholder="Customers by status" required></label>
+            <label>Stable key<input name="dataSourceKey" maxlength="80" placeholder="customers_by_status"></label>
+            <label class="dashboard-view-field">Database view<select name="viewName"></select></label>
+            <label class="dashboard-query-field" hidden>SELECT query<textarea name="querySql" rows="9" maxlength="50000" spellcheck="false" placeholder="SELECT status AS label, COUNT(*) AS value FROM customers GROUP BY status"></textarea></label>
+            <label>Maximum rows<input name="rowLimit" type="number" min="1" max="10000" value="1000" required></label>
+            <label>Timeout (milliseconds)<input name="timeoutMs" type="number" min="100" max="60000" value="10000" required></label>
+            <label class="dashboard-source-description-field">Description<textarea name="description" rows="3" maxlength="500" placeholder="Explain what this source measures and where it should be used."></textarea></label>
+          </div>
+          <div class="dashboard-source-safety-note"><strong>Read-only boundary</strong><p>Only registered sources can run. Queries are parameterized, time-limited, row-limited, and rejected if they contain mutation or unsafe SQL.</p></div>
+        </div>
+        <div class="form-actions end-actions"><button type="submit" id="saveDashboardSourceButton">Save source</button><button type="button" class="secondary" id="cancelDashboardSourceDrawer">Cancel</button></div>
+      </form>
+    </div>
+    <div id="dashboardFormModal" class="modal-backdrop" hidden>
+      <form id="dashboardForm" class="panel modal-card narrow-modal dashboard-form-modal" role="dialog" aria-modal="true" aria-labelledby="dashboardFormTitle">
+        <div class="modal-header"><div><span class="eyebrow">Dashboard Builder</span><h2 id="dashboardFormTitle">New dashboard</h2><p id="dashboardFormHelp" class="muted">Create a draft dashboard. Widgets and layouts are added in the builder.</p></div><div class="modal-title-actions"><button type="button" class="icon-button" id="closeDashboardFormModal" aria-label="Close">x</button></div></div>
+        <input name="mode" type="hidden" value="create">
+        <input name="sourceDashboardKey" type="hidden">
+        <label>Dashboard name<input name="name" maxlength="160" placeholder="Sales overview" required></label>
+        <label>Stable key<input name="dashboardKey" maxlength="80" placeholder="sales_overview"></label>
+        <label>Description<textarea name="description" rows="4" maxlength="500" placeholder="Explain who uses this dashboard and what decisions it supports."></textarea></label>
+        <div class="form-actions end-actions"><button type="submit" id="saveDashboardButton">Create dashboard</button><button type="button" class="secondary" id="cancelDashboardFormModal">Cancel</button></div>
+      </form>
+    </div>
+    <div id="workflowSubmitModal" class="modal-backdrop" hidden>
+      <form id="workflowSubmitForm" class="panel modal-card narrow-modal workflow-command-modal" role="dialog" aria-modal="true" aria-labelledby="workflowSubmitTitle">
+        <div class="modal-header"><div><span class="eyebrow">Approval Workflow</span><h2 id="workflowSubmitTitle">New approval request</h2><p class="muted">Choose the published workflow and the existing source record that needs approval.</p></div><button type="button" class="icon-button" id="closeWorkflowSubmitModal" aria-label="Close">x</button></div>
+        <label>Workflow<select name="workflowKey" required></select></label>
+        <label>Source record ID<input name="sourceRecordId" type="number" min="1" required placeholder="For example: 42"></label>
+        <div id="workflowSubmitBinding" class="workflow-command-note">The source module is taken from the selected workflow.</div>
+        <label id="workflowSubmitAttachments" hidden>Supporting attachments<input name="attachments" type="file" multiple><small class="muted"></small></label>
+        <div class="form-actions end-actions"><button type="submit">Send for approval</button><button type="button" class="secondary" id="cancelWorkflowSubmitModal">Cancel</button></div>
+      </form>
+    </div>
+    <div id="workflowDelegationModal" class="modal-backdrop" hidden>
+      <form id="workflowDelegationForm" class="panel modal-card narrow-modal" role="dialog" aria-modal="true" aria-labelledby="workflowDelegationTitle">
+        <div class="modal-header"><div><span class="eyebrow">Approval coverage</span><h2 id="workflowDelegationTitle">Create delegation</h2></div><button type="button" class="icon-button" id="closeWorkflowDelegationModal" aria-label="Close">x</button></div>
+        <label>Original approver<select name="delegatorUserId" required></select></label><label>Replacement approver<select name="delegateUserId" required></select></label>
+        <label>Workflow scope<select name="workflowKey"><option value="">All workflows</option></select></label>
+        <div class="two-column"><label>Original approver role<select name="scopeRole"><option value="">Any role</option></select></label><label>Original approver department<select name="scopeDepartmentId"><option value="">Any department</option></select></label></div>
+        <div class="two-column"><label>Starts<input name="startsAt" type="datetime-local" required></label><label>Ends<input name="endsAt" type="datetime-local" required></label></div>
+        <label>Reason<textarea name="reason" rows="3" maxlength="500" required placeholder="For example: Annual leave coverage"></textarea></label>
+        <div class="form-actions end-actions"><button type="submit">Create delegation</button><button type="button" class="secondary" id="cancelWorkflowDelegationModal">Cancel</button></div>
+      </form>
+    </div>
+    <div id="workflowReassignModal" class="modal-backdrop" hidden>
+      <form id="workflowReassignForm" class="panel modal-card narrow-modal" role="dialog" aria-modal="true" aria-labelledby="workflowReassignTitle">
+        <div class="modal-header"><div><span class="eyebrow">One request only</span><h2 id="workflowReassignTitle">Reassign approval</h2></div><button type="button" class="icon-button" id="closeWorkflowReassignModal" aria-label="Close">x</button></div>
+        <input name="requestKey" type="hidden"><label>Current assignment<select name="assignmentId" required></select></label><label>Replacement approver<select name="replacementUserId" required></select></label>
+        <label>Reason<textarea name="reason" rows="3" maxlength="500" required placeholder="Explain why this assignment is moving"></textarea></label>
+        <div class="form-actions end-actions"><button type="submit">Reassign approval</button><button type="button" class="secondary" id="cancelWorkflowReassignModal">Cancel</button></div>
+      </form>
+    </div>
+    <div id="workflowDecisionModal" class="modal-backdrop" hidden>
+      <form id="workflowDecisionForm" class="panel modal-card narrow-modal workflow-command-modal" role="dialog" aria-modal="true" aria-labelledby="workflowDecisionTitle">
+        <div class="modal-header"><div><span class="eyebrow">Approval decision</span><h2 id="workflowDecisionTitle">Approve request</h2><p id="workflowDecisionHelp" class="muted"></p></div><button type="button" class="icon-button" id="closeWorkflowDecisionModal" aria-label="Close">x</button></div>
+        <input name="requestKey" type="hidden"><input name="action" type="hidden">
+        <div id="workflowDecisionResponseFields" class="workflow-decision-response-fields"></div>
+        <label id="workflowDecisionAttachments" hidden>Decision attachments<input name="attachments" type="file" multiple><small class="muted"></small></label>
+        <label>Remark<textarea name="remark" rows="5" maxlength="2000" placeholder="Add context for the requester"></textarea></label>
+        <div class="form-actions end-actions"><button type="submit" id="confirmWorkflowDecisionButton">Approve</button><button type="button" class="secondary" id="cancelWorkflowDecisionModal">Cancel</button></div>
+      </form>
+    </div>
+    <div id="workflowLifecycleModal" class="modal-backdrop" hidden>
+      <form id="workflowLifecycleForm" class="panel modal-card narrow-modal workflow-command-modal" role="dialog" aria-modal="true" aria-labelledby="workflowLifecycleTitle">
+        <div class="modal-header"><div><span class="eyebrow">Request action</span><h2 id="workflowLifecycleTitle">Withdraw request</h2><p id="workflowLifecycleHelp" class="muted"></p></div><button type="button" class="icon-button" id="closeWorkflowLifecycleModal" aria-label="Close">x</button></div>
+        <input name="requestKey" type="hidden"><input name="action" type="hidden">
+        <label>Remark<textarea name="remark" rows="5" maxlength="2000" placeholder="Explain why this action is needed"></textarea></label>
+        <div class="form-actions end-actions"><button type="submit" id="confirmWorkflowLifecycleButton">Continue</button><button type="button" class="secondary" id="cancelWorkflowLifecycleModal">Cancel</button></div>
       </form>
     </div>
     <script src="/app.js"></script>

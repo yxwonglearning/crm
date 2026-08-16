@@ -59,6 +59,7 @@ function normalizeExecution(row) {
     flowKey: row.flow_key || '',
     flowName: row.flow_name || '',
     flowVersion: row.flow_version,
+    triggerEventKey: row.trigger_event_key || '',
     status: row.execution_status,
     triggerPayload: parseJson(row.trigger_payload_json, {}),
     result: parseJson(row.result_json, {}),
@@ -115,6 +116,20 @@ async function listEnabledFlowsForTrigger(triggerType, triggerModule) {
        AND (trigger_module = ? OR trigger_module IS NULL OR trigger_module = '')
      ORDER BY id ASC`,
     [triggerType, triggerModule || null]
+  );
+  return rows.map(normalizeRuntimeFlow);
+}
+
+async function listEnabledFlowsForWorkflowEvent(workflowKey) {
+  const [rows] = await pool.execute(
+    `SELECT *
+     FROM crm_action_flows
+     WHERE flow_status = 'enabled'
+       AND trigger_type = 'workflow_event'
+       AND (trigger_module = ? OR trigger_module IS NULL OR trigger_module = '')
+       AND published_flow_json IS NOT NULL
+     ORDER BY id ASC`,
+    [workflowKey || null]
   );
   return rows.map(normalizeRuntimeFlow);
 }
@@ -358,6 +373,33 @@ async function createExecution(flow, triggerPayload = {}) {
   return result.insertId;
 }
 
+async function findExecutionByTriggerEvent(flowId, eventKey) {
+  const [rows] = await pool.execute(
+    `SELECT executions.*, flows.flow_key, flows.name AS flow_name
+     FROM crm_action_flow_executions executions
+     INNER JOIN crm_action_flows flows ON flows.id = executions.flow_id
+     WHERE executions.flow_id = ? AND executions.trigger_event_key = ? LIMIT 1`,
+    [flowId, eventKey]
+  );
+  return rows[0] ? normalizeExecution(rows[0]) : null;
+}
+
+async function createEventExecution(flow, triggerPayload = {}) {
+  try {
+    const [result] = await pool.execute(
+      `INSERT INTO crm_action_flow_executions
+       (flow_id, flow_version, execution_status, trigger_payload_json, trigger_event_key, started_at)
+       VALUES (?, ?, 'running', ?, ?, CURRENT_TIMESTAMP)`,
+      [flow.id, flow.currentVersion || 1, JSON.stringify(triggerPayload || {}), triggerPayload.eventKey]
+    );
+    return { id: Number(result.insertId), replayed: false, execution: null };
+  } catch (error) {
+    if (error.code !== 'ER_DUP_ENTRY') throw error;
+    const execution = await findExecutionByTriggerEvent(flow.id, triggerPayload.eventKey);
+    return { id: execution?.id || null, replayed: true, execution };
+  }
+}
+
 async function finishExecution(executionId, status, result = {}) {
   await pool.execute(
     `UPDATE crm_action_flow_executions
@@ -429,6 +471,7 @@ module.exports = {
   findFlowByKey,
   findPublishedFlowByKey,
   listEnabledFlowsForTrigger,
+  listEnabledFlowsForWorkflowEvent,
   listEnabledScheduledFlows,
   findLatestScheduledExecution,
   createFlow,
@@ -447,6 +490,8 @@ module.exports = {
   saveConnector,
   deleteConnector,
   createExecution,
+  createEventExecution,
+  findExecutionByTriggerEvent,
   finishExecution,
   listExecutions,
   createTask,

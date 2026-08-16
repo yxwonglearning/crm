@@ -4,6 +4,7 @@ const moduleConfig = require('../sysadmin/module-config.service');
 const repository = require('./users.repository');
 const departmentRepository = require('../departments/departments.repository');
 const { validateFieldValue } = require('../../shared/field-validation');
+const workflowProtection = require('../workflows/workflows.protection');
 
 const systemFieldKeys = new Set(['name', 'staffId', 'email', 'password', 'role', 'status', 'organizationNodeId']);
 
@@ -160,6 +161,12 @@ async function updateUser(id, input) {
     ...existingCustomFields,
     ...await customFieldsFromInput(input, config.fields)
   });
+  await workflowProtection.assertUpdateAllowed(
+    'users',
+    id,
+    { ...existing, ...existingCustomFields },
+    { ...existing, ...existingCustomFields, ...input }
+  );
 
   try {
     await repository.updateUser(id, updates);

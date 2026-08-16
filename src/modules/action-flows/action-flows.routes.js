@@ -13,7 +13,7 @@ const flowSchema = z.object({
   description: z.string().trim().max(255).optional(),
   status: z.enum(['draft', 'enabled', 'disabled']).default('draft'),
   triggerCategory: z.string().trim().max(80).default('record'),
-  triggerType: z.enum(['record_created', 'record_updated', 'status_changed', 'record_deleted', 'manual', 'scheduled']).default('record_created'),
+  triggerType: z.enum(['record_created', 'record_updated', 'status_changed', 'record_deleted', 'workflow_event', 'manual', 'scheduled']).default('record_created'),
   triggerModule: z.string().trim().max(80).optional(),
   definition: z.object({}).passthrough().optional(),
   bumpVersion: z.boolean().optional()

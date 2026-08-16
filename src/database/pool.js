@@ -12,4 +12,15 @@ const pool = mysql.createPool({
   namedPlaceholders: true
 });
 
-module.exports = { pool };
+const dashboardPool = mysql.createPool({
+  host: config.db.host,
+  port: config.db.port,
+  user: config.dashboardDb.user,
+  password: config.dashboardDb.password,
+  database: config.db.database,
+  waitForConnections: true,
+  connectionLimit: 4,
+  namedPlaceholders: true
+});
+
+module.exports = { pool, dashboardPool };

@@ -26,12 +26,17 @@ const config = {
   jwtRememberExpiresIn: process.env.JWT_REMEMBER_EXPIRES_IN || '30d',
   jwtIssuer: process.env.JWT_ISSUER || 'self-hosted-crm',
   jwtAudience: process.env.JWT_AUDIENCE || 'self-hosted-crm-users',
+  emailSettingsEncryptionKey: process.env.EMAIL_SETTINGS_ENCRYPTION_KEY || process.env.JWT_SECRET || 'dev-only-change-me',
   db: {
     host: process.env.DB_HOST || '127.0.0.1',
     port: Number(process.env.DB_PORT || 3306),
     user: required('DB_USER', 'crm_app'),
     password: required('DB_PASSWORD', 'crm_app_password'),
     database: required('DB_NAME', 'crm')
+  },
+  dashboardDb: {
+    user: process.env.DASHBOARD_DB_USER || required('DB_USER', 'crm_app'),
+    password: process.env.DASHBOARD_DB_PASSWORD || required('DB_PASSWORD', 'crm_app_password')
   },
   admin: {
     name: process.env.ADMIN_NAME || 'System Admin',

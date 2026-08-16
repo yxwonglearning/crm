@@ -7,6 +7,7 @@ const { normalizePhone } = require('./phone');
 const { validateFieldValue } = require('../../shared/field-validation');
 const { orderedFormulaFields } = require('../../shared/formula-dependencies');
 const vm = require('vm');
+const workflowProtection = require('../workflows/workflows.protection');
 
 const systemFieldKeys = new Set([
   'companyName',
@@ -375,6 +376,13 @@ async function updateCustomer(id, input, user) {
     ...parseCustomFields(existing.custom_fields),
     ...customer.customFields
   };
+  await workflowProtection.assertUpdateAllowed(
+    'customers',
+    id,
+    { ...normalizeCustomer(existing), ...parseCustomFields(existing.custom_fields) },
+    { ...normalizeCustomer(existing), ...customer, ...customer.customFields },
+    customer.detailTables || {}
+  );
   await repository.updateCustomer(id, customer);
   await repository.upsertDetailRows(id, (await baseCustomerFieldConfig()).fields, customer.detailTables || {});
   return hydrateDetailValues(normalizeCustomer(await repository.findCustomerById(id)));
@@ -385,6 +393,7 @@ async function deleteCustomers(ids) {
     throw new AppError('Select at least one customer to delete', 422);
   }
 
+  for (const id of ids) await workflowProtection.assertDeleteAllowed('customers', id);
   return repository.deleteCustomers(ids);
 }
 

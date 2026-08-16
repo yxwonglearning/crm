@@ -411,6 +411,10 @@ CREATE TABLE IF NOT EXISTS crm_notifications (
   recipient_user_id BIGINT UNSIGNED NOT NULL,
   title VARCHAR(190) NOT NULL,
   message TEXT NOT NULL,
+  notification_type VARCHAR(80) NOT NULL DEFAULT 'general',
+  request_key VARCHAR(100) NULL,
+  source_event_key VARCHAR(190) NULL,
+  metadata_json JSON NULL,
   is_read TINYINT(1) NOT NULL DEFAULT 0,
   source_flow_id BIGINT UNSIGNED NULL,
   source_execution_id BIGINT UNSIGNED NULL,
@@ -420,7 +424,43 @@ CREATE TABLE IF NOT EXISTS crm_notifications (
   PRIMARY KEY (id),
   KEY crm_notifications_recipient_idx (recipient_user_id, is_read, created_at),
   KEY crm_notifications_source_execution_idx (source_execution_id),
+  UNIQUE KEY crm_notifications_event_recipient_unique (source_event_key, recipient_user_id),
   CONSTRAINT crm_notifications_recipient_fk FOREIGN KEY (recipient_user_id) REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT crm_notifications_source_flow_fk FOREIGN KEY (source_flow_id) REFERENCES crm_action_flows(id) ON DELETE SET NULL,
   CONSTRAINT crm_notifications_source_execution_fk FOREIGN KEY (source_execution_id) REFERENCES crm_action_flow_executions(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS crm_email_settings (
+  id TINYINT UNSIGNED NOT NULL DEFAULT 1,
+  provider VARCHAR(40) NOT NULL DEFAULT 'gmail',
+  is_enabled TINYINT(1) NOT NULL DEFAULT 0,
+  sender_name VARCHAR(160) NULL,
+  sender_email VARCHAR(190) NULL,
+  reply_to VARCHAR(190) NULL,
+  settings_json JSON NULL,
+  secret_ciphertext TEXT NULL,
+  last_test_status ENUM('untested', 'ready', 'failed') NOT NULL DEFAULT 'untested',
+  last_test_message VARCHAR(500) NULL,
+  last_tested_at TIMESTAMP NULL,
+  updated_by BIGINT UNSIGNED NULL,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  CONSTRAINT crm_email_settings_updated_by_fk FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS crm_email_deliveries (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  source_event_key VARCHAR(190) NOT NULL,
+  request_key VARCHAR(100) NULL,
+  recipient_email VARCHAR(190) NOT NULL,
+  delivery_status ENUM('pending', 'sent', 'failed', 'skipped') NOT NULL DEFAULT 'pending',
+  attempt_count INT UNSIGNED NOT NULL DEFAULT 0,
+  provider_message_id VARCHAR(255) NULL,
+  last_error_message VARCHAR(500) NULL,
+  sent_at TIMESTAMP NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY crm_email_deliveries_event_recipient_unique (source_event_key, recipient_email),
+  KEY crm_email_deliveries_status_idx (delivery_status, updated_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

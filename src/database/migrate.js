@@ -29,6 +29,19 @@ async function ensureIndex(connection, tableName, indexName, definition) {
   }
 }
 
+async function ensureForeignKey(connection, tableName, constraintName, definition) {
+  const [rows] = await connection.execute(
+    `SELECT COUNT(*) AS count
+     FROM information_schema.REFERENTIAL_CONSTRAINTS
+     WHERE CONSTRAINT_SCHEMA = ? AND TABLE_NAME = ? AND CONSTRAINT_NAME = ?`,
+    [config.db.database, tableName, constraintName]
+  );
+
+  if (rows[0].count === 0) {
+    await connection.query(`ALTER TABLE \`${tableName}\` ADD CONSTRAINT \`${constraintName}\` ${definition}`);
+  }
+}
+
 async function dropIndexIfExists(connection, tableName, indexName) {
   const [rows] = await connection.execute(
     `SELECT COUNT(*) AS count
@@ -428,14 +441,18 @@ async function main() {
       execution_status ENUM('queued', 'running', 'success', 'failed', 'skipped') NOT NULL DEFAULT 'queued',
       trigger_payload_json JSON NULL,
       result_json JSON NULL,
+      trigger_event_key VARCHAR(120) NULL,
       started_at TIMESTAMP NULL,
       finished_at TIMESTAMP NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (id),
       KEY crm_action_flow_executions_flow_id_idx (flow_id),
+      UNIQUE KEY crm_action_flow_executions_event_unique (flow_id, trigger_event_key),
       CONSTRAINT crm_action_flow_executions_flow_id_fk FOREIGN KEY (flow_id) REFERENCES crm_action_flows(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
   );
+  await ensureColumn(connection, 'crm_action_flow_executions', 'trigger_event_key', '`trigger_event_key` VARCHAR(120) NULL AFTER `trigger_payload_json`');
+  await ensureIndex(connection, 'crm_action_flow_executions', 'crm_action_flow_executions_event_unique', 'UNIQUE KEY `crm_action_flow_executions_event_unique` (`flow_id`, `trigger_event_key`)');
   await connection.query(
     `CREATE TABLE IF NOT EXISTS crm_tasks (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -478,6 +495,595 @@ async function main() {
       CONSTRAINT crm_notifications_recipient_fk FOREIGN KEY (recipient_user_id) REFERENCES users(id) ON DELETE CASCADE,
       CONSTRAINT crm_notifications_source_flow_fk FOREIGN KEY (source_flow_id) REFERENCES crm_action_flows(id) ON DELETE SET NULL,
       CONSTRAINT crm_notifications_source_execution_fk FOREIGN KEY (source_execution_id) REFERENCES crm_action_flow_executions(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await ensureColumn(connection, 'crm_notifications', 'notification_type', "`notification_type` VARCHAR(80) NOT NULL DEFAULT 'general' AFTER `message`");
+  await ensureColumn(connection, 'crm_notifications', 'request_key', '`request_key` VARCHAR(100) NULL AFTER `notification_type`');
+  await ensureColumn(connection, 'crm_notifications', 'source_event_key', '`source_event_key` VARCHAR(190) NULL AFTER `request_key`');
+  await ensureColumn(connection, 'crm_notifications', 'metadata_json', '`metadata_json` JSON NULL AFTER `source_event_key`');
+  await ensureIndex(connection, 'crm_notifications', 'crm_notifications_event_recipient_unique', 'UNIQUE KEY `crm_notifications_event_recipient_unique` (`source_event_key`, `recipient_user_id`)');
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_email_settings (
+      id TINYINT UNSIGNED NOT NULL DEFAULT 1,
+      provider VARCHAR(40) NOT NULL DEFAULT 'gmail',
+      is_enabled TINYINT(1) NOT NULL DEFAULT 0,
+      sender_name VARCHAR(160) NULL,
+      sender_email VARCHAR(190) NULL,
+      reply_to VARCHAR(190) NULL,
+      settings_json JSON NULL,
+      secret_ciphertext TEXT NULL,
+      last_test_status ENUM('untested', 'ready', 'failed') NOT NULL DEFAULT 'untested',
+      last_test_message VARCHAR(500) NULL,
+      last_tested_at TIMESTAMP NULL,
+      updated_by BIGINT UNSIGNED NULL,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      CONSTRAINT crm_email_settings_updated_by_fk FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_email_deliveries (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      source_event_key VARCHAR(190) NOT NULL,
+      request_key VARCHAR(100) NULL,
+      recipient_email VARCHAR(190) NOT NULL,
+      delivery_status ENUM('pending', 'sent', 'failed', 'skipped') NOT NULL DEFAULT 'pending',
+      attempt_count INT UNSIGNED NOT NULL DEFAULT 0,
+      provider_message_id VARCHAR(255) NULL,
+      last_error_message VARCHAR(500) NULL,
+      sent_at TIMESTAMP NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY crm_email_deliveries_event_recipient_unique (source_event_key, recipient_email),
+      KEY crm_email_deliveries_status_idx (delivery_status, updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_dashboard_data_sources (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      data_source_key VARCHAR(80) NOT NULL,
+      name VARCHAR(160) NOT NULL,
+      description VARCHAR(500) NULL,
+      source_type ENUM('sql_view', 'select_query') NOT NULL DEFAULT 'sql_view',
+      view_name VARCHAR(128) NULL,
+      query_sql TEXT NULL,
+      columns_json JSON NULL,
+      parameters_json JSON NULL,
+      row_limit INT UNSIGNED NOT NULL DEFAULT 1000,
+      timeout_ms INT UNSIGNED NOT NULL DEFAULT 10000,
+      validation_status ENUM('untested', 'valid', 'invalid') NOT NULL DEFAULT 'untested',
+      validation_message VARCHAR(500) NULL,
+      last_tested_at TIMESTAMP NULL,
+      is_archived TINYINT(1) NOT NULL DEFAULT 0,
+      created_by BIGINT UNSIGNED NULL,
+      updated_by BIGINT UNSIGNED NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY crm_dashboard_data_sources_key_unique (data_source_key),
+      KEY crm_dashboard_data_sources_type_archived_idx (source_type, is_archived),
+      CONSTRAINT crm_dashboard_data_sources_created_by_fk FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+      CONSTRAINT crm_dashboard_data_sources_updated_by_fk FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_dashboards (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      dashboard_key VARCHAR(80) NOT NULL,
+      name VARCHAR(160) NOT NULL,
+      description VARCHAR(500) NULL,
+      dashboard_status ENUM('draft', 'published', 'archived') NOT NULL DEFAULT 'draft',
+      current_version INT UNSIGNED NOT NULL DEFAULT 0,
+      published_version_id BIGINT UNSIGNED NULL,
+      settings_json JSON NULL,
+      created_by BIGINT UNSIGNED NULL,
+      updated_by BIGINT UNSIGNED NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY crm_dashboards_key_unique (dashboard_key),
+      KEY crm_dashboards_status_updated_idx (dashboard_status, updated_at),
+      KEY crm_dashboards_published_version_idx (published_version_id),
+      CONSTRAINT crm_dashboards_created_by_fk FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+      CONSTRAINT crm_dashboards_updated_by_fk FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_dashboard_widgets (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      dashboard_id BIGINT UNSIGNED NOT NULL,
+      widget_key VARCHAR(80) NOT NULL,
+      data_source_id BIGINT UNSIGNED NULL,
+      widget_type VARCHAR(40) NOT NULL,
+      title VARCHAR(160) NOT NULL,
+      description VARCHAR(500) NULL,
+      sort_order INT UNSIGNED NOT NULL DEFAULT 0,
+      layout_json JSON NOT NULL,
+      config_json JSON NOT NULL,
+      is_archived TINYINT(1) NOT NULL DEFAULT 0,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY crm_dashboard_widgets_key_unique (dashboard_id, widget_key),
+      KEY crm_dashboard_widgets_source_idx (data_source_id),
+      CONSTRAINT crm_dashboard_widgets_dashboard_fk FOREIGN KEY (dashboard_id) REFERENCES crm_dashboards(id) ON DELETE CASCADE,
+      CONSTRAINT crm_dashboard_widgets_source_fk FOREIGN KEY (data_source_id) REFERENCES crm_dashboard_data_sources(id) ON DELETE RESTRICT
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_dashboard_filters (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      dashboard_id BIGINT UNSIGNED NOT NULL,
+      filter_key VARCHAR(80) NOT NULL,
+      name VARCHAR(160) NOT NULL,
+      filter_type VARCHAR(40) NOT NULL,
+      sort_order INT UNSIGNED NOT NULL DEFAULT 0,
+      config_json JSON NOT NULL,
+      is_archived TINYINT(1) NOT NULL DEFAULT 0,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY crm_dashboard_filters_key_unique (dashboard_id, filter_key),
+      CONSTRAINT crm_dashboard_filters_dashboard_fk FOREIGN KEY (dashboard_id) REFERENCES crm_dashboards(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_dashboard_permissions (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      dashboard_id BIGINT UNSIGNED NOT NULL,
+      subject_type ENUM('role', 'user', 'department') NOT NULL,
+      subject_key VARCHAR(80) NOT NULL,
+      can_view TINYINT(1) NOT NULL DEFAULT 0,
+      can_configure TINYINT(1) NOT NULL DEFAULT 0,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY crm_dashboard_permissions_subject_unique (dashboard_id, subject_type, subject_key),
+      CONSTRAINT crm_dashboard_permissions_dashboard_fk FOREIGN KEY (dashboard_id) REFERENCES crm_dashboards(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_dashboard_versions (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      dashboard_id BIGINT UNSIGNED NOT NULL,
+      version_number INT UNSIGNED NOT NULL,
+      version_action VARCHAR(40) NOT NULL,
+      name VARCHAR(160) NULL,
+      remark VARCHAR(500) NULL,
+      snapshot_json JSON NOT NULL,
+      created_by BIGINT UNSIGNED NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY crm_dashboard_versions_number_unique (dashboard_id, version_number),
+      KEY crm_dashboard_versions_created_by_fk (created_by),
+      CONSTRAINT crm_dashboard_versions_dashboard_fk FOREIGN KEY (dashboard_id) REFERENCES crm_dashboards(id) ON DELETE CASCADE,
+      CONSTRAINT crm_dashboard_versions_created_by_fk FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await ensureForeignKey(
+    connection,
+    'crm_dashboards',
+    'crm_dashboards_published_version_fk',
+    'FOREIGN KEY (`published_version_id`) REFERENCES `crm_dashboard_versions` (`id`) ON DELETE RESTRICT'
+  );
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_workflow_definitions (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      workflow_key VARCHAR(80) NOT NULL,
+      request_prefix VARCHAR(20) NOT NULL,
+      next_request_number BIGINT UNSIGNED NOT NULL DEFAULT 1,
+      name VARCHAR(160) NOT NULL,
+      description VARCHAR(500) NULL,
+      workflow_status ENUM('draft', 'published', 'archived') NOT NULL DEFAULT 'draft',
+      schema_version INT UNSIGNED NOT NULL DEFAULT 1,
+      current_version INT UNSIGNED NOT NULL DEFAULT 0,
+      published_version_id BIGINT UNSIGNED NULL,
+      source_module_key VARCHAR(80) NOT NULL,
+      request_form_key VARCHAR(80) NULL,
+      request_form_version INT UNSIGNED NULL,
+      draft_config_json JSON NULL,
+      created_by BIGINT UNSIGNED NULL,
+      updated_by BIGINT UNSIGNED NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY crm_workflow_definitions_key_unique (workflow_key),
+      UNIQUE KEY crm_workflow_definitions_request_prefix_unique (request_prefix),
+      KEY crm_workflow_definitions_status_source_idx (workflow_status, source_module_key),
+      KEY crm_workflow_definitions_published_version_idx (published_version_id),
+      CONSTRAINT crm_workflow_definitions_created_by_fk FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+      CONSTRAINT crm_workflow_definitions_updated_by_fk FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await ensureColumn(connection, 'crm_workflow_definitions', 'request_prefix', '`request_prefix` VARCHAR(20) NULL AFTER `workflow_key`');
+  await connection.query(
+    `UPDATE crm_workflow_definitions
+     SET request_prefix = UPPER(LEFT(REPLACE(workflow_key, '_', ''), 20))
+     WHERE request_prefix IS NULL OR request_prefix = ''`
+  );
+  await connection.query(
+    'ALTER TABLE crm_workflow_definitions MODIFY request_prefix VARCHAR(20) NOT NULL'
+  );
+  await ensureColumn(connection, 'crm_workflow_definitions', 'next_request_number', '`next_request_number` BIGINT UNSIGNED NOT NULL DEFAULT 1 AFTER `request_prefix`');
+  await ensureIndex(
+    connection,
+    'crm_workflow_definitions',
+    'crm_workflow_definitions_request_prefix_unique',
+    'UNIQUE KEY `crm_workflow_definitions_request_prefix_unique` (`request_prefix`)'
+  );
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_workflow_versions (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      workflow_id BIGINT UNSIGNED NOT NULL,
+      version_number INT UNSIGNED NOT NULL,
+      schema_version INT UNSIGNED NOT NULL DEFAULT 1,
+      version_action VARCHAR(40) NOT NULL,
+      summary VARCHAR(500) NULL,
+      snapshot_json JSON NOT NULL,
+      snapshot_checksum CHAR(64) NOT NULL,
+      created_by BIGINT UNSIGNED NULL,
+      published_by BIGINT UNSIGNED NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      published_at TIMESTAMP NULL,
+      PRIMARY KEY (id),
+      UNIQUE KEY crm_workflow_versions_number_unique (workflow_id, version_number),
+      KEY crm_workflow_versions_checksum_idx (workflow_id, snapshot_checksum),
+      KEY crm_workflow_versions_published_at_idx (workflow_id, published_at),
+      CONSTRAINT crm_workflow_versions_workflow_fk FOREIGN KEY (workflow_id) REFERENCES crm_workflow_definitions(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_versions_created_by_fk FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+      CONSTRAINT crm_workflow_versions_published_by_fk FOREIGN KEY (published_by) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await dropIndexIfExists(connection, 'crm_workflow_versions', 'crm_workflow_versions_checksum_unique');
+  await ensureIndex(
+    connection,
+    'crm_workflow_versions',
+    'crm_workflow_versions_checksum_idx',
+    'INDEX `crm_workflow_versions_checksum_idx` (`workflow_id`, `snapshot_checksum`)'
+  );
+  await ensureForeignKey(
+    connection,
+    'crm_workflow_definitions',
+    'crm_workflow_definitions_published_version_fk',
+    'FOREIGN KEY (`published_version_id`) REFERENCES `crm_workflow_versions` (`id`) ON DELETE RESTRICT'
+  );
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_workflow_version_stages (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      workflow_version_id BIGINT UNSIGNED NOT NULL,
+      stage_key VARCHAR(80) NOT NULL,
+      name VARCHAR(160) NOT NULL,
+      stage_order INT UNSIGNED NOT NULL,
+      is_enabled TINYINT(1) NOT NULL DEFAULT 1,
+      condition_json JSON NULL,
+      skip_when_condition_false TINYINT(1) NOT NULL DEFAULT 0,
+      approval_mode ENUM('all') NOT NULL DEFAULT 'all',
+      self_approval_policy ENUM('error', 'auto_approve') NOT NULL DEFAULT 'error',
+      decision_policy_json JSON NULL,
+      attachment_policy_json JSON NULL,
+      sla_policy_json JSON NULL,
+      event_policy_json JSON NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY crm_workflow_version_stages_key_unique (workflow_version_id, stage_key),
+      UNIQUE KEY crm_workflow_version_stages_order_unique (workflow_version_id, stage_order),
+      CONSTRAINT crm_workflow_version_stages_version_fk FOREIGN KEY (workflow_version_id) REFERENCES crm_workflow_versions(id) ON DELETE RESTRICT
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await ensureColumn(connection, 'crm_workflow_version_stages', 'email_policy_json', '`email_policy_json` JSON NULL AFTER `sla_policy_json`');
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_workflow_version_approver_rules (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      version_stage_id BIGINT UNSIGNED NOT NULL,
+      rule_key VARCHAR(80) NOT NULL,
+      rule_order INT UNSIGNED NOT NULL DEFAULT 0,
+      resolver_type ENUM('user', 'role', 'reporting_manager', 'organization_responsibility', 'record_user_field') NOT NULL,
+      resolver_reference VARCHAR(190) NULL,
+      resolver_config_json JSON NULL,
+      authority_condition_json JSON NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY crm_workflow_approver_rules_key_unique (version_stage_id, rule_key),
+      UNIQUE KEY crm_workflow_approver_rules_order_unique (version_stage_id, rule_order),
+      KEY crm_workflow_approver_rules_resolver_idx (resolver_type, resolver_reference),
+      CONSTRAINT crm_workflow_approver_rules_stage_fk FOREIGN KEY (version_stage_id) REFERENCES crm_workflow_version_stages(id) ON DELETE RESTRICT
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_workflow_instances (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      request_key VARCHAR(100) NOT NULL,
+      workflow_id BIGINT UNSIGNED NOT NULL,
+      workflow_version_id BIGINT UNSIGNED NOT NULL,
+      source_module_key VARCHAR(80) NOT NULL,
+      source_record_id VARCHAR(100) NOT NULL,
+      source_record_version VARCHAR(100) NULL,
+      requester_user_id BIGINT UNSIGNED NULL,
+      request_status ENUM('draft', 'pending', 'returned', 'approved', 'rejected', 'withdrawn', 'cancelled') NOT NULL DEFAULT 'draft',
+      current_stage_key VARCHAR(80) NULL,
+      lock_version INT UNSIGNED NOT NULL DEFAULT 0,
+      terminal_reason_code VARCHAR(80) NULL,
+      terminal_remark VARCHAR(1000) NULL,
+      submitted_at TIMESTAMP NULL,
+      completed_at TIMESTAMP NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY crm_workflow_instances_request_key_unique (request_key),
+      KEY crm_workflow_instances_source_status_idx (source_module_key, source_record_id, request_status),
+      KEY crm_workflow_instances_requester_status_idx (requester_user_id, request_status, updated_at),
+      KEY crm_workflow_instances_workflow_status_idx (workflow_id, request_status, updated_at),
+      KEY crm_workflow_instances_current_stage_idx (workflow_version_id, current_stage_key, request_status),
+      CONSTRAINT crm_workflow_instances_workflow_fk FOREIGN KEY (workflow_id) REFERENCES crm_workflow_definitions(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_instances_version_fk FOREIGN KEY (workflow_version_id) REFERENCES crm_workflow_versions(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_instances_requester_fk FOREIGN KEY (requester_user_id) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_workflow_instance_snapshots (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      instance_id BIGINT UNSIGNED NOT NULL,
+      revision_number INT UNSIGNED NOT NULL,
+      source_record_version VARCHAR(100) NULL,
+      snapshot_json JSON NOT NULL,
+      snapshot_checksum CHAR(64) NOT NULL,
+      created_by BIGINT UNSIGNED NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY crm_workflow_snapshots_revision_unique (instance_id, revision_number),
+      UNIQUE KEY crm_workflow_snapshots_checksum_unique (instance_id, snapshot_checksum),
+      CONSTRAINT crm_workflow_snapshots_instance_fk FOREIGN KEY (instance_id) REFERENCES crm_workflow_instances(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_snapshots_created_by_fk FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_workflow_instance_stages (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      instance_id BIGINT UNSIGNED NOT NULL,
+      version_stage_id BIGINT UNSIGNED NOT NULL,
+      snapshot_id BIGINT UNSIGNED NOT NULL,
+      stage_key VARCHAR(80) NOT NULL,
+      stage_order INT UNSIGNED NOT NULL,
+      stage_status ENUM('waiting', 'active', 'approved', 'rejected', 'returned', 'skipped', 'auto_approved', 'cancelled') NOT NULL DEFAULT 'waiting',
+      lock_version INT UNSIGNED NOT NULL DEFAULT 0,
+      reason_code VARCHAR(80) NULL,
+      reason_message VARCHAR(500) NULL,
+      due_at TIMESTAMP NULL,
+      overdue_at TIMESTAMP NULL,
+      activated_at TIMESTAMP NULL,
+      completed_at TIMESTAMP NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY crm_workflow_instance_stages_key_unique (instance_id, stage_key),
+      UNIQUE KEY crm_workflow_instance_stages_order_unique (instance_id, stage_order),
+      KEY crm_workflow_instance_stages_status_due_idx (stage_status, due_at),
+      CONSTRAINT crm_workflow_instance_stages_instance_fk FOREIGN KEY (instance_id) REFERENCES crm_workflow_instances(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_instance_stages_version_stage_fk FOREIGN KEY (version_stage_id) REFERENCES crm_workflow_version_stages(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_instance_stages_snapshot_fk FOREIGN KEY (snapshot_id) REFERENCES crm_workflow_instance_snapshots(id) ON DELETE RESTRICT
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_workflow_assignments (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      instance_stage_id BIGINT UNSIGNED NOT NULL,
+      approver_rule_id BIGINT UNSIGNED NULL,
+      approver_user_id BIGINT UNSIGNED NULL,
+      resolver_type VARCHAR(40) NOT NULL,
+      resolver_reference VARCHAR(190) NULL,
+      approver_identity_json JSON NOT NULL,
+      assignment_status ENUM('pending', 'approved', 'rejected', 'returned', 'cancelled') NOT NULL DEFAULT 'pending',
+      authority_evaluation_json JSON NULL,
+      lock_version INT UNSIGNED NOT NULL DEFAULT 0,
+      due_at TIMESTAMP NULL,
+      escalated_at TIMESTAMP NULL,
+      decided_at TIMESTAMP NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY crm_workflow_assignments_stage_user_unique (instance_stage_id, approver_user_id),
+      KEY crm_workflow_assignments_inbox_idx (approver_user_id, assignment_status, due_at),
+      KEY crm_workflow_assignments_stage_status_idx (instance_stage_id, assignment_status),
+      CONSTRAINT crm_workflow_assignments_stage_fk FOREIGN KEY (instance_stage_id) REFERENCES crm_workflow_instance_stages(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_assignments_rule_fk FOREIGN KEY (approver_rule_id) REFERENCES crm_workflow_version_approver_rules(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_assignments_user_fk FOREIGN KEY (approver_user_id) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_workflow_decisions (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      instance_id BIGINT UNSIGNED NOT NULL,
+      instance_stage_id BIGINT UNSIGNED NOT NULL,
+      assignment_id BIGINT UNSIGNED NULL,
+      snapshot_id BIGINT UNSIGNED NOT NULL,
+      decision_action ENUM('approve', 'reject', 'return', 'withdraw', 'cancel', 'skip', 'auto_approve') NOT NULL,
+      actor_user_id BIGINT UNSIGNED NULL,
+      actor_identity_json JSON NOT NULL,
+      remark VARCHAR(2000) NULL,
+      response_json JSON NULL,
+      instance_lock_version INT UNSIGNED NOT NULL,
+      assignment_lock_version INT UNSIGNED NULL,
+      idempotency_key VARCHAR(120) NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY crm_workflow_decisions_idempotency_unique (idempotency_key),
+      KEY crm_workflow_decisions_instance_time_idx (instance_id, created_at),
+      KEY crm_workflow_decisions_stage_time_idx (instance_stage_id, created_at),
+      CONSTRAINT crm_workflow_decisions_instance_fk FOREIGN KEY (instance_id) REFERENCES crm_workflow_instances(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_decisions_stage_fk FOREIGN KEY (instance_stage_id) REFERENCES crm_workflow_instance_stages(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_decisions_assignment_fk FOREIGN KEY (assignment_id) REFERENCES crm_workflow_assignments(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_decisions_snapshot_fk FOREIGN KEY (snapshot_id) REFERENCES crm_workflow_instance_snapshots(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_decisions_actor_fk FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await ensureColumn(connection, 'crm_workflow_decisions', 'response_json', '`response_json` JSON NULL AFTER `remark`');
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_workflow_attachments (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      instance_id BIGINT UNSIGNED NOT NULL,
+      decision_id BIGINT UNSIGNED NULL,
+      uploaded_by BIGINT UNSIGNED NULL,
+      attachment_purpose ENUM('submission', 'approval', 'rejection', 'return') NOT NULL,
+      file_name VARCHAR(255) NOT NULL,
+      content_type VARCHAR(160) NOT NULL,
+      file_size BIGINT UNSIGNED NOT NULL,
+      storage_key VARCHAR(500) NOT NULL,
+      file_checksum CHAR(64) NOT NULL,
+      file_data LONGBLOB NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY crm_workflow_attachments_storage_unique (storage_key),
+      KEY crm_workflow_attachments_instance_time_idx (instance_id, created_at),
+      KEY crm_workflow_attachments_decision_idx (decision_id),
+      CONSTRAINT crm_workflow_attachments_instance_fk FOREIGN KEY (instance_id) REFERENCES crm_workflow_instances(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_attachments_decision_fk FOREIGN KEY (decision_id) REFERENCES crm_workflow_decisions(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_attachments_uploaded_by_fk FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await ensureColumn(connection, 'crm_workflow_attachments', 'file_data', '`file_data` LONGBLOB NULL AFTER `file_checksum`');
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_workflow_record_locks (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      source_module_key VARCHAR(80) NOT NULL,
+      source_record_id VARCHAR(100) NOT NULL,
+      instance_id BIGINT UNSIGNED NOT NULL,
+      lock_scope ENUM('record', 'fields') NOT NULL DEFAULT 'record',
+      locked_fields_json JSON NULL,
+      locked_by BIGINT UNSIGNED NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY crm_workflow_record_locks_source_unique (source_module_key, source_record_id),
+      UNIQUE KEY crm_workflow_record_locks_instance_unique (instance_id),
+      CONSTRAINT crm_workflow_record_locks_instance_fk FOREIGN KEY (instance_id) REFERENCES crm_workflow_instances(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_record_locks_user_fk FOREIGN KEY (locked_by) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_workflow_events (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      event_key VARCHAR(120) NOT NULL,
+      event_type VARCHAR(80) NOT NULL,
+      event_schema_version INT UNSIGNED NOT NULL DEFAULT 1,
+      instance_id BIGINT UNSIGNED NOT NULL,
+      instance_stage_id BIGINT UNSIGNED NULL,
+      decision_id BIGINT UNSIGNED NULL,
+      payload_json JSON NOT NULL,
+      delivery_status ENUM('pending', 'processing', 'delivered', 'failed') NOT NULL DEFAULT 'pending',
+      attempt_count INT UNSIGNED NOT NULL DEFAULT 0,
+      next_attempt_at TIMESTAMP NULL,
+      delivered_at TIMESTAMP NULL,
+      last_error_code VARCHAR(80) NULL,
+      last_error_message VARCHAR(500) NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY crm_workflow_events_key_unique (event_key),
+      KEY crm_workflow_events_delivery_idx (delivery_status, next_attempt_at, created_at),
+      KEY crm_workflow_events_instance_time_idx (instance_id, created_at),
+      CONSTRAINT crm_workflow_events_instance_fk FOREIGN KEY (instance_id) REFERENCES crm_workflow_instances(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_events_stage_fk FOREIGN KEY (instance_stage_id) REFERENCES crm_workflow_instance_stages(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_events_decision_fk FOREIGN KEY (decision_id) REFERENCES crm_workflow_decisions(id) ON DELETE RESTRICT
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_workflow_idempotency_keys (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      command_scope VARCHAR(80) NOT NULL,
+      actor_user_id BIGINT UNSIGNED NULL,
+      actor_key VARCHAR(100) NOT NULL,
+      idempotency_key VARCHAR(120) NOT NULL,
+      request_hash CHAR(64) NOT NULL,
+      instance_id BIGINT UNSIGNED NULL,
+      decision_id BIGINT UNSIGNED NULL,
+      response_status SMALLINT UNSIGNED NULL,
+      response_json JSON NULL,
+      expires_at TIMESTAMP NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY crm_workflow_idempotency_scope_unique (command_scope, actor_key, idempotency_key),
+      KEY crm_workflow_idempotency_expiry_idx (expires_at),
+      CONSTRAINT crm_workflow_idempotency_actor_fk FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL,
+      CONSTRAINT crm_workflow_idempotency_instance_fk FOREIGN KEY (instance_id) REFERENCES crm_workflow_instances(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_idempotency_decision_fk FOREIGN KEY (decision_id) REFERENCES crm_workflow_decisions(id) ON DELETE RESTRICT
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_workflow_audit_logs (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      workflow_id BIGINT UNSIGNED NULL,
+      instance_id BIGINT UNSIGNED NULL,
+      instance_stage_id BIGINT UNSIGNED NULL,
+      actor_user_id BIGINT UNSIGNED NULL,
+      action VARCHAR(80) NOT NULL,
+      target_type VARCHAR(80) NULL,
+      target_key VARCHAR(190) NULL,
+      result ENUM('allowed', 'denied', 'failed') NOT NULL,
+      reason_code VARCHAR(80) NOT NULL,
+      metadata_json JSON NULL,
+      correlation_id VARCHAR(120) NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY crm_workflow_audit_instance_time_idx (instance_id, created_at),
+      KEY crm_workflow_audit_workflow_time_idx (workflow_id, created_at),
+      KEY crm_workflow_audit_actor_result_idx (actor_user_id, result, created_at),
+      KEY crm_workflow_audit_correlation_idx (correlation_id),
+      CONSTRAINT crm_workflow_audit_workflow_fk FOREIGN KEY (workflow_id) REFERENCES crm_workflow_definitions(id) ON DELETE SET NULL,
+      CONSTRAINT crm_workflow_audit_instance_fk FOREIGN KEY (instance_id) REFERENCES crm_workflow_instances(id) ON DELETE SET NULL,
+      CONSTRAINT crm_workflow_audit_stage_fk FOREIGN KEY (instance_stage_id) REFERENCES crm_workflow_instance_stages(id) ON DELETE SET NULL,
+      CONSTRAINT crm_workflow_audit_actor_fk FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_workflow_delegations (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      delegator_user_id BIGINT UNSIGNED NOT NULL,
+      delegate_user_id BIGINT UNSIGNED NOT NULL,
+      workflow_key VARCHAR(80) NULL,
+      scope_role VARCHAR(40) NULL,
+      scope_department_id BIGINT UNSIGNED NULL,
+      starts_at DATETIME NOT NULL,
+      ends_at DATETIME NOT NULL,
+      reason VARCHAR(500) NOT NULL,
+      delegation_status ENUM('active', 'cancelled') NOT NULL DEFAULT 'active',
+      created_by BIGINT UNSIGNED NOT NULL,
+      cancelled_by BIGINT UNSIGNED NULL,
+      cancelled_at DATETIME NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY crm_workflow_delegations_lookup_idx (delegator_user_id, delegation_status, starts_at, ends_at),
+      CONSTRAINT crm_workflow_delegations_delegator_fk FOREIGN KEY (delegator_user_id) REFERENCES users(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_delegations_delegate_fk FOREIGN KEY (delegate_user_id) REFERENCES users(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_delegations_creator_fk FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_delegations_canceller_fk FOREIGN KEY (cancelled_by) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+  );
+  await connection.query(
+    `CREATE TABLE IF NOT EXISTS crm_workflow_assignment_transfers (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      instance_id BIGINT UNSIGNED NOT NULL,
+      instance_stage_id BIGINT UNSIGNED NOT NULL,
+      original_assignment_id BIGINT UNSIGNED NOT NULL,
+      replacement_assignment_id BIGINT UNSIGNED NOT NULL,
+      transfer_type ENUM('delegation', 'reassignment') NOT NULL,
+      delegation_id BIGINT UNSIGNED NULL,
+      original_approver_user_id BIGINT UNSIGNED NULL,
+      replacement_approver_user_id BIGINT UNSIGNED NOT NULL,
+      reason VARCHAR(500) NOT NULL,
+      transferred_by BIGINT UNSIGNED NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY crm_workflow_assignment_transfers_replacement_unique (replacement_assignment_id),
+      KEY crm_workflow_assignment_transfers_instance_idx (instance_id, created_at),
+      CONSTRAINT crm_workflow_assignment_transfers_instance_fk FOREIGN KEY (instance_id) REFERENCES crm_workflow_instances(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_assignment_transfers_stage_fk FOREIGN KEY (instance_stage_id) REFERENCES crm_workflow_instance_stages(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_assignment_transfers_original_fk FOREIGN KEY (original_assignment_id) REFERENCES crm_workflow_assignments(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_assignment_transfers_replacement_fk FOREIGN KEY (replacement_assignment_id) REFERENCES crm_workflow_assignments(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_assignment_transfers_delegation_fk FOREIGN KEY (delegation_id) REFERENCES crm_workflow_delegations(id) ON DELETE SET NULL,
+      CONSTRAINT crm_workflow_assignment_transfers_original_user_fk FOREIGN KEY (original_approver_user_id) REFERENCES users(id) ON DELETE SET NULL,
+      CONSTRAINT crm_workflow_assignment_transfers_replacement_user_fk FOREIGN KEY (replacement_approver_user_id) REFERENCES users(id) ON DELETE RESTRICT,
+      CONSTRAINT crm_workflow_assignment_transfers_actor_fk FOREIGN KEY (transferred_by) REFERENCES users(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
   );
   try {

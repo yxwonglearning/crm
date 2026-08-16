@@ -12,7 +12,7 @@ const actionCategories = {
   end: ['end']
 };
 
-const triggerTypes = ['record_created', 'record_updated', 'status_changed', 'record_deleted', 'manual', 'scheduled'];
+const triggerTypes = ['record_created', 'record_updated', 'status_changed', 'record_deleted', 'workflow_event', 'manual', 'scheduled'];
 const statuses = ['draft', 'enabled', 'disabled'];
 const conditionOperators = ['equals', 'not_equals', 'contains', 'starts_with', 'ends_with', 'greater_than', 'less_than', 'empty', 'not_empty'];
 
@@ -68,7 +68,7 @@ function validateDefinition(definition) {
   const nodes = normalized.nodes;
   if (!nodes.length) errors.push('Add at least one trigger node and one action node.');
   const triggerNodes = nodes.filter((node) => node.category === 'trigger');
-  if (triggerNodes.length !== 1) errors.push('Action Flow needs exactly one trigger node.');
+  if (triggerNodes.length !== 1) errors.push('Automation Flow needs exactly one trigger node.');
   nodes.forEach((node) => {
     if (!node.id) errors.push('Every node needs an id.');
     if (!node.category) errors.push(`Node ${node.label || node.id || ''} needs a category.`);
@@ -195,14 +195,14 @@ async function listFlows(filters = {}) {
 
 async function getFlow(flowKey) {
   const flow = await repository.findFlowByKey(flowKey);
-  if (!flow) throw new AppError('Action Flow not found', 404);
+  if (!flow) throw new AppError('Automation Flow not found', 404);
   return { flow, check: validateDefinition(flow.definition) };
 }
 
 async function createFlow(input, user) {
   const flowKey = slugKey(input.flowKey || input.name);
   if (!flowKey) throw new AppError('Flow key is required', 422);
-  if (!statuses.includes(input.status || 'draft')) throw new AppError('Unsupported Action Flow status', 422);
+  if (!statuses.includes(input.status || 'draft')) throw new AppError('Unsupported Automation Flow status', 422);
   if (!triggerTypes.includes(input.triggerType || 'record_created')) throw new AppError('Unsupported trigger type', 422);
   const definition = normalizeDefinition(input.definition, defaultDefinition(input));
   let flow;
@@ -219,13 +219,13 @@ async function createFlow(input, user) {
     }, user?.id);
   } catch (error) {
     if (error.code === 'ER_DUP_ENTRY') {
-      throw new AppError('An Action Flow with this name already exists', 409);
+      throw new AppError('An Automation Flow with this name already exists', 409);
     }
     throw error;
   }
   await repository.createFlowVersion(flow.flowKey, {
     action: 'created',
-    summary: 'Initial Action Flow draft',
+    summary: 'Initial Automation Flow draft',
     snapshot: flowSnapshot(flow),
     useCurrentVersion: true
   }, user?.id);
@@ -235,8 +235,8 @@ async function createFlow(input, user) {
 
 async function updateFlow(flowKey, input, user) {
   const existing = await repository.findFlowByKey(flowKey);
-  if (!existing) throw new AppError('Action Flow not found', 404);
-  if (input.status && !statuses.includes(input.status)) throw new AppError('Unsupported Action Flow status', 422);
+  if (!existing) throw new AppError('Automation Flow not found', 404);
+  if (input.status && !statuses.includes(input.status)) throw new AppError('Unsupported Automation Flow status', 422);
   if (input.triggerType && !triggerTypes.includes(input.triggerType)) throw new AppError('Unsupported trigger type', 422);
   const flow = await repository.updateFlow(flowKey, {
     name: input.name,
@@ -253,13 +253,13 @@ async function updateFlow(flowKey, input, user) {
 
 async function deleteFlow(flowKey) {
   const deletedCount = await repository.deleteFlow(flowKey);
-  if (!deletedCount) throw new AppError('Action Flow not found', 404);
+  if (!deletedCount) throw new AppError('Automation Flow not found', 404);
   return { deletedCount };
 }
 
 async function checkFlow(flowKey) {
   const flow = await repository.findFlowByKey(flowKey);
-  if (!flow) throw new AppError('Action Flow not found', 404);
+  if (!flow) throw new AppError('Automation Flow not found', 404);
   return { check: validateDefinition(flow.definition) };
 }
 
@@ -268,7 +268,7 @@ async function ensureInitialFlowVersion(flow, userId = null) {
   if (versions?.length) return versions;
   await repository.createFlowVersion(flow.flowKey, {
     action: 'created',
-    summary: 'Initial Action Flow draft',
+    summary: 'Initial Automation Flow draft',
     snapshot: flowSnapshot(flow),
     useCurrentVersion: true
   }, userId);
@@ -277,17 +277,17 @@ async function ensureInitialFlowVersion(flow, userId = null) {
 
 async function listFlowVersions(flowKey) {
   const flow = await repository.findFlowByKey(flowKey);
-  if (!flow) throw new AppError('Action Flow not found', 404);
+  if (!flow) throw new AppError('Automation Flow not found', 404);
   return { versions: await ensureInitialFlowVersion(flow), currentVersion: flow.currentVersion, publishedVersion: flow.publishedVersion };
 }
 
 async function createFlowVersion(flowKey, input, user) {
   const flow = await repository.findFlowByKey(flowKey);
-  if (!flow) throw new AppError('Action Flow not found', 404);
+  if (!flow) throw new AppError('Automation Flow not found', 404);
   await ensureInitialFlowVersion(flow, user?.id);
   await repository.createFlowVersion(flowKey, {
     action: 'checkpoint',
-    summary: input.remark || 'Saved Action Flow checkpoint',
+    summary: input.remark || 'Saved Automation Flow checkpoint',
     snapshot: flowSnapshot(flow)
   }, user?.id);
   const updated = await repository.findFlowByKey(flowKey);
@@ -296,13 +296,13 @@ async function createFlowVersion(flowKey, input, user) {
 
 async function publishFlow(flowKey, input, user) {
   const flow = await repository.findFlowByKey(flowKey);
-  if (!flow) throw new AppError('Action Flow not found', 404);
+  if (!flow) throw new AppError('Automation Flow not found', 404);
   const check = validateDefinition(flow.definition);
-  if (!check.valid) throw new AppError(check.errors[0] || 'Action Flow needs attention before publishing', 422);
+  if (!check.valid) throw new AppError(check.errors[0] || 'Automation Flow needs attention before publishing', 422);
   await ensureInitialFlowVersion(flow, user?.id);
   const version = await repository.createFlowVersion(flowKey, {
     action: 'published',
-    summary: input.remark || 'Published Action Flow',
+    summary: input.remark || 'Published Automation Flow',
     snapshot: flowSnapshot(flow)
   }, user?.id);
   const published = await repository.publishFlow(flowKey, version.versionNumber, user?.id);
@@ -311,9 +311,9 @@ async function publishFlow(flowKey, input, user) {
 
 async function restoreFlowVersion(flowKey, versionId, input, user) {
   const current = await repository.findFlowByKey(flowKey);
-  if (!current) throw new AppError('Action Flow not found', 404);
+  if (!current) throw new AppError('Automation Flow not found', 404);
   const version = await repository.findFlowVersion(flowKey, versionId);
-  if (!version) throw new AppError('Action Flow version not found', 404);
+  if (!version) throw new AppError('Automation Flow version not found', 404);
   const snapshot = version.snapshot || {};
   const restored = await repository.updateFlow(flowKey, {
     name: snapshot.name,
@@ -362,9 +362,9 @@ async function listExecutions(filters = {}) {
 
 async function runFlowOnce(flowKey, input = {}, user) {
   const flow = await repository.findFlowByKey(flowKey);
-  if (!flow) throw new AppError('Action Flow not found', 404);
+  if (!flow) throw new AppError('Automation Flow not found', 404);
   const check = validateDefinition(flow.definition);
-  if (!check.valid) throw new AppError(check.errors[0] || 'Action Flow needs attention before it can run', 422);
+  if (!check.valid) throw new AppError(check.errors[0] || 'Automation Flow needs attention before it can run', 422);
   const trigger = {
     triggerType: 'manual',
     moduleKey: flow.triggerModule || '',

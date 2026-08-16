@@ -14,6 +14,10 @@ const { browserButtonRoutes } = require('./modules/browser-buttons/browser-butto
 const { moduleRecordRoutes } = require('./modules/module-records/module-records.routes');
 const { actionFlowRoutes } = require('./modules/action-flows/action-flows.routes');
 const { departmentRoutes } = require('./modules/departments/departments.routes');
+const { dashboardRoutes } = require('./modules/dashboards/dashboards.routes');
+const { dashboardPageRoutes } = require('./modules/dashboards/dashboard-pages.routes');
+const { workflowRoutes } = require('./modules/workflows/workflows.routes');
+const { notificationRoutes } = require('./modules/notifications/notifications.routes');
 
 function createApp() {
   const app = express();
@@ -38,6 +42,10 @@ function createApp() {
   app.use('/api/modules', moduleRecordRoutes);
   app.use('/api/action-flows', actionFlowRoutes);
   app.use('/api/departments', departmentRoutes);
+  app.use('/api/dashboards', dashboardRoutes);
+  app.use('/api/dashboard-pages', dashboardPageRoutes);
+  app.use('/api/workflows', workflowRoutes);
+  app.use('/api/notifications', notificationRoutes);
   app.use('/api/sysadmin', sysadminRoutes);
   app.use('/api', notFoundHandler);
 

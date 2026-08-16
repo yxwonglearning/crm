@@ -5,6 +5,7 @@ const moduleConfig = require('../sysadmin/module-config.service');
 const permissions = require('../permissions/permissions.service');
 const repository = require('./module-records.repository');
 const actionFlowRuntime = require('../action-flows/action-flows.runtime');
+const workflowProtection = require('../workflows/workflows.protection');
 const vm = require('vm');
 
 function assertCustomPublishedModule(config) {
@@ -294,6 +295,13 @@ async function updateRecord(moduleKey, id, input, user) {
     ...existing.customFields,
     ...customFieldsFromInput(input, fields)
   }, fields);
+  await workflowProtection.assertUpdateAllowed(
+    moduleKey,
+    id,
+    existing.customFields,
+    customFields,
+    input.__detailTables || {}
+  );
   await validateFields(moduleKey, customFields, fields, id);
   await repository.updateRecord(moduleKey, id, customFields, user?.id);
   const detailTables = applyDetailTableFormulaFields(input.__detailTables || {}, config.fields, customFields);

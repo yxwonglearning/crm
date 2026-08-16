@@ -71,7 +71,7 @@ The sections below serve as the detailed project log, implementation notes, feat
 - Modal forms for adding/editing customers and users.
 - Customer import modal with template download, file upload, and import result display.
 - Customer export download with admin-configured export columns.
-- Admin Portal with sections for Modules, Departments, Form Builder, Browser Buttons, Module Pages, Action Flow, and Permissions.
+- Admin Portal with sections for Modules, Departments, Form Builder, Browser Buttons, Module Pages, Automation Flow, and Permissions.
 - Flexible Department hierarchy management with one Organization root, Departments and Groups at any depth, manual maintenance, and Excel template/import support.
 - Form Builder for customer and user field configuration.
 - Module-first Browser Buttons workspace for reusable master-data lookup definitions shared across modules.
@@ -88,6 +88,7 @@ The sections below serve as the detailed project log, implementation notes, feat
 - Page-level Permissions drawer for configuring role and specific-user access without leaving Module Pages.
 - Page View permissions support Organization, Department, and Group access with inheritance to users assigned to descendant units.
 - All pop-out modals include a fullscreen/enlarge button.
+- Authenticated pages use the shared application shell: a compact global utility bar for notifications and account controls, a flexible page-content region, and a lightweight footer. Page names and descriptions appear only in the page header and are never repeated in the global utility bar. Standard, published, and low-code-generated module pages inherit this shell automatically; genuine full-screen designers use their dedicated toolbar without floating global controls over the canvas.
 - Customer detail-table data entry inside the Add/Edit Customer modal.
 - Detail-table row controls:
   - add row
@@ -144,7 +145,7 @@ Frontend files live in `public/`:
 
 ## Low-Code CRM Direction
 
-The long-term direction is to turn  CRM into a low-code, fully customizable CRM platform where admins can create modules, forms, pages, and automation without editing source code. Weaver e-cology and e-Builder are useful references for the platform concept, especially the separation between form building, page publishing, data rules, and action-flow automation.
+The long-term direction is to turn  CRM into a low-code, fully customizable CRM platform where admins can create modules, forms, pages, and automation without editing source code. Weaver e-cology and e-Builder are useful references for the platform concept, especially the separation between form building, page publishing, data rules, and automation workflows.
 
 ### Target Admin Experience
 
@@ -154,7 +155,7 @@ Admins should have a dedicated portal for configuring the CRM:
 - `Module Builder`: create and manage modules such as Customers, Suppliers, Projects, Tickets, Assets, or Contracts.
 - `Form Builder`: add and configure module fields without coding.
 - `Module Page Publisher`: publish form-backed modules as usable CRM pages.
-- `Action Flow`: configure triggers, conditions, actions, scheduled jobs, integrations, and execution logs.
+- `Automation Flow`: configure triggers, conditions, actions, scheduled jobs, integrations, and execution logs.
 - `Permissions`: control who can view, create, edit, delete, import, export, and configure each module.
 
 ### Recommended Build Phases And Progress
@@ -172,7 +173,7 @@ Admins should have a dedicated portal for configuring the CRM:
 1. Phase 1: Dedicated Admin Portal - mostly done
    - Converted the old sysadmin area into `Admin Portal`.
    - Added an admin-only configuration workspace.
-   - Added internal admin sections for Modules, Form Builder, Module Pages, Action Flow, and Permissions.
+   - Added internal admin sections for Modules, Form Builder, Module Pages, Automation Flow, and Permissions.
    - Normal CRM usage is separated from admin configuration through sidebar navigation.
 2. Phase 2: Module Builder - in progress
    - Admin Portal has a `Modules` section.
@@ -215,16 +216,16 @@ Admins should have a dedicated portal for configuring the CRM:
    - Custom module pages now support Excel template download, Excel import, and Excel export for main-table and detail-table fields.
    - Detail-table import/export uses separate Excel sheets linked to main records by `Record Ref`.
    - Generated-page smoke test passed for custom module creation, permissions, layouts, record CRUD, quick search, advanced filter, detail view data, Excel template, detail-table import/export, and cleanup.
-5. Phase 5: Action Flow - complete
-   - Admin Portal has an `Action Flow` management page with All, Enable, Disable, and Draft filters.
-   - Existing action flows can be previewed in a right-side drawer before opening the full builder.
+5. Phase 5: Automation Flow - complete
+   - Admin Portal has an `Automation Flow` management page with All, Enable, Disable, and Draft filters.
+   - Existing automation flows can be previewed in a right-side drawer before opening the full builder.
    - New and existing flows open in a full-screen Make.com-style low-code builder with a draggable dotted canvas, aligned dotted connectors, categorized action palette, node configuration panel, Save, and Check controls.
    - The completed implementation includes: the visual canvas; structured conditions; real Yes/No runtime routing; n8n-style field mapping and previous-node outputs; task, notification, and transformation actions; Run Once testing and visual execution states; scheduling, error handlers, and retries; versioning and publishing; and loops, parallel branches, and cross-flow orchestration.
    - Action categories include Record, Task/Notification, Logic, RESTful API, and Data Mapping.
    - Record actions include add record, update record, delete record, assign owner, and change status.
    - RESTful API connector configuration is available as a dedicated Admin Portal API Connectors module with connection name/description, protocol and TLS version, certificate-bypass setting, domain/IP address, encoding, connection/response timeouts, and authentication.
    - API Category Management organizes Connectors and their inherited Interfaces in the Admin Portal's shared three-panel navigation. Connectors select a category when created or edited, and Interfaces inherit the category of their selected Connector.
-   - Connector authentication uses method-specific fields for API Key, Bearer Token, Basic, OAuth 1.0, and OAuth 2.0 instead of requiring admins to enter raw JSON. Connection keys are generated stable system identifiers used by Interfaces and Action Flow references.
+   - Connector authentication uses method-specific fields for API Key, Bearer Token, Basic, OAuth 1.0, and OAuth 2.0 instead of requiring admins to enter raw JSON. Connection keys are generated stable system identifiers used by Interfaces and Automation Flow references.
    - OAuth 1.0 requests are signed with HMAC-SHA1 or HMAC-SHA256. OAuth 2.0 Client Credentials retrieves and caches access tokens, supports Basic-header or request-body client authentication, and can attach tokens through the Authorization header or query string.
    - API Interfaces and Connectors have separate creation actions. Interfaces use a five-step Basic, Request, Response, Succeeded/Failed, and Test editor and remain attached to a reusable Connector.
    - Request and Response definitions use Params, Header, and Body tables with one-row-at-a-time editing plus batch field creation from pasted JSON or XML. Data-format selection is scoped to Body and reused by Batch Add; Params and Header batch input auto-detects JSON or XML.
@@ -234,15 +235,15 @@ Admins should have a dedicated portal for configuring the CRM:
    - n8n-style mapping supports fixed values and expressions sourced from trigger data, the current record, and previous-node outputs; transformed results can be named and reused by later modules.
    - Published custom module record triggers (`record_created`, `record_updated`, `record_deleted`, and `status_changed`) and scheduled triggers execute local record actions such as add, update, delete, assign owner, and change status.
    - Task creation, notifications, Set Value, Transform Value, and REST actions consume mapped inputs and expose execution results for subsequent modules.
-   - Runtime executions are recorded in `crm_action_flow_executions`, admins can read recent execution/instance logs through the Action Flow API, and the Action Flow builder has Execution/Instance log views.
+   - Runtime executions are recorded in `crm_action_flow_executions`, admins can read recent execution/instance logs through the Automation Flow API, and the Automation Flow builder has Execution/Instance log views.
    - Execution results include step labels, categories, statuses, timestamps, durations, skip reasons, trigger metadata, and raw payload/result inspection.
    - Guarded REST nodes perform outbound calls with connector endpoint selection, request mapping, auth/header support, timeouts, private-network blocking unless explicitly allowed, bounded response capture, and HTTP response logging.
    - First visual mapping dialogs are available for record field mapping and REST request/response/error mapping while preserving the existing text mapping format.
    - REST response/error mappings are applied at runtime: mapped values are captured in execution logs, and matching main-table form fields on the triggered record are updated automatically.
-   - Dynamic assignment picker is available for Action Flow value fields and mapping rows, with context/current-record/system/fixed-value choices and previous-node output tokens.
+   - Dynamic assignment picker is available for Automation Flow value fields and mapping rows, with context/current-record/system/fixed-value choices and previous-node output tokens.
    - Run Once executes draft flows for testing and displays node-level running, successful, skipped, and failed states with useful error details.
    - Reliability settings support retry attempts, retry delays, stop-flow behavior, and dedicated error branches after retry exhaustion.
-   - Action Flow version history supports named checkpoints, remarks, safe restoration, and explicit publishing; production triggers and child-flow calls use published versions.
+   - Automation Flow version history supports named checkpoints, remarks, safe restoration, and explicit publishing; production triggers and child-flow calls use published versions.
    - Loop modules expose Body and Done paths, Parallel modules support user-added empty branches and wait for every path, and Run Flow invokes another published flow with mapped inputs and recursion protection.
    - End modules explicitly finish individual paths, while execution and instance logs provide monitoring for completed and failed runs.
 6. Phase 6: Permissions - complete
@@ -263,14 +264,29 @@ Admins should have a dedicated portal for configuring the CRM:
    - The admin-only permission-audit API supports module, action, result, and result-limit filters.
    - Record-scope rules such as Own, Assigned, or Department records are intentionally not required; the exploratory Record Access interface remains disabled behind a frontend feature flag.
    - Database migration, allowed/denied audit coverage, field-view redaction coverage, and the complete backend smoke suite passed on 2026-07-21.
-7. Phase 7: Dashboard Builder - planned
+7. Phase 7: Dashboard Builder - in progress
+   - Dashboard persistence and the guarded data-source execution foundation are complete; the user-facing builder is not implemented yet.
+   - MySQL stores registered data sources, dashboards, widget layouts, filters, permissions, immutable versions, and published-version references.
+   - Authenticated admin APIs can discover SQL views, inspect their columns, register approved SQL views or guarded SELECT queries, and execute registered sources with parameter binding, pagination, row limits, timeouts, concurrency limits, and safe error responses.
+   - Dashboard query execution supports optional dedicated read-only credentials through `DASHBOARD_DB_USER` and `DASHBOARD_DB_PASSWORD`.
+   - Admin Portal now includes a Dashboard Data workspace for registering SQL views or guarded queries, inspecting returned columns, refreshing metadata, and running bounded result previews. Standard data-backed widgets remain planned.
+   - Admin Portal now includes Dashboard Builder management plus a responsive 12-column desktop and 4-column mobile canvas with persisted widget frames, drag/resize, collision protection, selection controls, keyboard movement, and undo/redo.
+   - Saved frames can now connect to registered Dashboard Data and render configurable KPI/number, donut, bar, line, and bounded paginated table widgets with column mappings, aggregations, formats, preview states, refresh, and CSV export.
+   - Pivot tables are first-class widgets with multi-level row and column fields, multiple value fields, count/sum/average/minimum/maximum aggregation, sorting, empty-value labels, collapsible row groups, independent subtotal/grand-total controls, result-size bounds, and CSV/Excel export.
+   - Dashboard-level date-range, dropdown, multi-select, search, current-user, and organization-unit filters map to declared guarded-query parameters. Values are bound by the backend, can reset to defaults, may use non-sensitive URL state, and refresh only widgets using the mapped data source.
+   - Dashboard access rules support roles, specific users, and organization hierarchy nodes with separate View and Configure flags. Published CRM dashboard pages and widget execution use immutable published snapshots, deny unmatched users by default, and record allowed/denied access decisions in the permission audit log.
+   - Dashboard execution is production-bounded with per-source timeouts and row limits, pagination metadata, an atomic four-query concurrency cap, safe overload/timeout errors, and slow-query diagnostics after two seconds.
+   - Results use a conservative 30-second in-memory cache keyed by data source, dashboard, widget, parameters, pagination, user, role, staff identity, and organization assignments. Source edits and archives invalidate matching entries; cached rows are never carried by refresh signals.
+   - Builder and published widgets support explicit refresh and show query timing, last-refreshed time, and cached/fresh state. Cache entries become stale after 60 seconds and are never served after their 30-second reuse window.
+   - Dashboard lifecycle controls now expose Save Draft, Check, Publish, and a one-column Version History drawer. Admins can create immutable named checkpoints with remarks, export credential-free versioned JSON, validate and import compatible configuration, and restore a prior snapshot as a new draft checkpoint without changing the active published version.
+   - Publishing creates and activates one immutable snapshot in a single database transaction. Widgets may define an allowlisted drill-down to another published dashboard or CRM module page; the backend rechecks destination access before returning identifiers, approved parameters, and a timestamp only.
    - Add low-code dashboard pages made from saved widget configuration instead of generated source code.
    - Use saved SQL views or guarded `SELECT` queries as dashboard data sources.
    - Support first widget types such as number cards, ring/donut charts, line charts, bar charts, and table widgets.
    - Each widget should map query result columns such as `label`, `value`, `date`, and `group` into the chart renderer.
    - Guard dashboard SQL so it is read-only: no `INSERT`, `UPDATE`, `DELETE`, `DROP`, comments, or statement separators.
    - Later add dashboard filters, date ranges, role/user permissions, config export/import, and version history.
-8. Phase 8: Workflow Module and Approver Workflows - planned
+8. Phase 8: Workflow Module and Approver Workflows - in progress
    - Create a separate `workflow` module for approval process configuration and runtime.
    - Reuse the form builder for workflow form definitions, but keep workflow config in a dedicated module.
    - Support workflow definitions with multiple approval steps, each with assigned approvers (role or user).
@@ -287,6 +303,295 @@ Admins should have a dedicated portal for configuring the CRM:
    - Preserve an immutable decision history containing the workflow version, step, actor, delegated actor, decision, comment, timestamp, and relevant record snapshot.
    - Publish workflow lifecycle events that Automation Flow can consume for notifications, task creation, integrations, status updates, and other follow-up actions.
    - Keep the responsibility boundary explicit: Approval Workflow decides whether a business action is authorized; it does not replace leave entitlement, attendance evaluation, benefit eligibility, or payroll calculation engines.
+   - Finalized Phase 8 specification baseline:
+     - `Workflow definition` is the administrator-configured approval design. Definitions move through draft, published, and archived states, and a definition cannot be published when any reachable required stage has no approver rule.
+     - `Workflow instance` is one submitted business request tied permanently to the exact published workflow version and relevant source-record snapshot with which it started.
+     - `Approval stage` is one ordered decision point. Stages may run sequentially or in parallel; Phase 8 parallel stages require every assigned approver to approve.
+     - All routing and approver rules must be configured before submission. If no published workflow matches, or an approver rule resolves to no eligible user, submission fails clearly and the request remains a draft. Approval is never bypassed silently.
+     - A stage may enable `Skip when condition is not met`. An inapplicable enabled stage is recorded as `skipped` with its reason, and processing continues to the next applicable stage.
+     - A stage may enable automatic self-approval when the requester is the only resolved approver. The result is recorded explicitly as `auto-approved`; otherwise unresolved self-approval stops submission with a clear configuration error.
+     - Approval-relevant fields are locked while a request is pending. They may be amended only after an approver returns the request for correction. Resubmission creates a new source snapshot, preserves the earlier history, and resumes from the returning stage.
+     - Approval remarks are optional by default and may be configured as required. Rejection and return-for-correction always require a remark. Rejection ends the request; withdrawal is allowed only while pending and is recorded with its remark.
+     - Comments and attachments are configurable as disabled, optional, or required at workflow or stage level. File access must follow the source record's permissions and field-redaction rules.
+     - Stage due dates, reminders, and escalation notifications are configurable. An overdue stage never becomes approved automatically.
+     - Existing instances retain their starting workflow version when a new version is published. Workflow decisions, skips, automatic approvals, snapshots, actors, remarks, attachments, timestamps, and lifecycle events form an immutable audit history.
+     - Workflow lifecycle events are published for Automation Flow follow-up actions. Notification or follow-up failure is logged and retryable but does not invalidate an authorized approval decision.
+     - Initial approver resolution covers specific users, roles, reporting managers, organization/HR responsibility, and user references stored in source-record fields. Missing, inactive, duplicate, and self-approver results must be validated explicitly.
+     - Delegation, substitute approvers, controlled administrative reassignment, any-one parallel approval, and quorum approval are deferred enhancements and are not required for initial Phase 8 completion.
+     - The reference acceptance scenario is a leave-style request: requester submission, supervisor approval, an optional conditional HR stage, approval/rejection/return, amendment and resubmission, withdrawal, SLA handling, immutable history, and Automation Flow notifications. The workflow engine remains module-independent; a future Leave module owns entitlement and balance calculations.
+   - Phase 8 workflow state-machine baseline:
+     - Request states are `draft`, `pending`, `returned`, `approved`, `rejected`, `withdrawn`, and `cancelled`. Submission is an audited transition from `draft` to `pending`, not a long-lived state.
+     - A `draft` may be edited or submitted. Successful submission resolves the published workflow version and all first-stage approvers, stores the source snapshot, locks approval-relevant fields, records `workflow.submitted`, and moves the request to `pending`.
+     - A `pending` request may remain pending while stages advance, become `approved` after the last applicable stage, become `rejected` with a mandatory remark, become `returned` with a mandatory correction remark, be withdrawn by its requester, or be cancelled by an authorized actor.
+     - A `returned` request is editable by its requester. Resubmission validates the amended record, stores a new snapshot, reactivates the stage that returned it, records `workflow.resubmitted`, locks approval-relevant fields again, and moves the request to `pending`.
+     - `approved`, `rejected`, `withdrawn`, and `cancelled` are terminal states. They cannot be reopened or overwritten in Phase 8; later business correction must create a new request.
+     - Stage states are `waiting`, `active`, `approved`, `rejected`, `returned`, `skipped`, `auto-approved`, and `cancelled`. Due and overdue are timing attributes on an active stage, not decision states.
+     - A stage begins as `waiting` and becomes `active` only after every required earlier stage has completed. A condition-false stage with skipping enabled moves directly from `waiting` to `skipped`; an eligible configured self-approval moves directly to `auto-approved`.
+     - A sequential active stage becomes `approved` after its resolved approver approves. It becomes `rejected` or `returned` immediately after the corresponding valid decision.
+     - A parallel active stage creates one immutable assignment per resolved approver and remains active until every assignment is approved. One valid rejection rejects the stage and request; one valid return returns the stage and request. Duplicate or late decisions are rejected.
+     - Completing a stage activates the next applicable stage. Skipped and auto-approved stages count as completed. If no applicable stage remains, the request becomes `approved`.
+     - Withdrawal or authorized cancellation cancels every waiting or active stage and pending assignment without deleting its history.
+     - If an assigned approver becomes inactive after submission, the stage remains pending and is flagged as blocked; it is never skipped or auto-approved. Because reassignment is deferred, the initial release permits withdrawal or authorized cancellation followed by correction of the workflow configuration and a new submission.
+     - Every accepted transition is transactional, permission-checked, idempotent, and appended to history with the prior state, next state, workflow version, stage, actor, remark, snapshot reference, and timestamp.
+   - Phase 8 workflow configuration baseline:
+     - Definition metadata contains a stable `workflowKey`, name, description, lifecycle status, source module, request form reference, configuration schema version, current draft version, published version, and audit ownership fields. Keys and published version snapshots are immutable.
+     - `sourceBinding` selects one published module and its stable record identifier. `formBinding` references shared Form Builder metadata and layout versions; workflow routing never duplicates field definitions or validation rules.
+     - `trigger` defines the configured entry action, initially `manual_submit` or a named module action. It includes optional entry conditions and the permissions required to create, save, and submit a request.
+     - `entryCondition` and stage `condition` use a structured, allowlisted rule model with nested all/any groups, stable field data keys, typed operators, and typed comparison values. Arbitrary JavaScript, SQL, and executable expressions are prohibited.
+     - `recordPolicy` identifies approval-relevant fields, whether the full record or only those fields are locked while pending, which fields appear in the immutable snapshot, and whether cancellation is permitted for authorized actors.
+     - A definition contains an ordered `stages` array. Every stage has a stable `stageKey`, name, order, enabled flag, optional condition, `skipWhenConditionFalse`, approver rules, self-approval policy, decision/comment policy, attachment policy, SLA policy, and escalation-notification policy.
+     - Phase 8 stage `approvalMode` is `all`. Sequential processing comes from stage order; multiple resolved approvers within one active stage operate in parallel and every assignment must approve.
+     - Each approver rule has a stable key and one allowlisted type: `user`, `role`, `reporting_manager`, `organization_responsibility`, or `record_user_field`. One approval stage can mix multiple users, roles, departments (stored as organization responsibilities), and dynamic resolvers; duplicate resolved users count once and every resolved approver must approve.
+     - `selfApprovalPolicy` is either `error` or `auto_approve`. Automatic self-approval is allowed only when the requester is the sole resolved approver and is always recorded in history.
+     - `decisionPolicy` controls whether approval remarks are optional or required. Rejection and return remarks are always required. Return resumes from the returning stage; withdrawal is requester-only while pending.
+     - `attachmentPolicy` is `disabled`, `optional`, or `required`, with allowlisted file types, maximum file size, maximum file count, and whether the policy applies to submission, approval, rejection, or return.
+     - `slaPolicy` may be disabled or specify a positive duration and unit, reminder offsets, and an escalation-notification recipient rule. SLA expiry marks the active stage overdue and emits events; it never changes the decision state or approver assignment.
+     - `eventPolicy` enables allowlisted Workflow lifecycle events for Automation Flow and may attach only approved workflow, stage, actor, source-record, decision, and snapshot-reference fields. Secrets and fields hidden by permission rules are excluded.
+     - Configuration validation checks stable and unique keys, a published source module/form, at least one enabled reachable stage, valid stage order, valid typed conditions, at least one approver rule per reachable stage, resolver references, self-approval policy, attachment bounds, SLA bounds, record-lock fields, permission references, and event payload allowlists.
+     - A valid draft may be checked and versioned before publishing. Publishing creates one immutable snapshot atomically; running instances never read mutable draft configuration.
+     - Reserved extension fields may support future delegation, substitution, reassignment, `any` approval, and quorum, but Phase 8 validation rejects those modes until their later implementation is explicitly delivered.
+   - Phase 8 validation and error-handling baseline:
+     - Check and publish responses use structured findings with stable `code`, `severity`, configuration `path`, safe user-facing `message`, and recommended `remediation`. Errors block publishing; warnings require review but do not block it.
+     - Publishing is blocked for invalid or duplicate keys, unpublished or incompatible module/form references, no reachable enabled stage, invalid stage order or condition types, a reachable stage without an approver rule, invalid resolver or authority references, unsupported approval modes, invalid self-approval policy, invalid lock fields, attachment/SLA bounds, permission references, or event payload fields.
+     - Submission validates authentication and permission, source record existence and version, source-domain/Form Builder rules, one unambiguous matching published workflow, entry conditions, no conflicting active request, record-lock availability, and every first applicable stage's eligible approvers before changing state.
+     - No matching published workflow, multiple equally matching workflows, or a resolver producing no eligible approver stops submission and leaves the request editable as a draft. The response identifies the workflow/stage needing administrator attention without exposing hidden users, rules, or fields.
+     - HTTP behavior follows the existing API conventions: `400` for malformed requests, `401` for authentication failure, `403` for permission or assignee denial, `404` for a visible missing resource, `409` for stale state, duplicate/conflicting requests, locks, or concurrency conflicts, `413` for attachment size limits, `422` for validly shaped requests that fail workflow/configuration rules, and `500` only for unexpected server failures.
+     - Initial stable error families include `WORKFLOW_CONFIG_*`, `WORKFLOW_PUBLISH_*`, `WORKFLOW_SUBMIT_*`, `WORKFLOW_APPROVER_*`, `WORKFLOW_STATE_*`, `WORKFLOW_PERMISSION_*`, `WORKFLOW_ATTACHMENT_*`, `WORKFLOW_SLA_*`, and `WORKFLOW_CONFLICT_*`. API clients use codes, not message text, for behavior.
+     - Runtime actions recheck the current instance, stage, assignment, actor, permission, required remark/attachment, and optimistic version inside the same transaction. Invalid transitions, non-assignee decisions, duplicate decisions, completed stages, and stale versions never mutate state.
+     - Repeating the same command with the same idempotency key returns its original successful result. Reusing that key with different input returns a conflict. Simultaneous final approvals create only one stage-completion and one next-stage/completion event.
+     - Record updates blocked by a pending approval return a conflict identifying the active workflow request and permitted next action, without leaking protected workflow details.
+     - User messages are specific and actionable, for example `Unable to submit: Supervisor Approval has no eligible approver. Contact HR or the workflow administrator.` Internal SQL, stack traces, secrets, hidden field values, and inaccessible user identities are never returned.
+     - Expected validation failures are not retried automatically. Retry is limited to transient infrastructure and Automation Flow delivery failures with bounded attempts and idempotency.
+     - Allowed and denied security-sensitive actions, failed submissions, publish failures, conflicts, and transition attempts are audited with safe reason codes. Validation failure never creates a partial instance, assignment, decision, lock, or lifecycle event.
+   - Phase 8 database design baseline:
+     - `crm_workflow_definitions` stores stable workflow identity, mutable draft configuration JSON, lifecycle status, source module/form references, schema/current version numbers, the active published-version reference, ownership, and timestamps. `workflow_key` is unique; archived definitions are retained rather than reused.
+     - `crm_workflow_versions` stores immutable published/checkpoint snapshots, version number, schema version, checksum, action/summary, and creator/publisher metadata. `(workflow_id, version_number)` and snapshot checksum constraints prevent duplicate or ambiguous versions.
+     - `crm_workflow_version_stages` stores immutable searchable stage metadata for a version: stable stage key, order, condition/skip policy, `all` approval mode, self-approval policy, decision/attachment/SLA settings, and event settings. `(workflow_version_id, stage_key)` and `(workflow_version_id, stage_order)` are unique.
+     - `crm_workflow_version_approver_rules` stores immutable resolver rules for each versioned stage, including stable rule key, allowlisted resolver type, resolver reference/configuration, optional authority condition, and deterministic rule order.
+     - `crm_workflow_instances` stores the request key, workflow/version, source module and polymorphic source-record identifier, requester, current request status and stage, optimistic `lock_version`, submission/completion timestamps, and terminal reason metadata. Historical source references are not cascade-deleted.
+     - `crm_workflow_instance_snapshots` stores append-only source snapshots for initial submission and every resubmission, with revision number, visible approval data JSON, source record version, checksum, creator, and timestamp. `(instance_id, revision_number)` is unique.
+     - `crm_workflow_instance_stages` materializes each runtime stage with its versioned stage key/order, state, active snapshot revision, activation/completion timestamps, due/overdue fields, skip/auto-approval reason, and optimistic version. It never depends on mutable definition rows.
+     - `crm_workflow_assignments` stores one immutable resolved approver assignment per active stage, including approver user, resolver type/rule, captured approver identity, status, authority-evaluation result, due/escalation fields, decision timestamp, and optimistic version. `(instance_stage_id, approver_user_id)` prevents duplicate assignments.
+     - `crm_workflow_decisions` is append-only and records assignment/stage/instance, action, actor, captured actor identity, mandatory or optional remark, snapshot revision, request/assignment versions, idempotency key, and timestamp. Decision rows are never updated into a different decision.
+     - `crm_workflow_attachments` stores protected attachment metadata, file bytes, uploader, purpose/action, content type, size, checksum, and optional instance/decision linkage; file bytes remain behind authenticated workflow access rather than being embedded in source-record or workflow JSON.
+     - `crm_workflow_record_locks` has a unique `(source_module_key, source_record_id)` key and records the active instance, lock scope/field list, owner, and timestamp. The unique row prevents two active workflows from silently locking the same protected record.
+     - `crm_workflow_events` is a transactional outbox containing a unique event key, event type/schema version, instance/stage/decision references, redacted payload JSON, delivery status, attempt count, next-attempt time, and delivery/error timestamps for idempotent Automation Flow consumption.
+     - `crm_workflow_idempotency_keys` stores command scope, actor, idempotency key, request hash, result reference/response metadata, and expiry. `(scope, actor_id, idempotency_key)` is unique, and reuse with a different request hash is a conflict.
+     - `crm_workflow_audit_logs` stores append-only allowed/denied configuration and runtime activity with safe reason code, workflow/instance/stage references, actor, target, result, redacted metadata, correlation ID, and timestamp.
+     - Foreign keys use `RESTRICT` for versioned workflow/runtime history, `CASCADE` only for non-historical draft-owned configuration that cannot outlive its parent, and `SET NULL` for removable user accounts while captured identity fields preserve historical meaning.
+     - Required indexes cover definition status/source module, version lookup, instance source/status/requester/current stage, approver inbox status/due date, stage status/due date, decision timeline, audit timeline/result, undelivered outbox attempts, idempotency expiry, and record-lock ownership.
+     - Publishing runs in one transaction that validates and locks the definition, inserts the immutable version/stages/rules, advances the version pointer, and writes its audit/outbox evidence. Submission and every decision similarly lock the instance/stage/assignments, validate optimistic versions, write all state/history rows, and commit one outbox event atomically.
+     - Sensitive snapshots, resolver configuration, remarks, attachments, and event payloads follow field permissions, least privilege, encryption/protected storage, retention, export, and deletion policies. Historical decisions are retained or cryptographically anonymized under an approved retention process, never silently rewritten.
+     - Item 5 defines this logical schema only. Physical DDL, idempotent migration helpers, compatibility checks, and migration tests belong to Item 6.
+   - Phase 8 database migration - complete:
+     - The idempotent MySQL migration now creates all 16 `crm_workflow_*` tables for definitions, immutable versions, versioned stages and approver rules, instances and snapshots, runtime stages and assignments, append-only decisions, attachments, record locks, transactional events, idempotency keys, audit logs, delegation schedules, and assignment-transfer lineage.
+     - Table creation follows dependency order, uses additive `CREATE TABLE IF NOT EXISTS`, and attaches the circular published-version reference only after definitions and versions exist.
+     - Unique keys protect workflow/request/event identity, version and stage ordering, record locks, decisions, and idempotent commands. Foreign keys preserve versioned runtime history and retain captured identity when a user is removed.
+     - `npm.cmd run db:migrate` completed twice consecutively on 2026-07-24, verifying that re-running the migration does not fail or duplicate schema objects.
+     - `npm.cmd run test:smoke:workflow-migration` verifies the live database tables, workflow and stage status enums, required unique indexes, idempotency actor key, and critical published-version/runtime/event foreign keys.
+     - This migration is additive and does not delete or rewrite existing CRM, Automation Flow, Dashboard Builder, or user data. Recovery should preserve the new empty/additive tables unless an explicitly reviewed rollback is required; automated destructive rollback is intentionally not provided.
+     - Item 6 does not expose workflow APIs or execute workflow behavior. Repository and service implementation begins with later items.
+   - Phase 8 workflow repository layer - complete:
+     - `src/modules/workflows/workflows.repository.js` maps workflow definition, version, instance, stage, assignment, lock, decision, event, idempotency, and audit rows into stable application objects.
+     - Definition persistence supports filtered listing, lookup, draft creation/update, immutable checkpoint/publish versions, normalized versioned stages and approver rules, published-version pointers, and atomic version numbering.
+     - Runtime persistence supports atomic instance bundles containing the request, initial snapshot, materialized stages, resolved assignments, optional record lock, and initial outbox event.
+     - Append-only snapshot, decision, event, idempotency, and audit functions preserve source/actor evidence without embedding business authorization rules in the repository.
+     - Instance, stage, and assignment updates require the expected optimistic `lock_version`; stale writers update zero rows and cannot silently overwrite a concurrent decision.
+     - Record-lock acquisition uses the database uniqueness constraint, record-lock lookup returns the active request context, and explicit release removes only the matching instance lock.
+     - Approver-inbox queries are indexed by approver/status/due date. Instance timeline queries combine immutable decisions and lifecycle events in chronological order.
+     - Transaction helpers guarantee commit/rollback/release, and compound persistence functions use one MySQL connection so versions and submitted instance bundles cannot partially persist.
+     - `npm.cmd run test:smoke:workflow-repository` verifies definition/version persistence, a submitted request bundle, snapshot, active stage, assignment, inbox, record lock, approval decision, stale-write rejection, duplicate-decision protection, idempotency result lookup, audit/outbox persistence, timeline output, and complete cleanup.
+     - Item 7 deliberately does not decide whether a configuration or transition is valid. Configuration validation and business authorization belong to the service/runtime items that follow.
+   - Phase 8 workflow configuration service - complete:
+     - `src/modules/workflows/workflows.service.js` provides the application-level create, read, list, update, clone, archive, check, checkpoint, publish, and immutable-version operations for workflow definitions.
+     - Configuration is normalized into one versioned contract covering the source module, ordered stages, conditions, approver resolvers, decision/attachment policies, SLA settings, and lifecycle events.
+     - Validation returns stable, path-specific findings with a code, severity, message, and remediation. Publishing is blocked when any error remains; a draft may still be saved and checked.
+     - Publish validation verifies the source module and form layout are published, referenced fields exist, direct users are active, roles and organization nodes exist, and every enabled stage has a supported approver rule.
+     - Conditions use allowlisted groups and operators rather than executable JavaScript or SQL. Phase 8 accepts only `all` approval, supported resolver types, explicit skip behavior, and the configured self-approval policy.
+     - Workflow keys become immutable after creation, archived definitions cannot be edited or published, and checkpoint/publish operations create immutable numbered snapshots while publishing advances the active-version pointer atomically.
+     - `npm.cmd run test:smoke:workflow-configuration` verifies structured invalid-draft findings, blocked publication, corrected configuration, immutable keys, check/checkpoint/publish/version history, cloning, archiving, and archived-edit protection.
+     - Item 8 is the backend configuration service only. HTTP routes and the Admin Portal workflow designer remain later items.
+   - Phase 8 approver resolution layer - complete:
+     - `src/modules/workflows/workflows.approvers.js` resolves configured approver rules into active CRM users before runtime assignments are created.
+     - Supported resolvers cover a specific user, every active user in a role, the requester's reporting manager, an organization responsibility, and a user reference stored in the submitted record snapshot.
+     - User references may use stable numeric user IDs, staff IDs, or email addresses. Duplicate users returned by multiple rules are collapsed into one approver while retaining safe rule provenance.
+     - Reporting-manager resolution reads a configurable requester custom-field key and defaults to `reporting_manager_user_id`. Organization responsibility can be restricted to an existing role and may include descendant organization nodes.
+     - Inactive users are never eligible. Missing requesters, invalid organization nodes, unsupported resolver types, and rules producing no active user return stable `WORKFLOW_APPROVER_*` errors and do not silently bypass the stage.
+     - Configured `auto_approve` identifies the requester's assignment for explicit automatic-decision evidence. A stage is marked eligible for stage-level automatic approval only when the requester is its sole approver; otherwise all remaining approvals are still required.
+     - When self-approval is not configured, any rule resolving to the requester blocks resolution with `WORKFLOW_APPROVER_SELF_APPROVAL_BLOCKED`.
+     - `npm.cmd run test:smoke:workflow-approvers` verifies all five resolver types, descendant/role organization filtering, ID/staff reference matching, inactive-user exclusion, missing-approver failure, configured self-auto-approval, and blocked self-approval.
+     - Item 9 resolves identities only. Stage-condition evaluation, submission transactions, assignment persistence, decisions, HTTP APIs, and frontend experiences remain later items.
+   - Phase 8 request tracking identity - complete:
+     - Every workflow definition has a unique system-generated uppercase `request_prefix` and an atomic per-workflow `next_request_number`; administrators do not need to enter a prefix.
+     - A submitted workflow instance receives one permanent, searchable `request_key` in the format `<PREFIX>-<six-digit number>`, for example `LEAVE-000001`.
+     - The visible `request_key` is the support and audit reference. The numeric instance `id` remains an internal database primary key, while `source_record_id` continues to identify the originating module record.
+     - Request numbers are allocated under a workflow-definition row lock inside the same instance-creation transaction. Concurrent submissions cannot receive the same number, and a transaction that fails before submission does not consume a number.
+     - Successfully allocated numbers are never reset or reused after approval, rejection, return, withdrawal, cancellation, archival, or deletion under a retention process.
+     - The globally unique `request_key` database constraint remains the final collision safeguard. Workflow prefixes are also unique, preventing two workflows from producing the same visible request ID.
+     - Workflow repository smoke coverage verifies that the first generated request uses sequence `000001`; migration smoke coverage verifies the prefix/counter columns and unique prefix index.
+     - The prefix is derived automatically from the workflow key. If the derived value already exists, the service appends a numeric suffix automatically while preserving the 20-character limit.
+   - Phase 8 condition and stage-routing engine - complete:
+     - `src/modules/workflows/workflows.conditions.js` evaluates the structured allowlisted condition contract without executing JavaScript, SQL, templates, or arbitrary expressions.
+     - Nested `all` and `any` groups support equality, inequality, containment, prefix/suffix, numeric or date ordering, empty checks, and list membership against immutable submitted-record snapshots.
+     - Entry conditions determine whether a published workflow matches a request. A false entry condition selects no stages and makes no state changes.
+     - Enabled stage conditions produce an explicit `applicable`, `skipped`, or `blocked` routing result. Configured `skipWhenConditionFalse` records `WORKFLOW_STAGE_CONDITION_FALSE` and continues; a false condition without configured skipping stops routing.
+     - Disabled stages are identified separately and never become approval assignments.
+     - Approver authority conditions now filter approver rules against the same snapshot before identities are resolved. If every authority rule is inapplicable, the existing no-eligible-approver safeguard blocks submission.
+     - Evaluation traces contain only configuration path, field key, operator, and match result, avoiding exposure of sensitive field values.
+     - Malformed or unsupported runtime conditions fail with stable `WORKFLOW_CONDITION_INVALID` details rather than being treated as approval.
+     - `npm.cmd run test:smoke:workflow-conditions` verifies nested groups, typed comparisons, dot-path fields, entry mismatch, configured stage skipping, blocking behavior, safe rejection of executable operators, and integration with approver resolution.
+     - Item 10 evaluates routing only. Transactional submission, runtime stage materialization, decisions, HTTP APIs, and frontend experiences remain later items.
+   - Phase 8 transactional request submission runtime - complete:
+     - `src/modules/workflows/workflows.runtime.js` submits an accessible source-module record against one unambiguous matching published workflow and its immutable published version.
+     - Submission loads the source record through the existing permission-aware module-record service, captures a normalized immutable snapshot, evaluates the entry and stage routes, and resolves every applicable stage's eligible approvers before writing runtime state.
+     - No match, multiple matches, a non-skippable false stage condition, an invalid/inactive requester or approver, and an existing active record lock stop submission with stable `WORKFLOW_SUBMIT_*`, `WORKFLOW_APPROVER_*`, or `WORKFLOW_CONFLICT_*` errors.
+     - One database transaction allocates the permanent readable request ID, inserts the instance and first snapshot, materializes skipped/auto-approved/active/waiting stages, creates assignments, records automatic self-approval decisions, acquires the record lock, appends lifecycle events and audit evidence, and stores the idempotent response.
+     - Conditional false stages configured for skipping are persisted as `skipped` with `WORKFLOW_STAGE_CONDITION_FALSE`. The first applicable non-auto-approved stage becomes `active`; later applicable stages wait in order.
+     - Active-stage SLA configuration produces a due timestamp when the stage is activated. Expiry still never implies approval.
+     - The instance remains `pending` and points to its active stage. If all applicable stages are skipped or explicitly self-auto-approved, submission completes the instance as `approved` without retaining a record lock.
+     - Repeating the same submission with the same actor, idempotency key, and request identity returns the original request. Reusing that key for different input returns `WORKFLOW_CONFLICT_IDEMPOTENCY_MISMATCH`.
+     - The unique source-record lock protects concurrent submissions even if two callers pass the read-before-write check simultaneously; the losing transaction receives `WORKFLOW_CONFLICT_ACTIVE_REQUEST`.
+     - `npm.cmd run test:smoke:workflow-submission` verifies `000001` request generation, immutable snapshot creation, configured stage skipping, active-stage/SLA materialization, approver assignment, record locking, submission/skip/start events, audit evidence, idempotent replay/mismatch, and duplicate-active-request rejection.
+     - Item 11 implements backend submission only. Approve/reject/return/withdraw transitions, resubmission, HTTP APIs, and requester/approver frontend experiences remain later items.
+   - Phase 8 transactional approver decisions - complete:
+     - `src/modules/workflows/workflows.decisions.js` executes `approve`, `reject`, and return-for-correction decisions against the active stage and the actor's immutable assignment.
+     - Every decision requires an authenticated active user who is assigned to the current active stage. Non-assignees, inactive users, already-decided assignments, non-pending requests, missing active stages, and stale optimistic versions are rejected without mutation.
+     - Rejection and return always require remarks. Approval remarks follow the published stage policy.
+     - The request, active stage, and actor assignment are locked and rechecked in one transaction before an append-only decision is written and state changes are applied.
+     - `approvalMode: all` remains pending after a partial approval. The stage completes only when no pending assignments remain, then exactly one next waiting stage is activated with its SLA due time; if no stage remains, the request becomes approved.
+     - Rejection marks the assignment/stage/request rejected, cancels the other pending assignments, releases the source-record lock, and appends `workflow.rejected`. Return performs the corresponding returned transition, preserves the returning stage key, releases the lock for requester amendment, and appends `workflow.returned`.
+     - Final approval releases the source-record lock and emits `workflow.approved`. Stage completion and next-stage activation emit immutable stage-approved and stage-started events.
+     - Accepted actions append audit evidence containing the prior and resulting request state. The decision, assignment/stage/request updates, events, audit row, lock release, and idempotent response commit or roll back together.
+     - Repeating the same actor/key/input returns the original result. Changed input with that key, late decisions, and duplicate decisions return stable conflict errors.
+     - `npm.cmd run test:smoke:workflow-decisions` verifies non-assignee denial, required rejection remarks, multi-approver `all` behavior, next-stage activation, final approval, rejection, return, record-lock release, immutable timeline decisions, and idempotent replay.
+     - Item 12 implements approver decisions only. Requester withdrawal, correction/resubmission, authorized cancellation, HTTP APIs, and frontend experiences remain later items.
+   - Phase 8 requester lifecycle and administrative cancellation - complete:
+     - `src/modules/workflows/workflows.lifecycle.js` implements requester withdrawal, returned-request resubmission, and authorized administrative cancellation.
+     - Only the original requester may withdraw a pending request or resubmit a returned request. Initial authorized cancellation requires an active administrator, a mandatory remark, and a published workflow version whose record policy allows cancellation.
+     - Withdrawal and cancellation atomically cancel open stages and pending assignments, transition the request to its terminal state, release the source-record lock, and append lifecycle event, audit, and idempotency evidence without deleting earlier history.
+     - Return continues to release the record lock so the requester can amend the source record. Resubmission reloads that record through the permission-aware module service and retains the instance's original immutable workflow version.
+     - Resubmission re-evaluates entry/stage conditions from the returning stage onward, resolves eligible approvers again against the amended snapshot, and blocks if the record no longer matches, a non-skippable condition fails, or an approver cannot be resolved.
+     - One new immutable snapshot revision is appended. Earlier decisions and snapshots remain unchanged; the permanent request ID is retained.
+     - Downstream runtime stages are reconciled against the new route. Ineligible old assignments are cancelled, still-eligible assignments are reset with fresh authority evidence, new eligible assignments are added, and skipped/self-auto-approved/active/waiting state is rebuilt from the returning stage.
+     - A new active stage restores the configured source-record lock and SLA due time. If all remaining stages skip or self-auto-approve, the existing request completes without retaining a lock.
+     - Resubmission emits stage skip/auto-approval/start evidence plus `workflow.resubmitted`; self-auto-approval appends a new immutable decision tied to the new snapshot.
+     - All three commands require idempotency keys. Same-key/same-input retries return the original result, while changed input returns a stable conflict.
+     - `npm.cmd run test:smoke:workflow-lifecycle` verifies requester-only withdrawal, non-admin cancellation denial, admin cancellation, terminal lock release, return/amend/resubmit, snapshot revision 2, assignment reset, stage reactivation, lock restoration, and idempotent replay.
+     - Item 13 completes the initial backend request lifecycle. HTTP APIs, SLA/reminder workers, Automation Flow delivery, permissions/audit presentation, and frontend experiences remain later items.
+   - Phase 8 source-record protection integration - complete:
+     - `src/modules/workflows/workflows.protection.js` enforces active workflow record locks on actual CRM mutation paths and returns the readable request ID in every lock conflict for support follow-up.
+     - A `record` lock blocks all edits and deletion. A `fields` lock compares persisted and proposed values and blocks only changed approval-relevant fields, allowing unrelated fields to remain editable when configured.
+     - Locked detail-table field keys are detected in submitted detail rows and cannot bypass field-level protection.
+     - Generated-module updates are protected in both the service and repository layers. Repository enforcement also covers internal callers such as imports or Automation Flow that use the shared update/delete persistence functions.
+     - Dedicated Customer and User update paths use the same protection guard, and Customer bulk deletion checks every selected record before deleting any row.
+     - Conflicts return `409` with `WORKFLOW_CONFLICT_RECORD_EDIT_LOCKED` or `WORKFLOW_CONFLICT_RECORD_DELETE_LOCKED`, the lock scope, affected fields, and the permanent request key such as `LEAVE-000001`.
+     - No administrator or background process silently overrides a pending approval lock. An authorized lifecycle action must first return, withdraw, reject, cancel, or complete the workflow using its audited transition.
+     - The lock release and restoration behavior already verified by Items 12 and 13 now controls real module editability: returned records are amendable, resubmitted records are protected again, and terminal requests no longer block the source record.
+     - `npm.cmd run test:smoke:workflow-protection` verifies unlocked editing, unrelated-field editing under a field lock, protected main/detail-field denial, whole-record edit denial, deletion denial, stable error details, and readable request references.
+     - Item 14 protects backend mutation paths. HTTP workflow APIs and frontend disabled-field/lock-banner presentation remain later items.
+   - Phase 8 workflow authorization and redaction - complete:
+     - `src/modules/workflows/workflows.access.js` centralizes configuration, request-view, participant, source-module, and snapshot-field authorization.
+     - Workflow creation, update, cloning, archival, checkpointing, and publishing require an authenticated administrator at the service boundary.
+     - A request is visible only to an administrator, its original requester, or a user with an assignment on one of its stages. Knowing a readable request ID does not grant access.
+     - Non-admin participants must also retain source-module view permission. Allowed and denied request-access decisions append workflow audit rows with stable safe reason codes.
+     - Submission and resubmission now verify that every resolved approver can view the source module before any runtime state is written. An inaccessible approver produces `WORKFLOW_APPROVER_SOURCE_VIEW_DENIED` instead of an unusable assignment.
+     - Decision processing rechecks the active approver's source-module visibility inside the decision transaction in addition to assignment ownership and active-user status.
+     - Request views load the latest immutable snapshot, stages, and timeline only after authorization. Snapshot fields are filtered through the existing field-level view permissions.
+     - Timeline actor identity is reduced to user ID, staff ID, and display name; email, role, resolver internals, hidden fields, and other private identity data are not exposed by the access view.
+     - Stable denials distinguish unauthenticated access, non-participants, missing source visibility, non-assignees, cancellation denial, requester-only actions, and configuration denial.
+     - `npm.cmd run test:smoke:workflow-access` verifies admin-only configuration, requester and approver relationships, stranger denial, source-view denial, field redaction, actor-identity minimization, and allowed/denied audit evidence.
+     - Item 15 implements backend authorization and safe read models. Frontend role-aware navigation/actions remain later items.
+   - Phase 8 authenticated Workflow HTTP APIs - complete:
+     - `src/modules/workflows/workflows.routes.js` exposes the completed configuration, request runtime, decision, lifecycle, inbox, and safe request-read services under `/api/workflows`.
+     - Every Workflow route requires a valid authenticated session. Definition listing, creation, detail, update, clone, archive, configuration check, checkpoint, publish, and immutable version reads additionally require the administrator role.
+     - Request APIs provide participant-filtered request listing, permission-redacted request detail with stages and timeline, and the current user's approver inbox.
+     - Submission, approval/rejection/return decisions, requester withdrawal, requester resubmission, and administrative cancellation are available as explicit command endpoints.
+     - Every state-changing runtime command requires an `Idempotency-Key` HTTP header or matching request-body key. Missing keys return a stable `WORKFLOW_CONFLICT_IDEMPOTENCY_REQUIRED` error before runtime mutation.
+     - Route inputs are validated with bounded schemas and use the existing stable Workflow error contract. Service-layer authorization, state checks, transaction boundaries, immutable history, record locks, and field redaction remain authoritative rather than being duplicated in controllers.
+     - `src/app.js` mounts the router at `/api/workflows`; the complete backend smoke suite now checks unauthenticated denial and authenticated definition access instead of expecting the Phase 8 route to be absent.
+     - `npm.cmd run test:smoke:workflow-api` verifies authentication, admin configuration CRUD, checks, checkpoints, immutable version reads, invalid-publish protection, cloning, archival, inbox/request listing, and mandatory idempotency.
+     - Item 16 completes the initial backend HTTP API surface. Workflow configuration, requester submission/tracking, approver inbox/decisions, lock presentation, and timeline frontend experiences remain a later item.
+   - Phase 8 Workflow frontend experience - complete:
+     - The main CRM navigation now includes `Approval Requests` for authenticated users. The workspace separates request tracking from the current user's pending approval inbox, with status filtering, search, operational summary counts, and clear empty states.
+     - Request detail presents the permanent readable request ID, current status, source-record reference, workflow version, relationship-aware actions, permission-redacted immutable snapshot, and an ordered decision/event timeline.
+     - A vertical approval rail distinguishes waiting, active, approved, auto-approved, skipped, returned, rejected, and cancelled stages, including visible due dates and safe skip/reason text.
+     - Requesters can submit an existing source record through an available published workflow, withdraw a pending request, and resubmit an amended returned request. Assigned approvers can approve, reject, or return for correction; administrators can cancel only where the published record policy permits it.
+     - Runtime commands generate and send a unique `Idempotency-Key`. Rejection and return require remarks in the interface, and cancellation follows the backend's mandatory-remark and policy checks.
+     - The Admin Portal now includes `Approval Workflow`. Its structured builder configures definition metadata, source module/form binding, whole-record or selected-field locking, snapshot fields, authorized cancellation, ordered enabled stages, multiple user/role references, allowlisted conditions, conditional skipping, self-auto-approval, approval-remark policy, and SLA duration.
+     - Administrator actions cover create, edit, check with structured finding/remediation presentation, checkpoint, publish, clone, archive, reorder stages, and inspect the automatically allocated readable request prefix. Draft keys become read-only after creation and published requests retain their immutable starting version.
+     - `/api/workflows/catalog` exposes only safe published workflow metadata to authenticated requesters. Draft configuration, resolver internals, version snapshots, and administrator controls remain protected by the existing admin-only definition endpoints.
+     - The layout is responsive and uses a restrained approval-rail visual language consistent with the CRM. Mobile layouts collapse list/detail and builder rails into a single column with keyboard-accessible native controls.
+     - `npm.cmd run test:smoke:workflow-frontend` verifies the delivered navigation, request/admin surfaces, command wiring, API integration, idempotency headers, approval/lifecycle controls, rail styling, and responsive contract. Workflow API and complete backend smoke suites remain green.
+     - Browser loading and frontend initialization were verified without console errors on 2026-07-27. On 2026-08-09, Playwright additionally verified the real requester-to-approver journey: authenticated submission of a built-in Customer record, readable `-000001` request identity, approver inbox visibility, approval, terminal status/history rendering, and isolated fixture cleanup.
+     - Item 17 delivers the initial frontend for the completed Phase 8 backend. SLA reminder/escalation workers and controlled reassignment/delegation remain deferred enhancements.
+   - Phase 8 protected workflow attachments - complete:
+     - Start nodes independently configure submission attachments, while each Approval node configures approval, rejection, and return attachments as disabled, optional, or required.
+     - Administrators select an allowlist of PDF, JPEG, PNG, plain-text, DOCX, and XLSX files plus per-action size and count limits. Publishing fails closed for unsupported types, invalid actions, or limits above 25 MB and 20 files.
+     - Request and decision commands accept multipart uploads. Required attachments are checked before mutation, and metadata, file bytes, uploader, purpose, decision linkage, and SHA-256 checksum commit in the same transaction as the workflow action.
+     - Files are stored in the protected workflow attachment table rather than source-record JSON. They never update the source module unless a separate authorized Automation Flow or SQL process is explicitly configured to do so.
+     - Only administrators, the original requester, and assigned workflow participants who retain source-module visibility can list or download files. Downloads are instance-scoped, force attachment disposition, and disable MIME sniffing.
+     - The requester and decision modals expose policy-aware multi-file controls, and request detail lists authorized evidence with direct downloads. The real Playwright requester-to-approver journey verifies required submission/approval files and download behavior.
+     - Executable and active-content formats are rejected; malware scanning and quarantine remain a future hardening option when an approved scanning service is available.
+   - Phase 8 optional SLA reminders, escalation, and workflow monitoring - complete:
+     - SLA remains disabled by default and is configured independently on each Approval node. Enabled stages define a duration in minutes, hours, or days, one or more reminder offsets before the deadline, and whether overdue work is only marked or also emits an escalation notification.
+     - `src/modules/workflows/workflows.sla.js` periodically scans active due stages. Deterministic event keys make every configured reminder and overdue escalation idempotent across polling, restarts, and concurrent attempts.
+     - Reminder and escalation events use the existing transactional Workflow event outbox. Linked Automation Flows can send email, create tasks, call APIs, or perform other follow-up without coupling notification delivery to approval state changes.
+     - When a deadline passes, the active stage receives its first `overdue_at` timestamp and pending assignments receive `escalated_at`. The immutable timeline records `workflow.reminder_due` and configured `workflow.escalated` events.
+     - Administrators have a dedicated responsive Workflow Monitoring page showing open routes, due-soon work, overdue work, current stage, requester, approvers, source reference, deadline, and elapsed urgency. Search and request/SLA filters support operational review without opening every request.
+     - Monitoring can open the protected request detail, queue an idempotent manual reminder, refresh current data, or request an immediate deadline scan. Non-administrators cannot access the organization-wide monitoring APIs or page.
+     - The monitoring page uses the workflow request key as the support reference and never changes source-record data. Business-calendar deadlines, recurring post-overdue reminders, quorum approval, and multi-hop substitution remain future extensions.
+     - The admin-only Workflow Monitoring page separates `Live monitoring` from `History & reports`. History can be filtered by workflow, request status, requester, approver, requester department, submitted date range, and free-text request/workflow search.
+     - Every report row opens the protected request detail and its immutable decision/event timeline, including reminders, escalation, delegation, reassignment, remarks, and recorded responses subject to the existing visibility rules.
+     - Administrators can export the current filtered result set through the protected CSV endpoint. The export is generated from the same monitoring query as the screen and is capped at 500 requests per export.
+   - Phase 8 built-in notifications and optional approval email - complete:
+     - Workflow lifecycle events automatically create idempotent internal notifications for requesters, active approvers, delegated approvers, and reassigned approvers. Automation Flow configuration is not required for standard workflow notifications.
+     - Every signed-in user has a top-right notification centre with an unread badge, unread-only filter, mark-one/mark-all-read controls, timestamps, and protected links back to the referenced approval request.
+     - Admin Portal includes an admin-only Email Settings workspace for Gmail test accounts, Google Workspace SMTP Relay, Microsoft 365 Graph, and generic SMTP. Provider-specific grey examples explain the applicable host, port, sender, account, App Password, SMTP password, or Entra application fields.
+     - SMTP credentials are encrypted at rest with AES-256-GCM using `EMAIL_SETTINGS_ENCRYPTION_KEY` (falling back to `JWT_SECRET` for local development), are never returned to the browser, and remain separate from immutable workflow definitions.
+     - Approval nodes can optionally enable email, subject, and message templates using `{{requestId}}`, `{{workflowName}}`, `{{stageName}}`, and `{{event}}`. Internal notifications remain automatic whether email is configured or not.
+     - Email sending occurs after the workflow transaction through the existing outbox dispatcher. A disabled or failing provider is logged and never blocks submission, approval, rejection, return, reminders, or escalation.
+   - Phase 8 optional approval delegation and controlled reassignment - complete:
+     - Delegation is opt-in. With no active matching schedule, published Workflow approver resolution behaves exactly as configured and no additional setup is required.
+     - The administrator-only Approval Delegation page manages active, scheduled, expired, and cancelled coverage periods. Each schedule identifies the original and replacement users, effective dates, optional workflow, role, and department scopes, and mandatory reason.
+     - Active schedules are evaluated after normal approver resolution. The replacement must remain active and retain source-module visibility; the immutable assignment authority evidence preserves the configured original approver, delegation ID, and reason.
+     - Self-delegation and direct overlapping delegation loops are rejected. Delegation is one hop only and never silently chains replacement schedules.
+     - Workflow Monitoring provides one-request reassignment for active pending assignments. Administrators select the current assignment and an eligible active replacement, then provide a mandatory reason.
+     - Reassignment locks and rechecks the assignment, cancels rather than deletes the original, creates a new pending assignment with the same deadline, and writes an immutable transfer, audit row, and `workflow.assignment.reassigned` outbox event in one transaction.
+     - `workflow.assignment.delegated` and `workflow.assignment.reassigned` are available to Automation Flow for notifications and follow-up. Request IDs, source records, earlier decisions, and published Workflow configuration remain unchanged.
+     - Dedicated migration tables retain delegation schedules and assignment-transfer lineage. Idempotency prevents a retried reassignment command from creating another replacement.
+   - Phase 8 Approval Workflow to Automation Flow delivery - complete:
+     - Automation Flow supports `workflow_event` as a published trigger, configurable by approval workflow, lifecycle event, optional stage key, and optional connection/outcome key.
+     - A background dispatcher claims due `crm_workflow_events`, enriches them with immutable request context, runs matching published Automation Flows, and records delivered or bounded-retry failure state without rolling back the approval decision.
+     - `crm_action_flow_executions.trigger_event_key` and its per-flow unique index prevent duplicate execution when the same outbox event is polled or retried.
+     - Workflow Builder shows linked Automation Flows so administrators can see which follow-up automations are attached to a definition.
+   - Phase 8 visual Approval Workflow Builder - complete:
+     - Approval Workflow configuration now opens as a free-positioned canvas with Start, Approval, and End nodes instead of only a stacked stage form.
+     - Administrators can add and drag nodes, connect arbitrary visible branches, select and configure connection labels/outcomes, pan the canvas, zoom, and fit the route into view.
+     - `Condition met` and `Condition not met` connections include structured `all`/`any` matching with one or more typed field/operator/value rules; those rules persist with the visual edge.
+     - Condition field selectors are populated from the workflow's selected Source module and Request form. Published form layout visibility/order is respected, standalone Form Builder definitions are supported, and unavailable saved keys are identified instead of silently discarded.
+     - Selecting an Approval node opens a side inspector for approver resolution, conditions and skip behavior, self-approval, mandatory approval remarks, enablement, and SLA configuration.
+     - Canvas node positions and connection metadata persist in `builderGraph`; Approval nodes serialize into the existing Phase 8 `stages` contract and the published graph is now executable by the authorization runtime.
+     - Start-to-Approval-to-End routes, non-linear branches, and paired `condition_met`/`condition_not_met` connections now select the runtime stage path from the immutable submitted snapshot. The selected connection key/outcome is retained in workflow events and timeline data.
+     - Publication fails closed for malformed, ambiguous, cyclic, disconnected, unreachable, duplicate-stage, or incomplete conditional graphs. Older published versions without `builderGraph` retain their ordered-stage behavior.
+     - Workflow source-record loading supports both generated modules and the built-in Customers/Users modules, preserving module-view authorization while adapting their dedicated storage into the same immutable workflow snapshot contract.
+     - `npm.cmd run test:smoke:workflow-graph` verifies executable routing, ambiguity and cycle protection; the Playwright request journey verifies the built-in Customer adapter through the visible UI.
+   - Phase 8 node-specific workflow forms - complete:
+     - The workflow-level Request form is now the default form rather than the only presentation used throughout a request.
+     - Start, Approval, and End nodes expose auto-populated form selectors in their right-side inspectors. Administrators choose readable form names; technical form keys are stored automatically and are never manually entered in the Workflow Builder.
+     - Each node can inherit the default form, use all source-module fields, or select another compatible module/standalone form. Standalone choices are limited to forms whose stable field keys belong to the selected source module.
+     - Saving captures the node form name, form key, presentation mode, inheritance flag, and ordered field keys inside `builderGraph`. Published workflow versions therefore retain the selected node presentation even if the underlying Form Builder layout later changes.
+     - Requesters use the Start-node presentation while a request is active or returned; assigned approvers use the active Approval-node review presentation; terminal requester views may use the End-node result presentation.
+     - Runtime snapshot visibility is the intersection of the selected node's captured fields and existing module field-view permissions. A node form cannot grant access to a field that the current user is not permitted to view.
+     - Node presentation controls stage-specific review visibility; structured approver inputs and optional source-field writes are provided by the following response-form item.
+   - Phase 8 approver response forms and field mapping - complete:
+     - Every Approval node can select an optional compatible Response form from the right-side inspector; technical form keys and field schemas are captured automatically with the immutable workflow version.
+     - Response fields inherit labels, types, options, and required status from Form Builder. The decision modal renders the configured structured inputs before the approver submits Approve, Reject, or Return.
+     - Required response fields are enforced for approval, unknown response keys are rejected, and responses participate in the idempotency request hash so the same key cannot replay different answers.
+     - Each response field can remain in protected decision history or map to an existing main source-record field. Source mappings require the approver's field-edit permission and execute inside the same database transaction as the decision, bypassing the active workflow lock only through this narrowly scoped authorized path.
+     - `crm_workflow_decisions.response_json` stores the immutable structured response. The migration adds the JSON column idempotently to existing installations.
+     - Requesters and unrelated approvers do not receive protected decision-response values in request timelines. The administrator and the approver who recorded the response may inspect them.
+     - Response values are excluded from Automation Flow by default. Administrators must explicitly enable `Include this value in Automation Flow events` per field; events always expose safe response field names for diagnostics.
+     - Source-field mapping currently targets main JSON-backed module-record fields. Detail-table writes and attachment-response fields remain separate enhancements.
 9. Phase 9: AI Agent Assistant - planned
    - Add an AI assistant panel to the admin portal for form and workflow generation.
    - Support natural-language prompts to suggest form fields, workflow steps, and validation rules.
@@ -472,7 +777,7 @@ Dashboard ownership boundaries:
 Recommended Convex event flow for dashboards:
 
 ```text
-CRM write/import/action-flow event saved in MySQL
+CRM write/import/automation-flow event saved in MySQL
   |
   v
 Express emits lightweight event to Convex
@@ -522,7 +827,7 @@ Keep maintaining these user fields in MySQL:
 
 ### Form Builder Conventions
 
-- `Data Key` is the stable internal field identifier used by API payloads, imports, JSON storage, formulas, reports, and future action-flow conditions. A field label can be renamed later, but the data key should stay stable so existing records and automations do not break.
+- `Data Key` is the stable internal field identifier used by API payloads, imports, JSON storage, formulas, reports, and Automation Flow conditions. A field label can be renamed later, but the data key should stay stable so existing records and automations do not break.
 - New fields are appended to the end automatically; admins do not manually maintain display order in Phase 1.
 - Fields can be placed on the `Main Table` or a `Detail Table`.
 - Detail table names are generated from the module key, for example `customer_dt1`.
@@ -670,7 +975,7 @@ Keep maintaining these user fields in MySQL:
   - Modules
   - Form Builder
   - Module Pages
-  - Action Flow
+  - Automation Flow
   - Permissions
 - Added collapsible admin menu.
 - Added module list for Customers and Users in Form Builder.

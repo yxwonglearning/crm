@@ -7,6 +7,27 @@
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "test:smoke:backend": "node tests/smoke/backend-smoke.js",
+    "test:smoke:dashboard-persistence": "node tests/smoke/dashboard-persistence-smoke.js",
+    "test:smoke:dashboard-query": "node tests/smoke/dashboard-query-smoke.js",
+    "test:smoke:dashboard-management": "node tests/smoke/dashboard-management-smoke.js",
+    "test:smoke:dashboard-pivot": "node tests/smoke/dashboard-pivot-smoke.js",
+    "test:smoke:workflow-migration": "node tests/smoke/workflow-migration-smoke.js",
+    "test:smoke:workflow-repository": "node tests/smoke/workflow-repository-smoke.js",
+    "test:smoke:workflow-configuration": "node tests/smoke/workflow-configuration-smoke.js",
+    "test:smoke:workflow-approvers": "node tests/smoke/workflow-approvers-smoke.js",
+    "test:smoke:workflow-conditions": "node tests/smoke/workflow-conditions-smoke.js",
+    "test:smoke:workflow-attachments": "node tests/smoke/workflow-attachments-smoke.js",
+    "test:smoke:workflow-sla": "node tests/smoke/workflow-sla-smoke.js",
+    "test:smoke:workflow-graph": "node tests/smoke/workflow-graph-smoke.js",
+    "test:smoke:workflow-submission": "node tests/smoke/workflow-submission-smoke.js",
+    "test:smoke:workflow-decisions": "node tests/smoke/workflow-decisions-smoke.js",
+    "test:smoke:workflow-lifecycle": "node tests/smoke/workflow-lifecycle-smoke.js",
+    "test:smoke:workflow-protection": "node tests/smoke/workflow-protection-smoke.js",
+    "test:smoke:workflow-access": "node tests/smoke/workflow-access-smoke.js",
+    "test:smoke:workflow-api": "node tests/smoke/workflow-api-smoke.js",
+    "test:smoke:workflow-frontend": "node tests/smoke/workflow-frontend-smoke.js",
+    "test:smoke:notifications": "node tests/smoke/notification-center-smoke.js",
+    "test:e2e:workflow": "playwright test tests/manual/ui/workflow-request-e2e.spec.js --workers=1",
     "db:migrate": "node src/database/migrate.js",
     "db:seed": "node src/database/seed.js"
   },
@@ -27,10 +48,12 @@
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.0.2",
     "mysql2": "^3.11.5",
+    "nodemailer": "^9.0.5",
     "xlsx": "^0.18.5",
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "nodemon": "^3.1.9"
   }
 }
