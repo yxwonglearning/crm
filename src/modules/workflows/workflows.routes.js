@@ -13,6 +13,7 @@ const repository = require('./workflows.repository');
 const monitoring = require('./workflows.monitoring');
 const workflowSla = require('./workflows.sla');
 const delegations = require('./workflows.delegations');
+const sourceRecords = require('./workflows.source-records');
 
 const workflowRoutes = express.Router();
 function monitoringFilters(req) {
@@ -112,6 +113,13 @@ workflowRoutes.get('/catalog', asyncHandler(async (_req, res) => {
       };
     }))
   });
+}));
+workflowRoutes.get('/source-records', asyncHandler(async (req, res) => {
+  const workflowKey = validate(keySchema, req.query.workflowKey);
+  const definition = await repository.findDefinitionByKey(workflowKey);
+  if (!definition || definition.status !== 'published') throw new AppError('Published workflow not found', 404);
+  const records = await sourceRecords.listSelectableRecords(definition.sourceModuleKey, req.query.search || '', req.user);
+  res.json({ sourceModuleKey: definition.sourceModuleKey, records });
 }));
 workflowRoutes.get('/definitions', requireRole('admin'), asyncHandler(async (req, res) => {
   res.json(await configuration.listDefinitions({ status: req.query.status || 'all', sourceModuleKey: req.query.sourceModuleKey || '', search: req.query.search || '' }));

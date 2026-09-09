@@ -21,11 +21,16 @@ function policyAllows(policy, purpose) {
   return !policy?.actions?.length || policy.actions.includes(purpose);
 }
 
+function isFormAttachment(file = {}) {
+  return String(file.fieldname || '').startsWith('responseAttachment:');
+}
+
 function validateFiles(files = [], policy = {}, purpose) {
   const mode = policy.mode || 'disabled';
   const applicable = policyAllows(policy, purpose);
-  if ((!applicable || mode === 'disabled') && files.length) throw attachmentError('Attachments are not enabled for this workflow action.', 'WORKFLOW_ATTACHMENT_DISABLED', { purpose });
-  if (applicable && mode === 'required' && !files.length) throw attachmentError('At least one attachment is required for this workflow action.', 'WORKFLOW_ATTACHMENT_REQUIRED', { purpose });
+  const additionalFiles = files.filter((file) => !isFormAttachment(file));
+  if ((!applicable || mode === 'disabled') && additionalFiles.length) throw attachmentError('Additional supporting files are not enabled for this workflow action.', 'WORKFLOW_ATTACHMENT_DISABLED', { purpose });
+  if (applicable && mode === 'required' && !additionalFiles.length) throw attachmentError('At least one additional supporting file is required for this workflow action.', 'WORKFLOW_ATTACHMENT_REQUIRED', { purpose });
   if (!files.length) return [];
   const maxFileCount = Number(policy.maxFileCount || 1);
   const maxFileSize = Number(policy.maxFileSize || 5 * 1024 * 1024);
@@ -88,4 +93,4 @@ function submissionPolicy(version) {
   return version?.snapshot?.builderGraph?.nodes?.find((node) => node.type === 'start')?.attachmentPolicy || { mode: 'disabled' };
 }
 
-module.exports = { cleanFileName, policyAllows, safeMimeTypes, scanWithClamAv, submissionPolicy, validateAndScanFiles, validateFiles };
+module.exports = { cleanFileName, isFormAttachment, policyAllows, safeMimeTypes, scanWithClamAv, submissionPolicy, validateAndScanFiles, validateFiles };

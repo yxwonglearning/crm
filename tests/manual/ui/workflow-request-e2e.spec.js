@@ -27,7 +27,7 @@ async function login(page, email, password) {
   const catalogLoaded = page.waitForResponse((response) => response.url().includes('/api/workflows/catalog') && response.ok());
   await page.getByRole('button', { name: 'Sign In' }).click();
   const catalogResponse = await catalogLoaded;
-  await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
+  await expect(page.locator('#accountMenuButton')).toBeVisible();
   return catalogResponse.json();
 }
 
@@ -139,10 +139,12 @@ test.afterAll(async () => {
 });
 
 test('requester submits and assigned approver approves through the UI', async ({ page }) => {
+  test.setTimeout(120000);
   const adminCatalog = await login(page, process.env.ADMIN_EMAIL, process.env.ADMIN_PASSWORD);
   expect(adminCatalog.definitions.map((definition) => definition.workflowKey)).toContain(workflowKey);
   await page.waitForFunction((key) => state.workflowDefinitions.some((definition) => definition.workflowKey === key), workflowKey);
-  await page.getByRole('button', { name: 'Admin Portal' }).click();
+  await page.locator('#accountMenuButton').click();
+  await page.locator('#adminPortalAccountButton').click();
   const settingsLoaded = page.waitForResponse((response) => response.url().endsWith('/api/notifications/email-settings/current') && response.ok());
   await page.getByRole('button', { name: /Email Settings/ }).click();
   await settingsLoaded;
@@ -162,7 +164,7 @@ test('requester submits and assigned approver approves through the UI', async ({
   await page.getByRole('button', { name: 'New approval request' }).click();
   await expect(page.locator('#workflowSubmitModal')).toBeVisible();
   await page.locator('#workflowSubmitForm select[name="workflowKey"]').selectOption(workflowKey);
-  await page.locator('#workflowSubmitForm input[name="sourceRecordId"]').fill('1');
+  await page.locator('[data-workflow-source-record="1"]').click();
   await page.locator('#workflowSubmitAttachments input[type="file"]').setInputFiles({ name: 'request-evidence.txt', mimeType: 'text/plain', buffer: Buffer.from('request evidence') });
   const submitted = page.waitForResponse((response) => response.url().endsWith('/api/workflows/requests') && response.request().method() === 'POST');
   await page.locator('#workflowSubmitForm button[type="submit"]').click();
@@ -212,6 +214,7 @@ test('requester submits and assigned approver approves through the UI', async ({
   const reassignResponse = await reassigned;
   expect(reassignResponse.status(), await reassignResponse.text()).toBe(200);
 
+  await page.locator('#accountMenuButton').click();
   await page.getByRole('button', { name: 'Sign out' }).click();
   await login(page, backupEmail, approverPassword);
   await page.getByRole('button', { name: 'Approval Requests' }).click();

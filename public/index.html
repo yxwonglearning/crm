@@ -9,12 +9,15 @@
   <body class="is-auth">
     <main class="app-shell">
       <aside class="sidebar">
+        <div class="sidebar-heading">
         <div class="brand">
           <span class="brand-mark">A</span>
-          <span>
+          <span class="brand-copy">
             <strong>Amperes CRM</strong>
             <small id="sessionLabel">Not signed in</small>
           </span>
+        </div>
+          <button type="button" id="toggleMainSidebar" class="sidebar-compact-button" aria-label="Use compact navigation" aria-pressed="false" title="Use compact navigation"><span aria-hidden="true">«</span></button>
         </div>
         <nav class="nav" id="mainSidebarNav" aria-label="Main navigation">
           <button class="nav-button is-active" data-view="customersView">Customers</button>
@@ -32,7 +35,7 @@
           <div class="app-header-utilities">
             <div id="notificationHub" class="notification-hub" hidden>
               <button type="button" id="notificationBell" class="notification-bell" aria-label="Notifications" aria-expanded="false" aria-controls="notificationDrawer"><span aria-hidden="true">🔔</span><b id="notificationBadge" hidden>0</b></button>
-              <aside id="notificationDrawer" class="notification-drawer" hidden aria-label="Notification centre">
+              <aside id="notificationDrawer" class="notification-drawer anchored-popover" hidden aria-label="Notification centre" data-surface-kind="parallel">
                 <div class="notification-drawer-heading"><div><span class="eyebrow">Updates</span><h2>Notifications</h2></div><button type="button" class="link-button" id="markAllNotificationsRead">Mark all read</button></div>
                 <label class="notification-unread-filter"><input id="notificationUnreadOnly" type="checkbox"> Unread only</label>
                 <div id="notificationList" class="notification-list"></div>
@@ -44,7 +47,7 @@
                 <span class="account-menu-identity"><strong id="headerAccountName">Account</strong><small id="headerAccountRole">User</small></span>
                 <span aria-hidden="true">⌄</span>
               </button>
-              <aside id="accountMenu" class="account-menu" hidden aria-label="Account menu">
+              <aside id="accountMenu" class="account-menu anchored-popover" hidden aria-label="Account menu" data-surface-kind="parallel">
                 <div class="account-menu-summary"><span class="account-avatar large"><img id="menuAvatarImage" alt="" hidden><span id="menuAvatarInitials">A</span></span><div><strong id="menuAccountName">Account</strong><small id="menuAccountEmail"></small></div></div>
                 <button type="button" data-open-account-settings="profile"><span>My profile</span><small>Photo and personal details</small></button>
                 <button type="button" data-open-account-settings="security"><span>Security</span><small>Change your password</small></button>
@@ -400,8 +403,8 @@
           </header>
 
           <div class="admin-layout">
-            <aside class="admin-menu">
-              <button type="button" class="admin-collapse-button" id="toggleAdminMenu" aria-label="Collapse admin menu">‹</button>
+            <aside class="admin-menu" id="adminMenu">
+              <button type="button" class="admin-collapse-button" id="toggleAdminMenu" aria-label="Collapse admin menu" aria-controls="adminMenu" aria-expanded="true" title="Collapse admin menu">‹</button>
               <button type="button" class="admin-section-button" data-admin-section="adminDashboardBuilderSection" data-short="D">
                 <span>Dashboard Builder</span>
                 <small>Dashboards and publish state</small>
@@ -465,9 +468,10 @@
                 <div id="menuConfigStatus" class="menu-config-status">Open this page to load the current navigation draft.</div>
                 <div class="menu-config-workspace">
                   <section class="menu-config-tree-card">
-                    <div class="menu-config-card-heading"><div><h3>Structure</h3><p>Drag entries to reorder. Groups can contain menu items.</p></div><div><button type="button" class="secondary" id="addMenuGroup">+ Group</button><button type="button" class="secondary" id="addMenuItem">+ Item</button></div></div>
+                    <div class="menu-config-card-heading"><div><h3>Structure</h3><p>Drag entries before, after, or into a group. You can also use the move buttons.</p></div><div><button type="button" class="secondary" id="addMenuGroup">+ Group</button><button type="button" class="secondary" id="addMenuItem">+ Item</button></div></div>
                     <div class="menu-config-preview-controls"><label>Preview access<select id="menuPreviewRole"><option value="admin">Admin</option><option value="manager">Manager</option><option value="user">User</option></select></label><label>Auto-add published modules<select id="menuDefaultGroup"><option value="">Top level</option></select></label></div>
                     <div id="menuConfigTree" class="menu-config-tree" role="tree" aria-label="Configured sidebar items"></div>
+                    <p id="menuConfigAnnouncement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
                   </section>
                   <aside id="menuConfigInspector" class="menu-config-inspector"><div class="empty-state"><h3>Select an entry</h3><p>Choose a group or menu item to edit its label, destination, icon, and visibility.</p></div></aside>
                 </div>
@@ -993,12 +997,17 @@
                           <button type="button" class="secondary workflow-inspector-toggle" id="workflowInspectorToggle" aria-expanded="true">Hide settings</button>
                         </div>
                       </div>
+                      <div class="workflow-keyboard-help" id="workflowKeyboardHelp">
+                        <strong>Keyboard controls</strong>
+                        <span>Tab to a node, use arrow keys to move it, Enter to select or connect, and Delete to remove it. Hold Shift to move farther. Escape cancels connecting.</span>
+                      </div>
                       <div class="workflow-builder-shell">
                         <div id="workflowCanvasViewport" class="workflow-canvas-viewport">
                           <div id="workflowCanvas" class="workflow-canvas" aria-label="Approval workflow canvas"></div>
                         </div>
                         <aside id="workflowCanvasInspector" class="workflow-canvas-inspector" aria-label="Workflow selection configuration"></aside>
                       </div>
+                      <p id="workflowCanvasAnnouncement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
                       <div id="workflowStageEditor" hidden></div>
                     </section>
                     <section class="workflow-config-card">
@@ -1146,8 +1155,8 @@
                     <div id="dashboardWidgetInspectorForm" hidden>
                       <span class="eyebrow">Selected widget</span><h3 id="dashboardSelectedWidgetKey">Widget</h3>
                       <label>Title<input id="dashboardWidgetTitle" maxlength="160"></label>
-                      <label>Widget type<select id="dashboardWidgetType"><option value="number">Number / KPI</option><option value="donut">Donut</option><option value="bar">Bar</option><option value="line">Line</option><option value="table">Table</option><option value="pivot">Pivot table</option></select></label>
-                      <label>Dashboard data<select id="dashboardWidgetDataSource"><option value="">Choose a data source</option></select></label>
+                      <label>Widget type<select id="dashboardWidgetType"><optgroup label="Data"><option value="number">Number / KPI</option><option value="donut">Donut</option><option value="bar">Bar</option><option value="line">Line</option><option value="table">Table</option><option value="pivot">Pivot table</option></optgroup><optgroup label="My work"><option value="approval_inbox">Approval inbox</option><option value="todo_list">To-do list</option><option value="calendar">Calendar</option></optgroup><optgroup label="Workspace"><option value="quick_actions">Quick actions</option><option value="recent_records">Recent records</option><option value="notifications">Notifications</option></optgroup></select></label>
+                      <label id="dashboardWidgetDataSourceField">Dashboard data<select id="dashboardWidgetDataSource"><option value="">Choose a data source</option></select></label>
                       <div id="dashboardWidgetMappingFields" class="dashboard-widget-mapping-fields"></div>
                       <details class="dashboard-widget-display-options"><summary>Display options</summary><div id="dashboardWidgetDisplayFields"></div></details>
                       <div class="dashboard-widget-data-actions"><button type="button" class="secondary" id="refreshDashboardWidgetButton">Refresh preview</button><button type="button" class="secondary" id="exportDashboardWidgetButton" hidden>Export CSV</button><button type="button" class="secondary" id="exportDashboardWidgetExcelButton" hidden>Export Excel</button><span id="dashboardWidgetPreviewStatus" class="muted" aria-live="polite"></span></div>
@@ -2130,7 +2139,10 @@
       </aside>
     </div>
 
-    <div id="toast" class="toast" hidden></div>
+    <div id="toast" class="toast" hidden tabindex="-1">
+      <span id="toastMessage"></span>
+      <button type="button" id="dismissToast" class="toast-dismiss" aria-label="Dismiss notification">×</button>
+    </div>
     <div id="successPrompt" class="modal-backdrop success-prompt-backdrop" hidden>
       <div class="panel modal-card narrow-modal success-prompt-card">
         <div class="success-prompt-icon" aria-hidden="true">✓</div>
@@ -2268,11 +2280,16 @@
     </div>
     <div id="workflowSubmitModal" class="modal-backdrop" hidden>
       <form id="workflowSubmitForm" class="panel modal-card narrow-modal workflow-command-modal" role="dialog" aria-modal="true" aria-labelledby="workflowSubmitTitle">
-        <div class="modal-header"><div><span class="eyebrow">Approval Workflow</span><h2 id="workflowSubmitTitle">New approval request</h2><p class="muted">Choose the published workflow and the existing source record that needs approval.</p></div><button type="button" class="icon-button" id="closeWorkflowSubmitModal" aria-label="Close">x</button></div>
+        <div class="modal-header"><div><span class="eyebrow">Approval Workflow</span><h2 id="workflowSubmitTitle">New approval request</h2><p class="muted">Choose a workflow and the record that needs approval. The system links the record automatically.</p></div><button type="button" class="icon-button" id="closeWorkflowSubmitModal" aria-label="Close">x</button></div>
         <label>Workflow<select name="workflowKey" required></select></label>
-        <label>Source record ID<input name="sourceRecordId" type="number" min="1" required placeholder="For example: 42"></label>
+        <input name="sourceRecordId" type="hidden">
+        <div class="workflow-source-picker">
+          <label>Record<input id="workflowSourceRecordSearch" type="search" autocomplete="off" placeholder="Search records by name or details"></label>
+          <div id="workflowSourceRecordStatus" class="muted" aria-live="polite">Loading available records...</div>
+          <div id="workflowSourceRecordOptions" class="workflow-source-record-options" role="listbox" aria-label="Available records"></div>
+        </div>
         <div id="workflowSubmitBinding" class="workflow-command-note">The source module is taken from the selected workflow.</div>
-        <label id="workflowSubmitAttachments" hidden>Supporting attachments<input name="attachments" type="file" multiple><small class="muted"></small></label>
+        <label id="workflowSubmitAttachments" hidden>Additional supporting files<input name="attachments" type="file" multiple><small class="muted"></small></label>
         <div class="form-actions end-actions"><button type="submit">Send for approval</button><button type="button" class="secondary" id="cancelWorkflowSubmitModal">Cancel</button></div>
       </form>
     </div>
@@ -2300,7 +2317,7 @@
         <div class="modal-header"><div><span class="eyebrow">Approval decision</span><h2 id="workflowDecisionTitle">Approve request</h2><p id="workflowDecisionHelp" class="muted"></p></div><button type="button" class="icon-button" id="closeWorkflowDecisionModal" aria-label="Close">x</button></div>
         <input name="requestKey" type="hidden"><input name="action" type="hidden">
         <div id="workflowDecisionResponseFields" class="workflow-decision-response-fields"></div>
-        <label id="workflowDecisionAttachments" hidden>Decision attachments<input name="attachments" type="file" multiple><small class="muted"></small></label>
+        <label id="workflowDecisionAttachments" hidden>Additional supporting files<input name="attachments" type="file" multiple><small class="muted"></small></label>
         <label>Remark<textarea name="remark" rows="5" maxlength="2000" placeholder="Add context for the requester"></textarea></label>
         <div class="form-actions end-actions"><button type="submit" id="confirmWorkflowDecisionButton">Approve</button><button type="button" class="secondary" id="cancelWorkflowDecisionModal">Cancel</button></div>
       </form>
@@ -2313,6 +2330,7 @@
         <div class="form-actions end-actions"><button type="submit" id="confirmWorkflowLifecycleButton">Continue</button><button type="button" class="secondary" id="cancelWorkflowLifecycleModal">Cancel</button></div>
       </form>
     </div>
+    <script src="/draft-history.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

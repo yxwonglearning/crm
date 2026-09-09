@@ -27,6 +27,8 @@ for (const id of [
   'workflowDelegationModal',
   'workflowReassignModal',
   'workflowSubmitModal',
+  'workflowSourceRecordSearch',
+  'workflowSourceRecordOptions',
   'workflowDecisionModal',
   'workflowLifecycleModal',
   'adminWorkflowSection',
@@ -62,6 +64,7 @@ for (const functionName of [
   'reassignWorkflowAssignment',
   'openWorkflowRequest',
   'submitWorkflowRequest',
+  'loadWorkflowSourceRecords',
   'decideWorkflowRequest',
   'runWorkflowLifecycle'
 ]) {
@@ -78,6 +81,8 @@ for (const endpoint of [
 }
 
 assert.ok(script.includes("'Idempotency-Key'"), 'Workflow runtime commands must send idempotency keys');
+assert.ok(!html.includes('Source record ID'), 'workflow submission must not expose the internal source record ID');
+assert.ok(script.includes('/api/workflows/source-records'), 'workflow submission must load readable source-record choices');
 assert.ok(script.includes('data-workflow-decision'), 'Request detail must expose decision controls');
 assert.ok(script.includes('data-workflow-lifecycle'), 'Request detail must expose lifecycle controls');
 assert.ok(script.includes('data-monitoring-remind'), 'Monitoring must expose manual reminder controls');

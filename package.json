@@ -6,9 +6,12 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
-    "test:smoke:backend": "node tests/smoke/backend-smoke.js && node tests/smoke/readme-api-surface-smoke.js && node tests/smoke/workflow-phase8-completion-smoke.js && node tests/smoke/menu-configuration-smoke.js && node tests/smoke/account-settings-smoke.js",
+    "test:smoke:backend": "node tests/smoke/backend-smoke.js && node tests/smoke/readme-api-surface-smoke.js && node tests/smoke/workflow-phase8-completion-smoke.js && node tests/smoke/menu-configuration-smoke.js && node tests/smoke/account-settings-smoke.js && node tests/smoke/dashboard-workspace-widgets-smoke.js",
+    "test:smoke:dashboard-workspace": "node tests/smoke/dashboard-workspace-widgets-smoke.js",
     "test:smoke:menu": "node tests/smoke/menu-configuration-smoke.js",
     "test:smoke:account": "node tests/smoke/account-settings-smoke.js",
+    "test:smoke:spatial": "node tests/smoke/spatial-consistency-smoke.js",
+    "test:smoke:design-system": "node tests/smoke/design-system-consolidation-smoke.js",
     "test:smoke:dashboard-persistence": "node tests/smoke/dashboard-persistence-smoke.js",
     "test:smoke:dashboard-query": "node tests/smoke/dashboard-query-smoke.js",
     "test:smoke:dashboard-management": "node tests/smoke/dashboard-management-smoke.js",

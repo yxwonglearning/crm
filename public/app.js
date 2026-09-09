@@ -80,6 +80,8 @@ const state = {
   dashboardLayoutDirty: false,
   dashboardLayoutInteraction: null,
   dashboardWidgetResults: {},
+  dashboardCalendarMonths: {},
+  dashboardCalendarOpen: null,
   dashboardFilterValues: {},
   publishedDashboards: [],
   activePublishedDashboardKey: '',
@@ -107,6 +109,8 @@ const state = {
   selectedWorkflowEdgeId: '',
   workflowCanvasZoom: 1,
   workflowCanvasDrag: null,
+  workflowCanvasDragFrame: null,
+  workflowCanvasSuppressClick: false,
   workflowCanvasPan: null,
   workflowConnectFrom: '',
   workflowRouteDesignerOpen: false,
@@ -138,11 +142,14 @@ const state = {
   activeAccountTab: 'profile',
   accountReturnView: 'customersView',
   sidebarMenu: [],
+  sidebarCompact: false,
   menuConfigDraft: null,
   menuConfigCatalog: { destinations: [], users: [], departments: [] },
   menuConfigVersions: [],
   selectedMenuItemKey: '',
   draggingMenuItemKey: '',
+  menuDropTarget: null,
+  menuPointerDrag: null,
   workflowDelegations: [],
   workflowDelegationStatus: 'all',
   workflowDelegationSearch: '',
@@ -179,6 +186,8 @@ const state = {
   selectedFormDesignFieldKey: '',
   draggingFormDesignFieldKey: '',
   dragOverFormDesignFieldKey: '',
+  formDesignDropPlacement: '',
+  formDesignPointerDrag: null,
   draggingFormDesignDetailTable: '',
   dragOverFormDesignDetailTable: '',
   editingFieldLinkageFieldKey: '',
@@ -685,6 +694,9 @@ function updateFormDesignDraftOrder(type, fields) {
   const layouts = readFormDesignLayouts();
   layouts.draft[type].order = fields.map((field) => field.fieldKey);
   syncFormDesignSectionsWithOrder(layouts.draft[type]);
+  layouts.draft[type].sections.forEach((section) => {
+    section.fieldKeys.sort((a, b) => layouts.draft[type].order.indexOf(a) - layouts.draft[type].order.indexOf(b));
+  });
   writeFormDesignLayouts(layouts);
 }
 
@@ -771,14 +783,22 @@ function syncFormDesignDisplayVisibility(visibilityByFieldKey, moduleKey = state
 }
 
 function moveFormDesignField(fieldKey, direction) {
-  let fields = orderedFormDesignFields();
+  const fields = formDesignReorderPeers(findConfigField(fieldKey));
   const index = fields.findIndex((field) => field.fieldKey === fieldKey);
   const nextIndex = index + direction;
   if (index < 0 || nextIndex < 0 || nextIndex >= fields.length) return;
-  const nextFields = [...fields];
-  [nextFields[index], nextFields[nextIndex]] = [nextFields[nextIndex], nextFields[index]];
-  updateFormDesignDraftOrder(state.activeFormDesignType, nextFields);
-  renderFormDesignDrawer();
+  reorderFormDesignFieldAt(fieldKey, fields[nextIndex].fieldKey, direction < 0 ? 'before' : 'after');
+  const button = $(`#formDesignCanvas [data-design-action="move-${direction < 0 ? 'up' : 'down'}"]`);
+  if (button && !button.disabled) button.focus();
+  else $$('#formDesignCanvas [data-design-field]').find((card) => card.dataset.designField === fieldKey)?.focus();
+}
+
+function formDesignReorderPeers(selected) {
+  if (!selected || !isFormDesignFieldVisible(selected)) return [];
+  return orderedFormDesignFields().filter((field) => isFormDesignFieldVisible(field)
+    && (selected.tableType === 'detail'
+      ? field.tableType === 'detail' && field.detailTableName === selected.detailTableName
+      : field.tableType !== 'detail' && formDesignSectionForField(field.fieldKey)?.id === formDesignSectionForField(selected.fieldKey)?.id));
 }
 
 function detailTableKeysFromFields(fields) {
@@ -883,6 +903,20 @@ function updateFormDesignSelectionUI() {
   $$('[data-design-action="edit-field"], [data-design-action="formula"], [data-design-action="field-linkage"]').forEach((button) => {
     button.disabled = !selectedField;
   });
+  const fields = formDesignReorderPeers(selectedField);
+  const index = fields.findIndex((field) => field.fieldKey === selectedField?.fieldKey);
+  $('#formDesignCanvas [data-design-action="move-up"]').disabled = index <= 0;
+  $('#formDesignCanvas [data-design-action="move-down"]').disabled = index < 0 || index >= fields.length - 1;
+  const section = $('#formDesignCanvas [data-selected-field-section]');
+  const span = $('#formDesignCanvas [data-selected-field-span]');
+  if (section) {
+    section.disabled = !selectedField || selectedField.tableType === 'detail';
+    section.value = selectedField ? formDesignSectionForField(selectedField.fieldKey)?.id || '' : '';
+  }
+  if (span) {
+    span.disabled = !selectedField || selectedField.tableType === 'detail';
+    span.value = selectedField ? String(activeFormDesignLayout().fieldSpans?.[selectedField.fieldKey] || 1) : '1';
+  }
 }
 
 function selectFormDesignField(fieldKey) {
@@ -909,6 +943,7 @@ function formDesignFieldCard(field) {
     <article class="form-design-field form-design-preview-field ${field.fieldKey === state.selectedFormDesignFieldKey ? 'is-selected' : ''} ${field.fieldKey === state.draggingFormDesignFieldKey ? 'is-dragging' : ''} ${field.fieldKey === state.dragOverFormDesignFieldKey ? 'is-drag-over' : ''}" data-design-field="${escapeHtml(field.fieldKey)}" draggable="true" title="Drag to reorder. Double-click to configure formula." style="grid-column: span ${span};">
       ${renderFormDesignMainField(field)}
       <div class="form-design-field-meta">
+        <span class="form-reorder-grip" aria-hidden="true" title="Drag to reorder">⋮⋮</span>
         ${field.formulaEnabled ? '<span class="formula-badge">fx</span>' : ''}
       </div>
     </article>
@@ -1118,6 +1153,7 @@ function renderFormDesignDetailTable(group) {
                 <td>
                   <div class="form-design-detail-cell ${field.fieldKey === state.selectedFormDesignFieldKey ? 'is-selected' : ''} ${field.fieldKey === state.draggingFormDesignFieldKey ? 'is-dragging' : ''} ${field.fieldKey === state.dragOverFormDesignFieldKey ? 'is-drag-over' : ''}" data-design-field="${escapeHtml(field.fieldKey)}" draggable="true" title="Drag to reorder. Double-click to configure formula.">
                     ${renderFormDesignPreviewControl(field)}
+                    <span class="form-reorder-grip" aria-hidden="true" title="Drag to reorder">⋮⋮</span>
                   </div>
                 </td>
               `).join('')}
@@ -1176,6 +1212,7 @@ async function saveFormDesignDraft() {
     });
     setModuleConfig(state.activeConfigModule, config.fields, config.formLayouts);
     showSuccessPrompt('Draft Saved', `${formName} form draft saved successfully.`);
+    markFormLayoutSaved();
     toast(`${formName} Form Draft Saved Successfully.`);
   } catch (error) {
     toast(titleCaseMessage(error.message), 'error');
@@ -1199,6 +1236,7 @@ async function publishFormDesign() {
     });
     setModuleConfig(state.activeConfigModule, config.fields, config.formLayouts);
     showSuccessPrompt('Form Published', `${formName} form published successfully.`);
+    markFormLayoutSaved();
     toast(`${formName} Form Published Successfully.`);
   } catch (error) {
     toast(titleCaseMessage(error.message), 'error');
@@ -1804,6 +1842,238 @@ function closeFormulaBuilderModal() {
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
+const prefersReducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+const preferredScrollBehavior = () => prefersReducedMotion() ? 'auto' : 'smooth';
+
+const modalSurfaceState = new WeakMap();
+let modalSurfaceStack = [];
+let modalInteractionSource = null;
+
+function modalSurfaceCard(modal) {
+  return modal?.querySelector([
+    '.modal-card',
+    '.form-builder-tool-drawer',
+    '.form-design-drawer',
+    '.version-history-drawer',
+    '.page-permission-drawer',
+    '.permission-audit-drawer',
+    '.api-connector-drawer',
+    '.api-interface-drawer',
+    '.dashboard-source-drawer'
+  ].join(', ')) || modal?.firstElementChild || null;
+}
+
+function formDesignDropPlacement(card, clientY) {
+  if (!card) return 'after';
+  const bounds = card.getBoundingClientRect();
+  return clientY < bounds.top + (bounds.height / 2) ? 'before' : 'after';
+}
+
+function reorderFormDesignFieldAt(draggedFieldKey, targetFieldKey, placement = 'before') {
+  if (!draggedFieldKey || !targetFieldKey || draggedFieldKey === targetFieldKey) return;
+  const fields = orderedFormDesignFields();
+  const fromIndex = fields.findIndex((field) => field.fieldKey === draggedFieldKey);
+  const targetIndex = fields.findIndex((field) => field.fieldKey === targetFieldKey);
+  if (fromIndex < 0 || targetIndex < 0) return;
+  const source = fields[fromIndex];
+  const target = fields[targetIndex];
+  if (!isFormDesignFieldVisible(source) || !isFormDesignFieldVisible(target)) return;
+  if ((source.tableType === 'detail' || target.tableType === 'detail')
+      && (source.tableType !== target.tableType || source.detailTableName !== target.detailTableName)) return;
+  if (source.tableType !== 'detail') {
+    const layouts = readFormDesignLayouts();
+    const layout = layouts.draft[state.activeFormDesignType];
+    const destination = layout.sections.find((section) => section.fieldKeys.includes(targetFieldKey));
+    if (destination) {
+      layout.sections.forEach((section) => { section.fieldKeys = section.fieldKeys.filter((key) => key !== draggedFieldKey); });
+      destination.fieldKeys.push(draggedFieldKey);
+      writeFormDesignLayouts(layouts);
+    }
+  }
+  const nextFields = [...fields];
+  const [draggedField] = nextFields.splice(fromIndex, 1);
+  const adjustedTarget = nextFields.findIndex((field) => field.fieldKey === targetFieldKey);
+  nextFields.splice(adjustedTarget + (placement === 'after' ? 1 : 0), 0, draggedField);
+  state.selectedFormDesignFieldKey = draggedFieldKey;
+  updateFormDesignDraftOrder(state.activeFormDesignType, nextFields);
+  renderFormDesignDrawer();
+  announceFormDesign(`${draggedField.label} moved ${placement} ${fields[targetIndex].label}.`);
+}
+
+function announceFormDesign(message) {
+  const output = $('#formDesignAnnouncement');
+  if (output) requestAnimationFrame(() => { output.textContent = message; });
+}
+
+function modalSurfaceTitle(modal) {
+  return String(modal?.id || 'dialog')
+    .replace(/(Modal|Drawer|Prompt)$/i, '')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .trim() || 'Dialog';
+}
+
+function configureModalSurface(modal) {
+  const card = modalSurfaceCard(modal);
+  if (!card) return;
+  if (!card.hasAttribute('role')) card.setAttribute('role', modal.id === 'confirmationModal' ? 'alertdialog' : 'dialog');
+  card.setAttribute('aria-modal', 'true');
+  if (!card.hasAttribute('tabindex')) card.setAttribute('tabindex', '-1');
+
+  const heading = card.querySelector('h1, h2, h3');
+  if (heading) {
+    if (!heading.id) heading.id = `${modal.id || 'modal'}Title`;
+    card.setAttribute('aria-labelledby', heading.id);
+    card.removeAttribute('aria-label');
+  } else if (!card.hasAttribute('aria-label')) {
+    card.setAttribute('aria-label', modalSurfaceTitle(modal));
+  }
+
+  let description = card.querySelector('.modal-header p, :scope > p, .field-hint, .muted');
+  if (!description) {
+    description = document.createElement('p');
+    description.className = 'sr-only modal-generated-description';
+    description.textContent = card.matches('form')
+      ? `Complete the ${modalSurfaceTitle(modal)} form, then save or cancel.`
+      : `${modalSurfaceTitle(modal)} dialog.`;
+    card.prepend(description);
+  }
+  if (!description.id) description.id = `${modal.id || 'modal'}Description`;
+  card.setAttribute('aria-describedby', description.id);
+  modal.dataset.modalSurface = 'true';
+}
+
+function modalFocusableElements(modal) {
+  return Array.from(modal.querySelectorAll([
+    'a[href]',
+    'button:not([disabled])',
+    'input:not([disabled]):not([type="hidden"])',
+    'select:not([disabled])',
+    'textarea:not([disabled])',
+    '[tabindex]:not([tabindex="-1"])'
+  ].join(', '))).filter((element) => {
+    const style = getComputedStyle(element);
+    return !element.hidden && style.display !== 'none' && style.visibility !== 'hidden';
+  });
+}
+
+function topmostModalSurface() {
+  modalSurfaceStack = modalSurfaceStack.filter((modal) => modal.isConnected && !modal.hidden);
+  return modalSurfaceStack.at(-1) || $$('.modal-backdrop:not([hidden])').at(-1) || null;
+}
+
+function syncModalSurfaceState() {
+  const openModals = $$('.modal-backdrop:not([hidden])');
+  document.body.classList.toggle('modal-open', openModals.length > 0);
+  const topmost = topmostModalSurface();
+  openModals.forEach((modal) => {
+    const isTopmost = modal === topmost;
+    modal.setAttribute('aria-hidden', String(!isTopmost));
+    modal.inert = !isTopmost;
+  });
+}
+
+function focusModalSurface(modal) {
+  if (!modal) return;
+  requestAnimationFrame(() => {
+    if (!modal.isConnected || modal.hidden || modal.contains(document.activeElement)) return;
+    const preferred = modal.querySelector('[autofocus], [data-modal-initial-focus]');
+    (preferred || modalFocusableElements(modal)[0] || modalSurfaceCard(modal))?.focus();
+  });
+}
+
+function handleModalSurfaceOpened(modal) {
+  configureModalSurface(modal);
+  const opener = modalInteractionSource?.isConnected
+    ? modalInteractionSource
+    : (!modal.contains(document.activeElement) ? document.activeElement : null);
+  modalSurfaceState.set(modal, { opener });
+  modalSurfaceStack = modalSurfaceStack.filter((item) => item !== modal);
+  modalSurfaceStack.push(modal);
+  syncModalSurfaceState();
+  focusModalSurface(modal);
+}
+
+function handleModalSurfaceClosed(modal) {
+  const { opener } = modalSurfaceState.get(modal) || {};
+  modalSurfaceStack = modalSurfaceStack.filter((item) => item !== modal);
+  modal.removeAttribute('aria-hidden');
+  modal.inert = false;
+  syncModalSurfaceState();
+  requestAnimationFrame(() => {
+    if (opener?.isConnected && !opener.closest('[hidden]')) opener.focus();
+    else focusModalSurface(topmostModalSurface());
+  });
+}
+
+function requestModalSurfaceDismiss(modal) {
+  const dismissControl = modal.querySelector([
+    '[data-modal-dismiss]',
+    'button[id^="cancel"]',
+    'button[id^="close"]:not([data-modal-fullscreen])'
+  ].join(', '));
+  if (dismissControl) dismissControl.click();
+  else modal.hidden = true;
+}
+
+function trapModalSurfaceFocus(event, modal) {
+  const focusable = modalFocusableElements(modal);
+  if (!focusable.length) {
+    event.preventDefault();
+    modalSurfaceCard(modal)?.focus();
+    return;
+  }
+  const first = focusable[0];
+  const last = focusable.at(-1);
+  if (event.shiftKey && (document.activeElement === first || !modal.contains(document.activeElement))) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && (document.activeElement === last || !modal.contains(document.activeElement))) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function initializeModalSurfaces() {
+  const modals = $$('.modal-backdrop');
+  modals.forEach((modal) => {
+    modal.dataset.surfaceKind = 'modal';
+    configureModalSurface(modal);
+  });
+  const observer = new MutationObserver((records) => {
+    records.forEach(({ target }) => {
+      if (target.hidden) handleModalSurfaceClosed(target);
+      else handleModalSurfaceOpened(target);
+    });
+  });
+  modals.forEach((modal) => {
+    observer.observe(modal, { attributes: true, attributeFilter: ['hidden'] });
+    modal.addEventListener('click', (event) => {
+      if (event.target === modal && modal === topmostModalSurface()) requestModalSurfaceDismiss(modal);
+    });
+  });
+  document.addEventListener('click', (event) => {
+    const control = event.target.closest('button, a[href], input, select, textarea, [tabindex]');
+    if (control) modalInteractionSource = control;
+  }, true);
+  document.addEventListener('keydown', (event) => {
+    const modal = topmostModalSurface();
+    if (!modal) return;
+    if (event.key === 'Tab') trapModalSurfaceFocus(event, modal);
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      requestModalSurfaceDismiss(modal);
+    }
+  }, true);
+}
+
+function initializeParallelInspectors() {
+  $$('#menuConfigInspector, #actionFlowInspector, #workflowCanvasInspector, #dashboardWidgetInspector').forEach((inspector) => {
+    inspector.classList.add('parallel-inspector');
+    inspector.dataset.surfaceKind = 'parallel';
+    inspector.setAttribute('aria-modal', 'false');
+  });
+}
 
 function setModalFullscreen(modal, enabled) {
   const card = modal?.querySelector('.modal-card, .form-design-drawer, .version-history-drawer, .page-permission-drawer, .permission-audit-drawer, .api-connector-drawer, .api-interface-drawer, .dashboard-source-drawer');
@@ -1827,14 +2097,94 @@ function toggleModalFullscreen(button) {
   setModalFullscreen(modal, !card.classList.contains('is-fullscreen'));
 }
 
+const toastState = { timer: null, remaining: 4200, startedAt: 0 };
+
+function dismissToast() {
+  window.clearTimeout(toastState.timer);
+  toastState.timer = null;
+  $('#toast').hidden = true;
+}
+
+function scheduleToastDismiss(delay = 4200) {
+  window.clearTimeout(toastState.timer);
+  toastState.remaining = delay;
+  toastState.startedAt = Date.now();
+  toastState.timer = window.setTimeout(dismissToast, delay);
+}
+
+function pauseToastDismiss() {
+  if (!toastState.timer) return;
+  window.clearTimeout(toastState.timer);
+  toastState.timer = null;
+  toastState.remaining = Math.max(250, toastState.remaining - (Date.now() - toastState.startedAt));
+}
+
+function resumeToastDismiss() {
+  const element = $('#toast');
+  if (!element.hidden && !element.classList.contains('error') && !element.matches(':hover, :focus-within')) {
+    scheduleToastDismiss(toastState.remaining);
+  }
+}
+
+function activeFeedbackForm() {
+  return document.querySelector('form[aria-busy="true"]') || document.activeElement?.closest?.('form') || null;
+}
+
+function clearFormErrorSummary(form) {
+  form?.querySelector(':scope > .form-error-summary')?.remove();
+}
+
+function showFormErrorSummary(form, message) {
+  if (!form) return;
+  clearFormErrorSummary(form);
+  const summary = document.createElement('div');
+  summary.className = 'form-error-summary';
+  summary.setAttribute('role', 'alert');
+  summary.textContent = message;
+  form.prepend(summary);
+}
+
 function toast(message, type = 'ok') {
   const element = $('#toast');
-  element.textContent = message;
-  element.className = `toast ${type === 'error' ? 'error' : ''}`;
+  const isError = type === 'error';
+  const form = activeFeedbackForm();
+  window.clearTimeout(toastState.timer);
+  toastState.timer = null;
+  $('#toastMessage').textContent = message;
+  element.className = `toast ${isError ? 'error' : ''}`;
+  element.setAttribute('role', isError ? 'alert' : 'status');
+  element.setAttribute('aria-live', isError ? 'assertive' : 'polite');
+  element.setAttribute('aria-atomic', 'true');
   element.hidden = false;
-  setTimeout(() => {
-    element.hidden = true;
-  }, 4200);
+  $('#dismissToast').hidden = !isError;
+  if (isError) showFormErrorSummary(form, message);
+  else {
+    clearFormErrorSummary(form);
+    scheduleToastDismiss();
+  }
+}
+
+function clearFieldError(input) {
+  const errorId = input.dataset.validationErrorId;
+  if (errorId) document.getElementById(errorId)?.remove();
+  delete input.dataset.validationErrorId;
+  input.removeAttribute('aria-invalid');
+  const describedBy = (input.getAttribute('aria-describedby') || '').split(/\s+/).filter((id) => id && id !== errorId);
+  if (describedBy.length) input.setAttribute('aria-describedby', describedBy.join(' '));
+  else input.removeAttribute('aria-describedby');
+}
+
+function showFieldError(input) {
+  clearFieldError(input);
+  const id = `field-error-${input.id || input.name || Date.now()}`.replace(/[^a-zA-Z0-9_-]/g, '-');
+  const error = document.createElement('span');
+  error.id = id;
+  error.className = 'field-error';
+  error.textContent = input.validationMessage;
+  input.insertAdjacentElement('afterend', error);
+  input.dataset.validationErrorId = id;
+  input.setAttribute('aria-invalid', 'true');
+  input.setAttribute('aria-describedby', [input.getAttribute('aria-describedby'), id].filter(Boolean).join(' '));
 }
 
 function showSuccessPrompt(title, message) {
@@ -1886,6 +2236,38 @@ function renderNotifications() {
   $('#notificationList').innerHTML = state.notifications.map((item) => `<button type="button" class="notification-item ${item.read ? '' : 'is-unread'}" data-notification-id="${item.id}" data-notification-request="${escapeHtml(item.requestKey || '')}"><span class="notification-item-mark"></span><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.message)}</small><time>${escapeHtml(new Date(item.createdAt).toLocaleString())}</time></span></button>`).join('') || '<div class="notification-empty"><strong>You are all caught up</strong><span>Workflow updates will appear here automatically.</span></div>';
 }
 
+const floatingSurfaceTimers = new WeakMap();
+
+function positionAnchoredSurface(surface, trigger, container = trigger?.offsetParent) {
+  if (!surface || !trigger || !container) return;
+  const triggerBounds = trigger.getBoundingClientRect();
+  const surfaceBounds = surface.getBoundingClientRect();
+  const anchorX = triggerBounds.left + (triggerBounds.width / 2) - surfaceBounds.left;
+  surface.style.setProperty('--popover-origin-x', `${Math.round(anchorX)}px`);
+}
+
+function setFloatingSurfaceOpen(surface, trigger, open, options = {}) {
+  if (!surface) return;
+  clearTimeout(floatingSurfaceTimers.get(surface));
+  if (open) {
+    surface.hidden = false;
+    positionAnchoredSurface(surface, trigger, options.container);
+    surface.dataset.floatingState = 'closed';
+    requestAnimationFrame(() => {
+      if (!surface.hidden) surface.dataset.floatingState = 'open';
+    });
+    return;
+  }
+  surface.dataset.floatingState = 'closed';
+  const finish = () => {
+    surface.hidden = true;
+    delete surface.dataset.floatingState;
+    options.onClosed?.();
+  };
+  if (prefersReducedMotion()) finish();
+  else floatingSurfaceTimers.set(surface, setTimeout(finish, 160));
+}
+
 async function loadNotifications() {
   if (!state.user) return;
   const payload = await api(`/api/notifications?unread=${state.notificationUnreadOnly}&limit=50`);
@@ -1893,8 +2275,10 @@ async function loadNotifications() {
 }
 
 function toggleNotificationDrawer(force) {
-  const drawer = $('#notificationDrawer'); const open = force ?? drawer.hidden;
-  drawer.hidden = !open; $('#notificationBell').setAttribute('aria-expanded', String(open)); if (open) runWorkflowUi(loadNotifications);
+  const drawer = $('#notificationDrawer'); const bell = $('#notificationBell');
+  const open = force ?? bell.getAttribute('aria-expanded') !== 'true';
+  setFloatingSurfaceOpen(drawer, bell, open, { container: $('#notificationHub') });
+  bell.setAttribute('aria-expanded', String(open)); if (open) runWorkflowUi(loadNotifications);
 }
 
 async function openNotification(item) {
@@ -1959,11 +2343,12 @@ function closeConfirmationModal(confirmed = false) {
   resolve?.(confirmed);
 }
 
-function showConfirmationModal({ title = 'Confirm action', message = '', confirmLabel = 'Confirm' } = {}) {
+function showConfirmationModal({ title = 'Confirm action', message = '', confirmLabel = 'Confirm', cancelLabel = 'Cancel' } = {}) {
   if (confirmationResolver) closeConfirmationModal(false);
   $('#confirmationModalTitle').textContent = title;
   $('#confirmationModalMessage').textContent = message;
   $('#confirmModalAction').textContent = confirmLabel;
+  $('#cancelConfirmationModal').textContent = cancelLabel;
   $('#confirmationModal').hidden = false;
   document.body.classList.add('modal-open');
   return new Promise((resolve) => {
@@ -2498,6 +2883,43 @@ async function openBrowserLookup(button) {
   }
 }
 
+function hierarchyChildrenIndex(items, getParentKey) {
+  const childrenByParent = new Map();
+  items.forEach((item) => {
+    const parentKey = String(getParentKey(item) ?? '');
+    if (!childrenByParent.has(parentKey)) childrenByParent.set(parentKey, []);
+    childrenByParent.get(parentKey).push(item);
+  });
+  return childrenByParent;
+}
+
+function hierarchyPathKeys(items, selectedKeys, getKey, getParentKey) {
+  const itemsByKey = new Map(items.map((item) => [String(getKey(item)), item]));
+  const pathKeys = new Set();
+  (selectedKeys || []).forEach((selectedKey) => {
+    let current = itemsByKey.get(String(selectedKey));
+    const visited = new Set();
+    while (current && !visited.has(String(getKey(current)))) {
+      const key = String(getKey(current));
+      visited.add(key);
+      pathKeys.add(key);
+      const parentKey = getParentKey(current);
+      current = parentKey === null || parentKey === undefined || parentKey === '' ? null : itemsByKey.get(String(parentKey));
+    }
+  });
+  return pathKeys;
+}
+
+function hierarchyNodePathClasses(siblings, index, pathKeys, getKey) {
+  const key = String(getKey(siblings[index]));
+  const isPath = pathKeys.has(key);
+  const hasLaterPath = siblings.slice(index + 1).some((item) => pathKeys.has(String(getKey(item))));
+  return [
+    isPath ? 'is-hierarchy-path is-hierarchy-rail-entry' : '',
+    hasLaterPath ? 'is-hierarchy-rail-through' : ''
+  ].filter(Boolean).join(' ');
+}
+
 const actionFlowPaletteItems = [
   { category: 'record', type: 'add_record', label: 'Add record', icon: 'A', help: 'Create a new record' },
   { category: 'record', type: 'update_record', label: 'Update record', icon: 'U', help: 'Change fields on a record' },
@@ -2606,7 +3028,7 @@ function renderActionFlowManagement() {
 }
 
 function showActionFlowManagement() {
-  if (state.actionFlowDirty && !window.confirm('Leave the canvas without saving your changes?')) return;
+  if (deferBuilderLeave(['automation'], showActionFlowManagement)) return;
   state.actionFlowMode = 'management';
   state.selectedActionFlowNodeId = '';
   state.actionFlowDirty = false;
@@ -2617,6 +3039,7 @@ function showActionFlowManagement() {
 }
 
 function openActionFlowCanvas(flowKey) {
+  if (deferBuilderLeave(['automation'], () => openActionFlowCanvas(flowKey))) return;
   const flow = state.actionFlows.find((item) => item.flowKey === flowKey);
   if (!flow) return;
   state.activeActionFlowKey = flow.flowKey;
@@ -2627,6 +3050,7 @@ function openActionFlowCanvas(flowKey) {
   $('#actionFlowManagement').hidden = true;
   $('#actionFlowStudio').hidden = false;
   renderActionFlowStudio();
+  beginBuilderDraft('automation');
   requestAnimationFrame(() => {
     const viewport = $('#actionFlowCanvasViewport');
     if (viewport) viewport.scrollTo({ left: 100, top: 0 });
@@ -3550,6 +3974,7 @@ async function saveActiveActionFlow() {
   const index = state.actionFlows.findIndex((item) => item.flowKey === flow.flowKey);
   state.actionFlows[index] = result.flow;
   state.actionFlowDirty = false;
+  beginBuilderDraft('automation');
   renderActionFlowStudio();
   toast('Automation Flow Saved.');
 }
@@ -3656,6 +4081,7 @@ async function restoreActionFlowVersion(versionId, versionNumber) {
   $('#actionFlowVersionRemark').value = '';
   renderActionFlowVersions();
   renderActionFlowStudio();
+  beginBuilderDraft('automation');
   toast(`Version ${versionNumber} Restored As A New Draft.`);
 }
 
@@ -3759,7 +4185,166 @@ function fieldValidationRulesFromForm(form) {
   };
 }
 
+const builderDrafts = new Map();
+let builderLeavePending = false;
+
+function builderDraftAdapter(name) {
+  if (name === 'menu') return {
+    root: '#adminMenuConfigurationSection', label: 'Menu',
+    read: () => state.menuConfigDraft,
+    restore: value => { state.menuConfigDraft = value; renderMenuConfig(); }
+  };
+  if (name === 'automation') return {
+    root: '#actionFlowStudio', label: 'Automation flow',
+    read: () => { const flow = activeActionFlow(); return flow ? { definition: flow.definition, triggerType: flow.triggerType, triggerModule: flow.triggerModule } : null; },
+    restore: value => { Object.assign(activeActionFlow(), value); state.selectedActionFlowNodeId = ''; renderActionFlowStudio(); }
+  };
+  if (name === 'workflow') return {
+    root: '#workflowDefinitionForm', label: 'Workflow',
+    read: () => ({ graph: state.workflowBuilderGraph, stages: state.workflowDraftStages, fields: Array.from($('#workflowDefinitionForm').elements)
+      .filter(field => field.name && !field.closest('#workflowCanvasInspector'))
+      .map(field => [field.name, field.type === 'checkbox' ? field.checked : field.value]) }),
+    restore: value => {
+      state.workflowBuilderGraph = value.graph; state.workflowDraftStages = value.stages;
+      for (const [name, val] of value.fields) { const field = $('#workflowDefinitionForm').elements.namedItem(name); if (field) { if (field.type === 'checkbox') field.checked = val; else field.value = val; } }
+      state.selectedWorkflowNodeId = ''; state.selectedWorkflowEdgeId = ''; state.workflowConnectFrom = '';
+      renderWorkflowStages(); renderWorkflowCheck(null);
+    }
+  };
+  if (name === 'form') return {
+    root: '#formDesignDrawer', label: 'Form layout',
+    read: () => readFormDesignLayouts().draft,
+    restore: value => { const layouts = readFormDesignLayouts(); layouts.draft = value; writeFormDesignLayouts(layouts); renderFormDesignDrawer(); }
+  };
+  if (name === 'dashboard') return {
+    root: '#dashboardBuilderStudio', label: 'Dashboard',
+    read: () => state.dashboardConfiguration,
+    restore: value => { state.dashboardConfiguration = value; state.dashboardLayoutHistory = []; state.dashboardLayoutFuture = []; state.dashboardLayoutDirty = false; renderDashboardCanvas(); }
+  };
+}
+
+function beginBuilderDraft(name) {
+  const adapter = builderDraftAdapter(name);
+  builderDrafts.set(name, new DraftHistory(adapter.read()));
+  refreshBuilderDraftFeedback(name);
+}
+
+function markFormLayoutSaved() {
+  const history = builderDrafts.get('form');
+  if (!history) return beginBuilderDraft('form');
+  const current = builderDraftAdapter('form').read();
+  const saved = JSON.parse(history.saved);
+  saved[state.activeFormDesignType] = current[state.activeFormDesignType];
+  history.saved = JSON.stringify(saved);
+  history.current = JSON.stringify(current);
+  history.past = []; history.future = [];
+  refreshBuilderDraftFeedback('form');
+}
+
+function captureBuilderDraft(name) {
+  const history = builderDrafts.get(name);
+  if (!history) return;
+  history.record(builderDraftAdapter(name).read());
+  refreshBuilderDraftFeedback(name);
+}
+
+function refreshBuilderDraftFeedback(name) {
+  const history = builderDrafts.get(name);
+  if (!history) return;
+  $$(`[data-builder-history="${name}"]`).forEach(bar => {
+    bar.querySelector('[data-draft-undo]').disabled = !history.past.length;
+    bar.querySelector('[data-draft-redo]').disabled = !history.future.length;
+    const status = bar.querySelector('[data-draft-status]');
+    const text = history.dirty ? 'Unsaved changes' : 'No unsaved changes';
+    if (status.textContent !== text) status.textContent = text;
+    bar.classList.toggle('is-dirty', history.dirty);
+  });
+  if (name === 'automation') {
+    state.actionFlowDirty = history.dirty;
+    $('#saveActionFlowButton').disabled = !history.dirty;
+    $('#actionFlowSaveState').textContent = history.dirty ? 'Unsaved draft changes' : 'No unsaved changes';
+  }
+  if (name === 'dashboard') {
+    state.dashboardLayoutDirty = history.dirty;
+    $('#dashboardStudioSaveState').textContent = history.dirty ? 'Unsaved changes' : 'No unsaved changes';
+  }
+}
+
+function restoreBuilderHistory(name, redo = false) {
+  captureBuilderDraft(name);
+  const history = builderDrafts.get(name);
+  const value = redo ? history?.redo() : history?.undo();
+  if (!value) return;
+  builderDraftAdapter(name).restore(value);
+  refreshBuilderDraftFeedback(name);
+  $$(`[data-builder-history="${name}"] [data-draft-status]`).forEach(status => { status.textContent = `${redo ? 'Redone' : 'Undone'}. ${history.dirty ? 'Unsaved changes' : 'No unsaved changes'}`; });
+}
+
+function visibleDirtyBuilders(names = [...builderDrafts.keys()]) {
+  return names.filter(name => {
+    const root = $(builderDraftAdapter(name).root);
+    if (!root || root.closest('[hidden]')) return false;
+    captureBuilderDraft(name);
+    return builderDrafts.get(name)?.dirty;
+  });
+}
+
+// Keep navigation synchronous when clean. Dirty navigation is resumed only after
+// an explicit discard; cancelling does not mutate the draft or change selection.
+function deferBuilderLeave(names, proceed) {
+  const dirty = visibleDirtyBuilders(names);
+  if (!dirty.length) return false;
+  if (builderLeavePending) return true;
+  builderLeavePending = true;
+  showConfirmationModal({ title: 'Leave without saving?', message: `${dirty.map(name => builderDraftAdapter(name).label).join(', ')} has unsaved changes. Stay to save your work, or discard these draft changes. Published versions are unchanged.`, confirmLabel: 'Discard changes', cancelLabel: 'Keep editing' })
+    .then(discard => {
+      if (!discard) return;
+      for (const name of dirty) {
+        const history = builderDrafts.get(name);
+        const saved = JSON.parse(history.saved);
+        builderDraftAdapter(name).restore(saved);
+        history.markSaved(saved);
+        refreshBuilderDraftFeedback(name);
+      }
+      proceed();
+    }).finally(() => { builderLeavePending = false; });
+  return true;
+}
+
+function initializeBuilderDraftControls() {
+  document.addEventListener('click', event => {
+    const navigation = event.target.closest?.('[data-view], [data-module-view], .admin-section-button, [data-workflow-definition], #newWorkflowDefinitionButton, #emptyNewWorkflowDefinitionButton, [data-action-flow-key], [data-open-flow-canvas], [data-open-dashboard], [data-open-account-settings], #logoutButton');
+    if (navigation && deferBuilderLeave(undefined, () => navigation.click())) {
+      event.preventDefault(); event.stopImmediatePropagation();
+    }
+  }, true);
+  for (const [name, selector] of [['menu', '#menuConfigStatus'], ['automation', '.action-flow-context-toolbar'], ['workflow', '.workflow-definition-header'], ['workflow', '.workflow-canvas-toolbar'], ['form', '#formDesignDrawer .form-design-toolbar']]) {
+    const anchor = $(selector);
+    if (!anchor) continue;
+    const bar = document.createElement('div');
+    bar.className = 'builder-history-bar'; bar.dataset.builderHistory = name;
+    bar.innerHTML = '<button type="button" class="secondary" data-draft-undo disabled>Undo</button><button type="button" class="secondary" data-draft-redo disabled>Redo</button><span data-draft-status role="status" aria-live="polite">No unsaved changes</span>';
+    if (name === 'form' || name === 'automation' || selector === '.workflow-canvas-toolbar') anchor.append(bar);
+    else anchor.after(bar);
+    bar.addEventListener('click', event => { if (event.target.closest('[data-draft-undo], [data-draft-redo]')) restoreBuilderHistory(name, Boolean(event.target.closest('[data-draft-redo]'))); });
+  }
+  // Observe completed user transactions, not pointermove frames. Native input
+  // undo remains untouched; builder undo is an explicit toolbar action.
+  for (const type of ['click', 'change', 'input', 'pointerup', 'drop', 'keyup']) {
+    document.addEventListener(type, event => {
+      if (event.target.closest?.('[data-builder-history]')) return;
+      setTimeout(() => { if (!builderLeavePending) visibleDirtyBuilders(); }, 0);
+    }, true);
+  }
+  window.addEventListener('beforeunload', event => {
+    if (!visibleDirtyBuilders().length) return;
+    event.preventDefault(); event.returnValue = '';
+  });
+}
+
 function showView(id) {
+  if (id === 'loginView') builderDrafts.clear();
+  if (id !== 'loginView' && deferBuilderLeave(undefined, () => showView(id))) return;
   closeCustomerModal();
   closeImportModal();
   closeConfirmationModal(false);
@@ -3789,6 +4374,7 @@ function showView(id) {
   $$('.nav-button').forEach((button) => {
     button.classList.toggle('is-active', button.dataset.view === id && !button.dataset.moduleView);
   });
+  syncSidebarCurrentState();
   window.clearInterval(state.workflowMonitoringTimer);
   state.workflowMonitoringTimer = id === 'workflowMonitoringView'
     ? window.setInterval(() => runWorkflowUi(loadWorkflowMonitoring), 30000)
@@ -3796,6 +4382,7 @@ function showView(id) {
 }
 
 function showAdminSection(id) {
+  if (id !== state.activeAdminSection && deferBuilderLeave(undefined, () => showAdminSection(id))) return;
   state.activeAdminSection = id;
   $$('.admin-section').forEach((section) => {
     section.hidden = section.id !== id;
@@ -3838,6 +4425,38 @@ async function runWorkflowUi(action) {
   } catch (error) {
     toast(titleCaseMessage(error.message), 'error');
   }
+}
+
+function bindAsyncSubmit(form, handler) {
+  if (!form) return;
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (form.dataset.submitting === 'true') return;
+
+    const submitButton = event.submitter instanceof HTMLButtonElement
+      ? event.submitter
+      : form.querySelector('button[type="submit"], input[type="submit"]');
+    const wasDisabled = Boolean(submitButton?.disabled);
+    form.dataset.submitting = 'true';
+    form.setAttribute('aria-busy', 'true');
+    if (submitButton) {
+      submitButton.disabled = true;
+      submitButton.classList.add('is-busy');
+      submitButton.setAttribute('aria-busy', 'true');
+    }
+
+    try {
+      await handler(event);
+    } finally {
+      delete form.dataset.submitting;
+      form.removeAttribute('aria-busy');
+      if (submitButton?.isConnected) {
+        submitButton.disabled = wasDisabled;
+        submitButton.classList.remove('is-busy');
+        submitButton.removeAttribute('aria-busy');
+      }
+    }
+  });
 }
 
 function openWorkflowModal(id, focusSelector = 'input, select, textarea, button') {
@@ -4161,7 +4780,133 @@ function workflowEdgePath(from, to) {
   return `M ${start.x} ${start.y} C ${start.x + bend} ${start.y}, ${end.x - bend} ${end.y}, ${end.x} ${end.y}`;
 }
 
-function renderWorkflowCanvas() {
+function workflowRubberBand(value, minimum, maximum, dimension = 160) {
+  if (value >= minimum && value <= maximum) return value;
+  const boundary = value < minimum ? minimum : maximum;
+  const overshoot = value - boundary;
+  return boundary + ((overshoot * dimension * .55) / (dimension + (.55 * Math.abs(overshoot))));
+}
+
+function workflowDragPosition(drag, clientX, clientY) {
+  const canvas = $('#workflowCanvas');
+  const bounds = canvas.getBoundingClientRect();
+  const nodeWidth = drag.width / state.workflowCanvasZoom;
+  const nodeHeight = drag.height / state.workflowCanvasZoom;
+  const rawX = ((clientX - bounds.left) / state.workflowCanvasZoom) - drag.grabOffsetX;
+  const rawY = ((clientY - bounds.top) / state.workflowCanvasZoom) - drag.grabOffsetY;
+  return {
+    x: workflowRubberBand(rawX, 0, 1600 - nodeWidth),
+    y: workflowRubberBand(rawY, 0, 820 - nodeHeight),
+    maxX: 1600 - nodeWidth,
+    maxY: 820 - nodeHeight
+  };
+}
+
+function updateWorkflowConnectedEdges(nodeId, x, y) {
+  const graph = state.workflowBuilderGraph;
+  const draggedNode = graph.nodes.find((node) => node.id === nodeId);
+  if (!draggedNode) return;
+  graph.edges.filter((edge) => edge.from === nodeId || edge.to === nodeId).forEach((edge) => {
+    const group = $(`#workflowCanvas [data-workflow-edge-group="${CSS.escape(edge.id)}"]`);
+    if (!group) return;
+    const from = graph.nodes.find((node) => node.id === edge.from);
+    const to = graph.nodes.find((node) => node.id === edge.to);
+    if (!from || !to) return;
+    const previewFrom = from.id === nodeId ? { ...from, x, y } : from;
+    const previewTo = to.id === nodeId ? { ...to, x, y } : to;
+    const a = workflowNodeCenter(previewFrom);
+    const b = workflowNodeCenter(previewTo);
+    const middleX = (a.x + b.x) / 2;
+    const middleY = (a.y + b.y) / 2;
+    group.querySelector('path')?.setAttribute('d', workflowEdgePath(previewFrom, previewTo));
+    const circle = group.querySelector('circle');
+    const text = group.querySelector('text');
+    const label = group.querySelector('foreignObject');
+    circle?.setAttribute('cx', middleX); circle?.setAttribute('cy', middleY);
+    text?.setAttribute('x', middleX); text?.setAttribute('y', middleY + 3);
+    label?.setAttribute('x', middleX - 46); label?.setAttribute('y', middleY + 16);
+  });
+}
+
+function renderWorkflowDragFrame() {
+  state.workflowCanvasDragFrame = null;
+  const drag = state.workflowCanvasDrag;
+  if (!drag?.dragging) return;
+  const button = $(`#workflowCanvas [data-workflow-node-id="${CSS.escape(drag.nodeId)}"]`);
+  if (!button) return;
+  button.classList.add('is-dragging');
+  button.style.transform = `translate3d(${drag.previewX - drag.x}px, ${drag.previewY - drag.y}px, 0)`;
+  updateWorkflowConnectedEdges(drag.nodeId, drag.previewX, drag.previewY);
+}
+
+function queueWorkflowDragFrame() {
+  if (!state.workflowCanvasDragFrame) state.workflowCanvasDragFrame = requestAnimationFrame(renderWorkflowDragFrame);
+}
+
+function finishWorkflowCanvasInteraction(event) {
+  const drag = state.workflowCanvasDrag;
+  if (drag && (!event || event.pointerId === drag.pointerId)) {
+    if (state.workflowCanvasDragFrame) cancelAnimationFrame(state.workflowCanvasDragFrame);
+    state.workflowCanvasDragFrame = null;
+    if (drag.dragging) {
+      const node = state.workflowBuilderGraph.nodes.find((item) => item.id === drag.nodeId);
+      if (node) {
+        node.x = Math.round(Math.min(drag.maxX, Math.max(0, drag.previewX)));
+        node.y = Math.round(Math.min(drag.maxY, Math.max(0, drag.previewY)));
+      }
+      state.workflowCanvasSuppressClick = true;
+      renderWorkflowCanvas();
+    }
+    state.workflowCanvasDrag = null;
+  }
+  state.workflowCanvasPan = null;
+  $('#workflowCanvasViewport')?.classList.remove('is-panning');
+}
+
+function announceWorkflowCanvas(message) {
+  const status = $('#workflowCanvasAnnouncement');
+  if (!status) return;
+  status.textContent = '';
+  requestAnimationFrame(() => { status.textContent = message; });
+}
+
+function workflowNodeAccessibleLabel(node, label) {
+  const position = `${Math.round(Number(node.x))} pixels from left, ${Math.round(Number(node.y))} pixels from top`;
+  return `${label}, ${titleCaseMessage(node.type)} node, ${position}. Use arrow keys to move, Enter to select${node.type === 'start' ? '' : ', or Delete to remove'}.`;
+}
+
+function moveWorkflowNodeByKeyboard(nodeId, key, accelerated = false) {
+  const node = state.workflowBuilderGraph.nodes.find((item) => item.id === nodeId);
+  if (!node) return;
+  const step = accelerated ? 20 : 5;
+  const delta = { ArrowUp: [0, -step], ArrowDown: [0, step], ArrowLeft: [-step, 0], ArrowRight: [step, 0] }[key];
+  if (!delta) return;
+  node.x = Math.round(Math.min(1600 - 184, Math.max(0, Number(node.x) + delta[0])));
+  node.y = Math.round(Math.min(820 - 88, Math.max(0, Number(node.y) + delta[1])));
+  state.selectedWorkflowNodeId = node.id;
+  state.selectedWorkflowEdgeId = '';
+  const stage = workflowStageForNode(node);
+  const label = stage?.name || node.label || titleCaseMessage(node.type);
+  renderWorkflowCanvas(node.id);
+  announceWorkflowCanvas(`${label} moved to ${node.x} pixels from left and ${node.y} pixels from top.`);
+}
+
+function cancelWorkflowCanvasMode() {
+  const wasConnecting = Boolean(state.workflowConnectFrom);
+  const wasDragging = Boolean(state.workflowCanvasDrag || state.workflowCanvasPan);
+  if (!wasConnecting && !wasDragging) return false;
+  state.workflowConnectFrom = '';
+  if (state.workflowCanvasDragFrame) cancelAnimationFrame(state.workflowCanvasDragFrame);
+  state.workflowCanvasDragFrame = null;
+  state.workflowCanvasDrag = null;
+  state.workflowCanvasPan = null;
+  $('#workflowCanvasViewport')?.classList.remove('is-panning');
+  renderWorkflowCanvas(state.selectedWorkflowNodeId);
+  announceWorkflowCanvas(wasConnecting ? 'Connection cancelled.' : 'Movement cancelled.');
+  return true;
+}
+
+function renderWorkflowCanvas(focusNodeId = '') {
   const canvas = $('#workflowCanvas');
   if (!canvas) return;
   const graph = state.workflowBuilderGraph;
@@ -4173,23 +4918,25 @@ function renderWorkflowCanvas() {
     const b = workflowNodeCenter(to);
     const x = (a.x + b.x) / 2;
     const y = (a.y + b.y) / 2;
-    return `<g class="workflow-canvas-edge ${state.selectedWorkflowEdgeId === edge.id ? 'is-selected' : ''}"><path d="${workflowEdgePath(from, to)}"></path><circle cx="${x}" cy="${y}" r="12"></circle><text x="${x}" y="${y + 3}">›</text><foreignObject x="${x - 46}" y="${y + 16}" width="92" height="26"><button type="button" data-workflow-edge-id="${escapeHtml(edge.id)}">${escapeHtml(edge.label || edge.outcome || 'Continue')}</button></foreignObject></g>`;
+    return `<g class="workflow-canvas-edge ${state.selectedWorkflowEdgeId === edge.id ? 'is-selected' : ''}" data-workflow-edge-group="${escapeHtml(edge.id)}"><path d="${workflowEdgePath(from, to)}"></path><circle cx="${x}" cy="${y}" r="12"></circle><text x="${x}" y="${y + 3}">›</text><foreignObject x="${x - 46}" y="${y + 16}" width="92" height="26"><button type="button" data-workflow-edge-id="${escapeHtml(edge.id)}">${escapeHtml(edge.label || edge.outcome || 'Continue')}</button></foreignObject></g>`;
   }).join('');
   const nodes = graph.nodes.map((node) => {
     const stage = workflowStageForNode(node);
     const label = stage?.name || node.label || titleCaseMessage(node.type);
     const detail = stage ? (stage.condition ? 'Conditional approval' : 'All approvers') : (node.type === 'start' ? 'Request enters here' : 'Route finishes here');
-    return `<button type="button" class="workflow-canvas-node is-${node.type} ${state.selectedWorkflowNodeId === node.id ? 'is-selected' : ''} ${state.workflowConnectFrom === node.id ? 'is-connecting' : ''}" data-workflow-node-id="${escapeHtml(node.id)}" style="left:${Number(node.x)}px;top:${Number(node.y)}px"><span class="workflow-node-glyph">${node.type === 'start' ? 'S' : node.type === 'end' ? 'E' : 'A'}</span><span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(detail)}</small></span><i></i></button>`;
+    return `<button type="button" class="workflow-canvas-node is-${node.type} ${state.selectedWorkflowNodeId === node.id ? 'is-selected' : ''} ${state.workflowConnectFrom === node.id ? 'is-connecting' : ''}" data-workflow-node-id="${escapeHtml(node.id)}" aria-label="${escapeHtml(workflowNodeAccessibleLabel(node, label))}" aria-describedby="workflowKeyboardHelp" style="left:${Number(node.x)}px;top:${Number(node.y)}px"><span class="workflow-node-glyph">${node.type === 'start' ? 'S' : node.type === 'end' ? 'E' : 'A'}</span><span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(detail)}</small></span><i></i></button>`;
   }).join('');
   canvas.style.transform = `scale(${state.workflowCanvasZoom})`;
   canvas.innerHTML = `<svg class="workflow-canvas-edges" width="1600" height="820" viewBox="0 0 1600 820">${edges}</svg>${nodes}`;
   $('#workflowZoomLabel').textContent = `${Math.round(state.workflowCanvasZoom * 100)}%`;
   $('#workflowConnectButton').classList.toggle('is-active', Boolean(state.workflowConnectFrom));
+  $('#workflowConnectButton').setAttribute('aria-pressed', String(Boolean(state.workflowConnectFrom)));
   $('#workflowCanvasSaveState').textContent = state.workflowConnectFrom ? 'Choose a destination node' : `${state.workflowDraftStages.length} approval stage${state.workflowDraftStages.length === 1 ? '' : 's'}`;
   $('#workflowRouteStageCount').textContent = String(state.workflowDraftStages.length);
   $('#workflowRouteConnectionCount').textContent = String(graph.edges.length);
   $('#workflowRouteConditionCount').textContent = String(graph.edges.filter((edge) => edge.condition?.rules?.length).length);
   renderWorkflowCanvasInspector();
+  if (focusNodeId) requestAnimationFrame(() => $(`#workflowCanvas [data-workflow-node-id="${CSS.escape(focusNodeId)}"]`)?.focus());
 }
 
 function setWorkflowInspectorCollapsed(collapsed) {
@@ -4339,16 +5086,48 @@ function renderWorkflowEdgeCondition(edge) {
   return `<div class="workflow-inspector-section workflow-edge-condition-builder"><span>${edge.outcome === 'condition_met' ? 'Continue when' : 'Continue when not'}</span><div class="workflow-condition-match"><small>Match</small><div><button type="button" data-workflow-edge-condition-group="all" class="${condition.group !== 'any' ? 'is-active' : ''}">All rules</button><button type="button" data-workflow-edge-condition-group="any" class="${condition.group === 'any' ? 'is-active' : ''}">Any rule</button></div></div>${rows}<button type="button" class="secondary" data-add-workflow-edge-condition>+ Add rule</button><p class="muted">${edge.outcome === 'condition_met' ? 'This line matches when the configured rules pass.' : 'This line matches when the configured rules do not pass.'}</p></div>`;
 }
 
+const workflowAttachmentFileTypes = [
+  { value: 'application/pdf', label: 'PDF', extension: '.pdf' },
+  { value: 'image/jpeg', label: 'JPG / JPEG image', extension: '.jpg, .jpeg' },
+  { value: 'image/png', label: 'PNG image', extension: '.png' },
+  { value: 'text/plain', label: 'Plain text', extension: '.txt' },
+  { value: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', label: 'Word document', extension: '.docx' },
+  { value: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', label: 'Excel spreadsheet', extension: '.xlsx' }
+];
+
+function workflowAttachmentTypeSummary(count) {
+  return count === 1 ? '1 file type selected' : `${count} file types selected`;
+}
+
+function renderWorkflowAttachmentTypePicker(selectedTypes = []) {
+  const selected = new Set(selectedTypes);
+  const known = new Set(workflowAttachmentFileTypes.map((type) => type.value));
+  const legacyTypes = selectedTypes.filter((type) => !known.has(type));
+  const options = [
+    ...workflowAttachmentFileTypes,
+    ...legacyTypes.map((value) => ({ value, label: 'Previously configured type', extension: value }))
+  ];
+  return `<div class="workflow-file-type-field"><span>Allowed file types</span><details class="workflow-file-type-picker"><summary><span data-workflow-file-type-summary>${workflowAttachmentTypeSummary(selected.size)}</span><i aria-hidden="true">⌄</i></summary><div class="workflow-file-type-options" role="group" aria-label="Allowed file types">${options.map((type) => `<label><input type="checkbox" data-workflow-node-field="attachmentType:${escapeHtml(type.value)}" ${selected.has(type.value) ? 'checked' : ''}><span><strong>${escapeHtml(type.label)}</strong><small>${escapeHtml(type.extension)}</small></span></label>`).join('')}</div></details><small>Choose one or more file types people can upload.</small></div>`;
+}
+
+function syncWorkflowAttachmentTypeSummary(target) {
+  const field = target.closest('.workflow-file-type-field');
+  const summary = field?.querySelector('[data-workflow-file-type-summary]');
+  const count = field?.querySelectorAll('[data-workflow-node-field^="attachmentType:"]:checked').length || 0;
+  if (summary) summary.textContent = workflowAttachmentTypeSummary(count);
+}
+
 function renderWorkflowAttachmentPolicy(policy = {}, nodeType = 'approval') {
   const current = {
     mode: policy.mode || 'disabled',
     allowedTypes: policy.allowedTypes?.length ? policy.allowedTypes : ['application/pdf', 'image/jpeg', 'image/png'],
     maxFileSize: Number(policy.maxFileSize) || 5242880,
     maxFileCount: Number(policy.maxFileCount) || 3,
-    actions: policy.actions?.length ? policy.actions : (nodeType === 'start' ? ['submission'] : ['approval', 'rejection', 'return'])
+    actions: policy.actions?.length ? policy.actions : (nodeType === 'start' ? ['submission'] : ['approval', 'rejection', 'return']),
+    malwareScanRequired: Boolean(policy.malwareScanRequired)
   };
   const actions = nodeType === 'start' ? [['submission', 'Submission']] : [['approval', 'Approval'], ['rejection', 'Rejection'], ['return', 'Return']];
-  return `<div class="workflow-inspector-section"><span>Attachments</span><label>Requirement<select data-workflow-node-field="attachmentMode"><option value="disabled" ${current.mode === 'disabled' ? 'selected' : ''}>Disabled</option><option value="optional" ${current.mode === 'optional' ? 'selected' : ''}>Optional</option><option value="required" ${current.mode === 'required' ? 'selected' : ''}>Required</option></select></label>${workflowInspectorInput('Allowed MIME types', 'attachmentTypes', current.allowedTypes.join(', '))}${workflowInspectorInput('Maximum size (MB)', 'attachmentMaxSizeMb', Math.max(1, Math.round(current.maxFileSize / 1048576)), 'number', 'min="1" max="25"')}${workflowInspectorInput('Maximum files', 'attachmentMaxCount', current.maxFileCount, 'number', 'min="1" max="20"')}<div class="workflow-stage-switches">${actions.map(([value, label]) => `<label class="checkbox-label"><input type="checkbox" data-workflow-node-field="attachmentAction:${value}" ${current.actions.includes(value) ? 'checked' : ''}> ${label}</label>`).join('')}<label class="checkbox-label"><input type="checkbox" data-workflow-node-field="attachmentMalwareScan" ${current.malwareScanRequired ? 'checked' : ''}> Require malware scan before accepting files</label></div><p class="muted">Scanning uses the configured ClamAV service and fails closed. Files are never downloadable unless clean.</p></div>`;
+  return `<div class="workflow-inspector-section"><span>File upload rules</span><p class="muted workflow-upload-rules-intro">These rules apply to Attachment fields in the selected form.</p>${renderWorkflowAttachmentTypePicker(current.allowedTypes)}${workflowInspectorInput('Maximum size per file (MB)', 'attachmentMaxSizeMb', Math.max(1, Math.round(current.maxFileSize / 1048576)), 'number', 'min="1" max="25"')}${workflowInspectorInput('Maximum files per action', 'attachmentMaxCount', current.maxFileCount, 'number', 'min="1" max="20"')}<label>Additional supporting files<select data-workflow-node-field="attachmentMode"><option value="disabled" ${current.mode === 'disabled' ? 'selected' : ''}>Do not allow</option><option value="optional" ${current.mode === 'optional' ? 'selected' : ''}>Allow, optional</option><option value="required" ${current.mode === 'required' ? 'selected' : ''}>Allow, required</option></select><small>Shows a separate upload area for files not requested by the form.</small></label><div class="workflow-stage-switches">${current.mode === 'disabled' ? '' : actions.map(([value, label]) => `<label class="checkbox-label"><input type="checkbox" data-workflow-node-field="attachmentAction:${value}" ${current.actions.includes(value) ? 'checked' : ''}> Allow additional files on ${label.toLowerCase()}</label>`).join('')}<label class="checkbox-label"><input type="checkbox" data-workflow-node-field="attachmentMalwareScan" ${current.malwareScanRequired ? 'checked' : ''}> Require malware scan before accepting files</label></div><p class="muted">Scanning uses the configured ClamAV service and fails closed. Files are never downloadable unless clean.</p></div>`;
 }
 
 function renderWorkflowCanvasInspector() {
@@ -4422,17 +5201,23 @@ function connectWorkflowNodes(fromId, toId) {
   state.selectedWorkflowNodeId = '';
   state.selectedWorkflowEdgeId = edge.id;
   renderWorkflowCanvas();
+  const fromLabel = workflowStageForNode(from)?.name || from?.label || titleCaseMessage(from?.type || 'source');
+  const to = state.workflowBuilderGraph.nodes.find((node) => node.id === toId);
+  const toLabel = workflowStageForNode(to)?.name || to?.label || titleCaseMessage(to?.type || 'destination');
+  announceWorkflowCanvas(`Connected ${fromLabel} to ${toLabel}.`);
 }
 
 function removeSelectedWorkflowNode() {
   const id = state.selectedWorkflowNodeId;
   const node = state.workflowBuilderGraph.nodes.find((item) => item.id === id);
   if (!node || node.type === 'start') return;
+  const label = workflowStageForNode(node)?.name || node.label || titleCaseMessage(node.type);
   if (node.type === 'approval') state.workflowDraftStages = state.workflowDraftStages.filter((stage) => stage.stageKey !== node.stageKey);
   state.workflowBuilderGraph.nodes = state.workflowBuilderGraph.nodes.filter((item) => item.id !== id);
   state.workflowBuilderGraph.edges = state.workflowBuilderGraph.edges.filter((edge) => edge.from !== id && edge.to !== id);
   state.selectedWorkflowNodeId = '';
   renderWorkflowCanvas();
+  announceWorkflowCanvas(`${label} removed from the workflow.`);
 }
 
 function updateWorkflowInspectorField(field, target) {
@@ -4457,7 +5242,14 @@ function updateWorkflowInspectorField(field, target) {
     attachmentOwner.attachmentPolicy ||= { mode: 'disabled', allowedTypes: [], maxFileSize: 5242880, maxFileCount: 3, actions: [] };
     const policy = attachmentOwner.attachmentPolicy;
     if (field === 'attachmentMode') policy.mode = target.value;
-    if (field === 'attachmentTypes') policy.allowedTypes = target.value.split(',').map((value) => value.trim().toLowerCase()).filter(Boolean);
+    if (field.startsWith('attachmentType:')) {
+      const contentType = field.slice('attachmentType:'.length).trim().toLowerCase();
+      const allowedTypes = new Set(policy.allowedTypes || []);
+      target.checked ? allowedTypes.add(contentType) : allowedTypes.delete(contentType);
+      policy.allowedTypes = [...allowedTypes];
+      syncWorkflowAttachmentTypeSummary(target);
+      return;
+    }
     if (field === 'attachmentMaxSizeMb') policy.maxFileSize = Math.min(25, Math.max(1, Number(target.value) || 5)) * 1024 * 1024;
     if (field === 'attachmentMaxCount') policy.maxFileCount = Math.min(20, Math.max(1, Number(target.value) || 3));
     if (field === 'attachmentMalwareScan') policy.malwareScanRequired = target.checked;
@@ -4546,7 +5338,7 @@ function fitWorkflowCanvas() {
   const maxY = Math.max(...nodes.map((node) => Number(node.y) + 88));
   state.workflowCanvasZoom = Math.min(1.2, Math.max(.45, Math.min((viewport.clientWidth - 80) / (maxX - minX), (viewport.clientHeight - 80) / (maxY - minY))));
   renderWorkflowCanvas();
-  requestAnimationFrame(() => viewport.scrollTo({ left: Math.max(0, (minX * state.workflowCanvasZoom) - 40), top: Math.max(0, (minY * state.workflowCanvasZoom) - 40), behavior: 'smooth' }));
+  requestAnimationFrame(() => viewport.scrollTo({ left: Math.max(0, (minX * state.workflowCanvasZoom) - 40), top: Math.max(0, (minY * state.workflowCanvasZoom) - 40), behavior: preferredScrollBehavior() }));
 }
 
 function activeWorkflowDefinition() {
@@ -4597,6 +5389,7 @@ function showWorkflowDefinition(definition) {
   renderWorkflowStages();
   renderWorkflowLinkedAutomationFlows(definition);
   renderWorkflowCheck(null);
+  beginBuilderDraft('workflow');
 }
 
 function renderWorkflowLinkedAutomationFlows(definition = activeWorkflowDefinition()) {
@@ -4614,6 +5407,80 @@ function renderWorkflowLinkedAutomationFlows(definition = activeWorkflowDefiniti
   }).join('') || '<div class="empty-state"><p>No Automation Flow is linked yet. In Automation Flow, choose “When an approval workflow event occurs”.</p></div>';
 }
 
+function workflowCheckNodeLabel(node) {
+  if (!node) return 'Workflow item';
+  const stage = workflowStageForNode(node);
+  return stage?.name || node.label || (node.type === 'start' ? 'Start' : node.type === 'end' ? 'End' : 'Approval step');
+}
+
+function workflowCheckFindingContext(finding) {
+  const path = String(finding.path || '');
+  const graph = state.workflowBuilderGraph;
+  const indexedNode = path.match(/builderGraph\.nodes\[(\d+)\]/);
+  const identifiedNode = path.match(/builderGraph\.nodes\.([^\.]+)/);
+  const indexedEdge = path.match(/builderGraph\.edges\[(\d+)\]/);
+  const indexedStage = path.match(/stages\[(\d+)\]/);
+  let node = indexedNode ? graph.nodes[Number(indexedNode[1])] : null;
+  if (!node && identifiedNode) node = graph.nodes.find((item) => item.id === identifiedNode[1]);
+  if (!node && indexedStage) {
+    const stage = state.workflowDraftStages[Number(indexedStage[1])];
+    node = graph.nodes.find((item) => item.stageKey === stage?.stageKey);
+  }
+  const edge = indexedEdge ? graph.edges[Number(indexedEdge[1])] : null;
+  return { node, edge };
+}
+
+function workflowCheckPlainText(value, context) {
+  let text = String(value || '').replace(/_/g, ' ');
+  for (const node of state.workflowBuilderGraph.nodes) text = text.split(node.id).join(workflowCheckNodeLabel(node));
+  if (context.node) text = text.split(context.node.id).join(workflowCheckNodeLabel(context.node));
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function workflowCheckFindingView(finding) {
+  const context = workflowCheckFindingContext(finding);
+  const code = String(finding.code || '');
+  const nodeLabel = workflowCheckNodeLabel(context.node);
+  const edgeLabel = context.edge
+    ? `${workflowCheckNodeLabel(state.workflowBuilderGraph.nodes.find((node) => node.id === context.edge.from))} to ${workflowCheckNodeLabel(state.workflowBuilderGraph.nodes.find((node) => node.id === context.edge.to))}`
+    : 'connection';
+  const views = {
+    WORKFLOW_CONFIG_ATTACHMENT_TYPES_REQUIRED: { title: `Choose allowed file types for ${nodeLabel}`, detail: 'Select at least one file type people can upload.', action: 'Review upload rules' },
+    WORKFLOW_CONFIG_ATTACHMENT_COUNT_INVALID: { title: `Check the file limit for ${nodeLabel}`, detail: 'Choose how many files people may upload at once.', action: 'Review upload rules' },
+    WORKFLOW_CONFIG_ATTACHMENT_SIZE_INVALID: { title: `Check the file-size limit for ${nodeLabel}`, detail: 'Choose a supported maximum size for each uploaded file.', action: 'Review upload rules' },
+    WORKFLOW_CONFIG_ATTACHMENT_ACTION_REQUIRED: { title: `Choose when ${nodeLabel} accepts extra files`, detail: 'Select at least one action where supporting files may be added.', action: 'Review upload rules' },
+    WORKFLOW_CONFIG_ROUTE_START_INCOMING: { title: 'Remove the connection entering Start', detail: `The ${edgeLabel} connection points into Start, which must always be the first step.`, action: 'Show connection' },
+    WORKFLOW_CONFIG_ROUTE_END_OUTGOING: { title: 'Remove the connection leaving End', detail: `The ${edgeLabel} connection continues after End, which must always be the last step.`, action: 'Show connection' },
+    WORKFLOW_CONFIG_ROUTE_BRANCH_AMBIGUOUS: { title: `Fix routes leaving ${nodeLabel}`, detail: 'Use one normal route, or matching “Condition met” and “Condition not met” routes.', action: 'Review routes' },
+    WORKFLOW_CONFIG_ROUTE_BRANCH_INCOMPLETE: { title: `Complete the condition routes for ${nodeLabel}`, detail: 'Add the matching opposite route so every condition has a clear outcome.', action: 'Review routes' },
+    WORKFLOW_CONFIG_ROUTE_NODE_UNREACHABLE: { title: `Connect ${nodeLabel} to the workflow`, detail: `${nodeLabel} cannot currently be reached from Start. Connect it to the route or remove it.`, action: 'Show node' },
+    WORKFLOW_CONFIG_ROUTE_OUTGOING_REQUIRED: { title: `Choose what follows ${nodeLabel}`, detail: `Connect ${nodeLabel} to an Approval or End step.`, action: 'Show node' },
+    WORKFLOW_CONFIG_APPROVER_REQUIRED: { title: `Choose an approver for ${nodeLabel}`, detail: 'Select at least one user, role, department, or reporting manager.', action: 'Choose approver' }
+  };
+  const configured = views[code];
+  const title = configured?.title || workflowCheckPlainText(finding.message, context) || 'Review this workflow setting';
+  const detail = configured?.detail || workflowCheckPlainText(finding.remediation, context) || 'Open the related setting and review its configuration.';
+  const targetType = context.edge ? 'edge' : context.node ? 'node' : '';
+  return { title, detail, action: configured?.action || (targetType ? 'Review setting' : ''), targetType, targetId: context.edge?.id || context.node?.id || '' };
+}
+
+function openWorkflowCheckTarget(button) {
+  const { workflowCheckTargetType: type, workflowCheckTargetId: id } = button.dataset;
+  if (type === 'edge') {
+    state.selectedWorkflowEdgeId = id;
+    state.selectedWorkflowNodeId = '';
+  } else if (type === 'node') {
+    state.selectedWorkflowNodeId = id;
+    state.selectedWorkflowEdgeId = '';
+  } else return;
+  openWorkflowRouteDesigner();
+  renderWorkflowCanvas(type === 'node' ? id : '');
+  requestAnimationFrame(() => {
+    if (type === 'edge') $(`#workflowCanvas [data-workflow-edge-id="${CSS.escape(id)}"]`)?.focus();
+    else $(`#workflowCanvas [data-workflow-node-id="${CSS.escape(id)}"]`)?.focus();
+  });
+}
+
 function renderWorkflowCheck(check) {
   const panel = $('#workflowCheckPanel');
   if (!check) {
@@ -4623,7 +5490,8 @@ function renderWorkflowCheck(check) {
   }
   panel.hidden = false;
   panel.className = `workflow-check-panel ${check.valid ? 'is-valid' : 'is-invalid'}`;
-  panel.innerHTML = `<div class="workflow-check-heading"><div><strong>${check.valid ? 'Ready to publish' : `${check.errors?.length || 0} issue${check.errors?.length === 1 ? '' : 's'} need attention`}</strong><p>${check.valid ? 'The configured route passed all publishing checks.' : 'Resolve every blocking finding, save the draft, then check again.'}</p></div><span>${check.valid ? '✓' : '!'}</span></div>${(check.findings || []).map((finding) => `<article><code>${escapeHtml(finding.path || finding.code)}</code><div><strong>${escapeHtml(finding.message)}</strong><p>${escapeHtml(finding.remediation || '')}</p></div></article>`).join('')}`;
+  const findings = (check.findings || []).map(workflowCheckFindingView);
+  panel.innerHTML = `<div class="workflow-check-heading"><div><span class="workflow-check-eyebrow">Workflow health check</span><strong>${check.valid ? 'Ready to publish' : `${check.errors?.length || 0} item${check.errors?.length === 1 ? '' : 's'} to fix before publishing`}</strong><p>${check.valid ? 'This workflow passed all publishing checks.' : 'Work through each item below, then check the workflow again.'}</p></div><div class="workflow-check-heading-actions"><button type="button" class="secondary" data-check-workflow-again>Check again</button><span class="workflow-check-result-icon" aria-hidden="true">${check.valid ? '✓' : '!'}</span></div></div>${findings.length ? `<div class="workflow-check-list">${findings.map((finding, index) => `<article><span class="workflow-check-number" aria-hidden="true">${index + 1}</span><div><span class="workflow-check-severity">Must fix</span><strong>${escapeHtml(finding.title)}</strong><p>${escapeHtml(finding.detail)}</p></div>${finding.action ? `<button type="button" class="secondary workflow-check-action" data-workflow-check-target-type="${escapeHtml(finding.targetType)}" data-workflow-check-target-id="${escapeHtml(finding.targetId)}">${escapeHtml(finding.action)} <span aria-hidden="true">→</span></button>` : ''}</article>`).join('')}</div>` : ''}`;
 }
 
 async function loadWorkflowDefinitions(selectKey = state.activeWorkflowKey) {
@@ -4996,14 +5864,18 @@ async function reassignWorkflowAssignment(event) {
   closeWorkflowModal('workflowReassignModal'); await loadWorkflowMonitoring(); toast(`Approval ${values.requestKey} Reassigned.`);
 }
 
-function openWorkflowSubmitModal() {
+async function openWorkflowSubmitModal(context = {}) {
   const published = state.workflowDefinitions.filter((definition) => definition.status === 'published');
   const form = $('#workflowSubmitForm');
   form.reset();
   form.elements.workflowKey.innerHTML = published.map((definition) => `<option value="${escapeHtml(definition.workflowKey)}">${escapeHtml(definition.name)} · ${escapeHtml(definition.sourceModuleKey)}</option>`).join('');
   if (!published.length) return toast('No Published Workflow Is Available. Contact An Administrator.', 'error');
+  const matched = context.moduleKey ? published.find((definition) => definition.sourceModuleKey === context.moduleKey) : null;
+  if (matched) form.elements.workflowKey.value = matched.workflowKey;
+  form.dataset.preferredRecordId = context.recordId ? String(context.recordId) : '';
   syncWorkflowSubmitBinding();
   openWorkflowModal('workflowSubmitModal', 'select');
+  await loadWorkflowSourceRecords(context.recordId || '');
 }
 
 function configureWorkflowAttachmentInput(container, policy = {}, purpose) {
@@ -5017,15 +5889,51 @@ function configureWorkflowAttachmentInput(container, policy = {}, purpose) {
   container.querySelector('small').textContent = enabled ? `${titleCaseMessage(policy.mode)} · up to ${policy.maxFileCount || 1} file(s), ${Math.max(1, Math.round((policy.maxFileSize || 5242880) / 1048576))} MB each.` : '';
 }
 
+function workflowAttachmentFieldRules(policy = {}) {
+  return {
+    accept: (policy.allowedTypes || []).join(','),
+    helper: `Allowed formats apply · up to ${Math.max(1, Math.round((policy.maxFileSize || 5242880) / 1048576))} MB.`
+  };
+}
+
 function syncWorkflowSubmitBinding() {
   const definition = state.workflowDefinitions.find((item) => item.workflowKey === $('#workflowSubmitForm').elements.workflowKey.value);
   $('#workflowSubmitBinding').innerHTML = definition ? `<strong>${escapeHtml(definition.sourceModuleKey)}</strong><span>New request ID will begin with ${escapeHtml(definition.requestPrefix)}.</span>` : 'Choose a workflow.';
   configureWorkflowAttachmentInput($('#workflowSubmitAttachments'), definition?.submissionAttachmentPolicy, 'submission');
 }
 
+function selectWorkflowSourceRecord(recordId) {
+  const form = $('#workflowSubmitForm');
+  form.elements.sourceRecordId.value = String(recordId || '');
+  $$('[data-workflow-source-record]').forEach((button) => {
+    const selected = button.dataset.workflowSourceRecord === String(recordId);
+    button.classList.toggle('is-selected', selected);
+    button.setAttribute('aria-selected', String(selected));
+  });
+}
+
+async function loadWorkflowSourceRecords(preferredRecordId = '') {
+  const form = $('#workflowSubmitForm');
+  const workflowKey = form.elements.workflowKey.value;
+  const search = $('#workflowSourceRecordSearch').value.trim();
+  const status = $('#workflowSourceRecordStatus');
+  const options = $('#workflowSourceRecordOptions');
+  form.elements.sourceRecordId.value = '';
+  status.textContent = 'Loading available records...';
+  options.innerHTML = '';
+  const payload = await api(`/api/workflows/source-records?workflowKey=${encodeURIComponent(workflowKey)}&search=${encodeURIComponent(search)}`);
+  const records = payload.records || [];
+  status.textContent = records.length ? `${records.length} record${records.length === 1 ? '' : 's'} available` : 'No matching records are available.';
+  options.innerHTML = records.map((record) => `<button type="button" data-workflow-source-record="${escapeHtml(record.id)}" role="option" aria-selected="false"><span><strong>${escapeHtml(record.label)}</strong>${record.secondary ? `<small>${escapeHtml(record.secondary)}</small>` : ''}</span><i aria-hidden="true">✓</i></button>`).join('');
+  const preferred = records.find((record) => String(record.id) === String(preferredRecordId || form.dataset.preferredRecordId));
+  if (preferred) selectWorkflowSourceRecord(preferred.id);
+  else if (records.length === 1) selectWorkflowSourceRecord(records[0].id);
+}
+
 async function submitWorkflowRequest(event) {
   event.preventDefault();
   const form = event.currentTarget;
+  if (!form.elements.sourceRecordId.value) return toast('Choose the record that needs approval.', 'error');
   const definition = state.workflowDefinitions.find((item) => item.workflowKey === form.elements.workflowKey.value);
   const body = new FormData(form);
   body.set('sourceModuleKey', definition.sourceModuleKey);
@@ -5052,10 +5960,11 @@ function openWorkflowDecision(action) {
   form.elements.remark.required = action !== 'approve';
   configureWorkflowAttachmentInput($('#workflowDecisionAttachments'), state.activeWorkflowRequest?.attachmentPolicy, action === 'approve' ? 'approval' : action);
   const responseForm = state.activeWorkflowRequest?.responseForm;
+  const attachmentRules = workflowAttachmentFieldRules(state.activeWorkflowRequest?.attachmentPolicy);
   const responsePanel = $('#workflowDecisionResponseFields');
   responsePanel.innerHTML = responseForm?.fields?.length ? `<div class="workflow-command-note"><strong>${escapeHtml(responseForm.formName || 'Approval response')}</strong><span>These answers are saved with your decision.</span></div>${responseForm.fields.map((field) => {
     const type = ['number', 'int', 'decimals'].includes(field.type) ? 'number' : field.type === 'date' ? 'date' : field.type === 'checkbox' ? 'checkbox' : field.type === 'attachment' ? 'file' : 'text';
-    if (type === 'file') return `<label>${escapeHtml(field.label)}<input type="file" name="responseAttachment:${escapeHtml(field.fieldKey)}" data-workflow-response-input="${escapeHtml(field.fieldKey)}" ${action === 'approve' && field.required ? 'required' : ''}></label>`;
+    if (type === 'file') return `<label>${escapeHtml(field.label)}<input type="file" name="responseAttachment:${escapeHtml(field.fieldKey)}" data-workflow-response-input="${escapeHtml(field.fieldKey)}" accept="${escapeHtml(attachmentRules.accept)}" ${action === 'approve' && field.required ? 'required' : ''}><small>${escapeHtml(attachmentRules.helper)}</small></label>`;
     if (type === 'checkbox') return `<label class="checkbox-label"><input type="checkbox" data-workflow-response-input="${escapeHtml(field.fieldKey)}"> ${escapeHtml(field.label)}${field.required ? ' *' : ''}</label>`;
     if (['dropdownbox', 'select'].includes(field.type)) return `<label>${escapeHtml(field.label)}<select data-workflow-response-input="${escapeHtml(field.fieldKey)}" ${action === 'approve' && field.required ? 'required' : ''}><option value="">Choose an option</option>${(field.options || []).map((option) => { const value = typeof option === 'object' ? (option.value ?? option.label) : option; const label = typeof option === 'object' ? (option.label ?? option.value) : option; return `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`; }).join('')}</select></label>`;
     if (field.type === 'textarea') return `<label>${escapeHtml(field.label)}<textarea rows="3" data-workflow-response-input="${escapeHtml(field.fieldKey)}" ${action === 'approve' && field.required ? 'required' : ''}></textarea></label>`;
@@ -5167,6 +6076,7 @@ async function loadDashboards() {
 }
 
 function showDashboardManagement() {
+  if (deferBuilderLeave(['dashboard'], showDashboardManagement)) return;
   state.dashboardManagementMode = 'list';
   $('#dashboardManagement').hidden = false;
   $('#dashboardBuilderStudio').hidden = true;
@@ -5346,6 +6256,7 @@ function renderPublishedDashboardList() {
 }
 
 async function loadPublishedDashboardWidget(widget, force = false) {
+  if (isDashboardWorkspaceWidget(widget)) return loadDashboardWorkspaceWidget(widget, force, true);
   const parameters = dashboardWidgetParameters(widget);
   const signature = JSON.stringify({ source: widget.dataSourceKey, config: widget.config, parameters, published: state.activePublishedDashboardKey });
   if (!force && state.dashboardWidgetResults[widget.widgetKey]?.signature === signature && ['loading', 'ready', 'error'].includes(state.dashboardWidgetResults[widget.widgetKey].status)) return;
@@ -5362,9 +6273,12 @@ async function loadPublishedDashboardWidget(widget, force = false) {
 function renderPublishedDashboardCanvas() {
   const canvas = $('#publishedDashboardCanvas');
   const widgets = state.dashboardConfiguration?.widgets || [];
-  canvas.innerHTML = widgets.map((widget) => { const layout = dashboardLayout(widget, 'desktop'); const result = state.dashboardWidgetResults[widget.widgetKey]; const refreshed = result?.cache?.refreshedAt ? new Date(result.cache.refreshedAt).toLocaleTimeString() : ''; const stale = result?.cache?.staleAt && Date.now() >= new Date(result.cache.staleAt).getTime(); const drillDown = widget.config?.drillDown?.targetKey ? `<button type="button" class="link-button" data-dashboard-drill-down="${escapeHtml(widget.widgetKey)}">Open details</button>` : ''; return `<article class="dashboard-widget-frame" style="grid-column:${layout.x + 1} / span ${layout.width};grid-row:${layout.y + 1} / span ${layout.height}"><header class="dashboard-widget-frame-header"><strong>${escapeHtml(widget.title)}</strong><span><small aria-live="polite">${refreshed ? `${stale ? 'Stale' : 'Updated'} ${escapeHtml(refreshed)}${result.cache.status === 'hit' ? ' (cached)' : ''}` : ''}</small>${drillDown}<button type="button" class="link-button" data-refresh-published-widget="${escapeHtml(widget.widgetKey)}">Refresh</button></span></header><div class="dashboard-widget-frame-body" aria-busy="${result?.status === 'loading'}">${renderDashboardWidgetResult(widget)}</div></article>`; }).join('');
-  const deepest = widgets.reduce((max, widget) => Math.max(max, dashboardLayout(widget, 'desktop').y + dashboardLayout(widget, 'desktop').height), 0);
+  const viewport = window.innerWidth <= 720 ? 'mobile' : 'desktop';
+  canvas.dataset.viewport = viewport;
+  canvas.innerHTML = widgets.map((widget) => { const layout = dashboardLayout(widget, viewport); const result = state.dashboardWidgetResults[widget.widgetKey]; const refreshed = result?.cache?.refreshedAt ? new Date(result.cache.refreshedAt).toLocaleTimeString() : ''; const stale = result?.cache?.staleAt && Date.now() >= new Date(result.cache.staleAt).getTime(); const drillDown = widget.config?.drillDown?.targetKey ? `<button type="button" class="link-button" data-dashboard-drill-down="${escapeHtml(widget.widgetKey)}">Open details</button>` : ''; return `<article class="dashboard-widget-frame" data-dashboard-widget-key="${escapeHtml(widget.widgetKey)}" style="grid-column:${layout.x + 1} / span ${layout.width};grid-row:${layout.y + 1} / span ${layout.height}"><header class="dashboard-widget-frame-header"><strong>${escapeHtml(widget.title)}</strong><span><small aria-live="polite">${refreshed ? `${stale ? 'Stale' : 'Updated'} ${escapeHtml(refreshed)}${result.cache?.status === 'hit' ? ' (cached)' : ''}` : ''}</small>${drillDown}<button type="button" class="link-button" data-refresh-published-widget="${escapeHtml(widget.widgetKey)}">Refresh</button></span></header><div class="dashboard-widget-frame-body" aria-busy="${result?.status === 'loading'}">${renderDashboardWidgetResult(widget)}</div></article>`; }).join('');
+  const deepest = widgets.reduce((max, widget) => Math.max(max, dashboardLayout(widget, viewport).y + dashboardLayout(widget, viewport).height), 0);
   canvas.style.height = `${Math.max(180, deepest * 88)}px`;
+  activateDashboardCalendarPopover();
   widgets.forEach((widget) => loadPublishedDashboardWidget(widget).catch(() => {}));
 }
 
@@ -5408,6 +6322,54 @@ async function openPublishedDashboard(dashboardKey) {
 }
 
 const dashboardLayoutColumns = { desktop: 12, mobile: 4 };
+const dashboardWorkspaceWidgetTypes = new Set(['approval_inbox', 'todo_list', 'calendar', 'quick_actions', 'recent_records', 'notifications']);
+
+function isDashboardWorkspaceWidget(widget) { return dashboardWorkspaceWidgetTypes.has(widget?.type); }
+function dashboardWidgetTypeLabel(type) { return ({ approval_inbox: 'Approval inbox', todo_list: 'To-do list', quick_actions: 'Quick actions', recent_records: 'Recent records' }[type] || titleCaseMessage(type)); }
+
+function dashboardLocalDateKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function dashboardCalendarMonth(widgetKey) {
+  const stored = state.dashboardCalendarMonths[widgetKey];
+  const month = stored ? new Date(`${stored}T12:00:00`) : new Date();
+  month.setDate(1); month.setHours(12, 0, 0, 0);
+  return month;
+}
+
+function dashboardCalendarRange(widgetKey) {
+  const month = dashboardCalendarMonth(widgetKey);
+  const start = new Date(month);
+  start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+  const end = new Date(start); end.setDate(end.getDate() + 42);
+  return { start: dashboardLocalDateKey(start), end: dashboardLocalDateKey(end) };
+}
+
+function dashboardCalendarEventDateKey(item) {
+  const date = new Date(item?.date);
+  return Number.isNaN(date.getTime()) ? String(item?.date || '').slice(0, 10) : dashboardLocalDateKey(date);
+}
+
+async function loadDashboardWorkspaceWidget(widget, force = false, published = false) {
+  const config = dashboardWidgetConfig(widget);
+  const calendarMonth = widget.type === 'calendar' ? dashboardLocalDateKey(dashboardCalendarMonth(widget.widgetKey)) : '';
+  const signature = JSON.stringify({ type: widget.type, config, published, user: state.user?.id, calendarMonth });
+  if (!force && state.dashboardWidgetResults[widget.widgetKey]?.signature === signature && ['loading', 'ready', 'error'].includes(state.dashboardWidgetResults[widget.widgetKey].status)) return;
+  state.dashboardWidgetResults[widget.widgetKey] = { status: 'loading', signature };
+  published ? renderPublishedDashboardCanvas() : renderDashboardCanvas();
+  try {
+    let data;
+    if (widget.type === 'approval_inbox') data = await api(`/api/workflows/inbox?status=${encodeURIComponent(config.status || 'pending')}&limit=${config.topN}`);
+    else if (widget.type === 'todo_list') data = await api(`/api/dashboard-workspace/tasks?status=${encodeURIComponent(config.status || 'open')}&limit=${config.topN}`);
+    else if (widget.type === 'calendar') { const range = dashboardCalendarRange(widget.widgetKey); data = await api(`/api/dashboard-workspace/calendar?start=${range.start}&end=${range.end}`); }
+    else if (widget.type === 'notifications') data = await api(`/api/notifications?limit=${config.topN}${config.unreadOnly ? '&unread=true' : ''}`);
+    else if (widget.type === 'recent_records') data = await api('/api/customers');
+    else data = { actions: config.actions || ['customersView', 'workflowRequestsView', 'publishedDashboardsView'] };
+    state.dashboardWidgetResults[widget.widgetKey] = { status: 'ready', signature, data, refreshedAt: new Date().toISOString() };
+  } catch (error) { state.dashboardWidgetResults[widget.widgetKey] = { status: 'error', signature, message: titleCaseMessage(error.message) }; }
+  published ? renderPublishedDashboardCanvas() : renderDashboardCanvas();
+}
 
 function dashboardLayout(widget, viewport = state.dashboardLayoutViewport) {
   const columns = dashboardLayoutColumns[viewport];
@@ -5629,8 +6591,99 @@ function renderDashboardPivot(widget, rows) {
   return `<div class="dashboard-widget-table dashboard-pivot-table"><table><thead><tr><th>${escapeHtml(rowFields.join(' / '))}</th>${headers.map(({ column, field }) => `<th>${escapeHtml(column)}<small>${escapeHtml(field)} - ${escapeHtml(config.aggregation)}</small></th>`).join('')}${config.showGrandTotals ? '<th>Row total</th>' : ''}</tr></thead><tbody>${body.join('')}</tbody>${grand}</table></div>`;
 }
 
+function renderDashboardWorkspaceWidget(widget, result) {
+  if (!result || result.status === 'loading') return '<div class="dashboard-widget-message is-loading"><strong>Loading...</strong><span>Refreshing your workspace.</span></div>';
+  if (result.status === 'error') return `<div class="dashboard-widget-message is-error"><strong>Unable to load</strong><span>${escapeHtml(result.message)}</span></div>`;
+  const data = result.data || {};
+  const config = dashboardWidgetConfig(widget);
+  if (widget.type === 'approval_inbox') {
+    const items = data.assignments || data.inbox || [];
+    return `<div class="dashboard-work-list"><div class="dashboard-widget-tabs"><span class="is-active">${escapeHtml(titleCaseMessage(config.status || 'pending'))}</span><em>${items.length}</em></div>${items.slice(0, config.topN).map((item) => `<button type="button" data-dashboard-request="${escapeHtml(item.requestKey)}"><span><strong>${escapeHtml(item.requestKey)}</strong><small>${escapeHtml(item.stageName || item.stageKey || 'Approval')}</small></span><time>${item.dueAt ? `Due ${escapeHtml(new Date(item.dueAt).toLocaleDateString())}` : 'No due date'}</time></button>`).join('') || '<p class="dashboard-work-empty">No approval requests in this tab.</p>'}</div>`;
+  }
+  if (widget.type === 'todo_list') {
+    const items = data.tasks || [];
+    return `<div class="dashboard-work-list"><form class="dashboard-task-add" data-dashboard-task-form><input name="title" maxlength="190" placeholder="Add a task..." required><button type="submit">Add</button></form>${items.slice(0, config.topN).map((item) => `<label class="dashboard-task-row"><input type="checkbox" data-dashboard-task-id="${item.id}" ${item.status === 'completed' ? 'checked' : ''}><span><strong>${escapeHtml(item.title)}</strong><small>${item.dueAt ? escapeHtml(new Date(item.dueAt).toLocaleDateString()) : 'No due date'} · ${escapeHtml(titleCaseMessage(item.priority))}</small></span></label>`).join('') || '<p class="dashboard-work-empty">No tasks yet. Add your first one above.</p>'}</div>`;
+  }
+  if (widget.type === 'calendar') {
+    const events = data.events || [];
+    const month = dashboardCalendarMonth(widget.widgetKey);
+    const range = dashboardCalendarRange(widget.widgetKey);
+    const firstDate = new Date(`${range.start}T12:00:00`);
+    const todayKey = dashboardLocalDateKey(new Date());
+    const monthLabel = new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(month);
+    const eventsByDate = events.reduce((groups, item) => {
+      const key = dashboardCalendarEventDateKey(item);
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(item);
+      return groups;
+    }, {});
+    const cells = Array.from({ length: 42 }, (_, index) => {
+      const date = new Date(firstDate); date.setDate(firstDate.getDate() + index);
+      const dateKey = dashboardLocalDateKey(date);
+      const items = eventsByDate[dateKey] || [];
+      const currentMonth = date.getMonth() === month.getMonth();
+      const accessibleLabel = `${date.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}${items.length ? `, ${items.length} scheduled item${items.length === 1 ? '' : 's'}` : ''}`;
+      const preview = items.length ? `<span class="dashboard-calendar-tooltip" role="tooltip"><strong>${escapeHtml(date.toLocaleDateString(undefined, { day: 'numeric', month: 'long' }))} · ${items.length} item${items.length === 1 ? '' : 's'}</strong>${items.slice(0, 3).map((item) => `<span><i class="is-${escapeHtml(item.type)}"></i>${escapeHtml(item.title)}</span>`).join('')}${items.length > 3 ? `<small>+${items.length - 3} more</small>` : ''}</span>` : '';
+      const dots = [...new Set(items.map((item) => dateKey < todayKey ? 'overdue' : item.type))].slice(0, 3).map((type) => `<i class="is-${escapeHtml(type)}"></i>`).join('');
+      return `<button type="button" class="dashboard-calendar-day${currentMonth ? '' : ' is-adjacent'}${dateKey === todayKey ? ' is-today' : ''}${items.length ? ' has-events' : ''}" data-dashboard-calendar-date="${dateKey}" aria-label="${escapeHtml(accessibleLabel)}" aria-haspopup="${items.length ? 'dialog' : 'false'}"><span>${date.getDate()}</span>${dots ? `<em>${dots}</em>` : ''}${preview}</button>`;
+    }).join('');
+    const open = state.dashboardCalendarOpen?.widgetKey === widget.widgetKey ? state.dashboardCalendarOpen : null;
+    const selectedItems = open ? (eventsByDate[open.date] || []) : [];
+    const popover = open && selectedItems.length ? `<section class="dashboard-calendar-popover" role="dialog" aria-modal="false" aria-label="Scheduled items for ${escapeHtml(open.date)}"><header><span><strong>${escapeHtml(new Date(`${open.date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' }))}</strong><small>${selectedItems.length} scheduled item${selectedItems.length === 1 ? '' : 's'}</small></span><button type="button" class="dashboard-calendar-close" data-dashboard-calendar-close aria-label="Close calendar details">×</button></header><div>${selectedItems.map((item) => item.requestKey ? `<button type="button" class="dashboard-calendar-event is-approval" data-dashboard-request="${escapeHtml(item.requestKey)}"><span><i></i><strong>${escapeHtml(item.title)}</strong><small>Approval · ${escapeHtml(item.requestKey)}</small></span><b>Open</b></button>` : `<label class="dashboard-calendar-event is-task"><input type="checkbox" data-dashboard-task-id="${escapeHtml(String(item.id).replace(/^task-/, ''))}" ${item.status === 'completed' ? 'checked' : ''}><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(titleCaseMessage(item.priority || 'normal'))} priority</small></span></label>`).join('')}</div></section>` : '';
+    return `<div class="dashboard-calendar"><header class="dashboard-calendar-toolbar"><strong>${escapeHtml(monthLabel)}</strong><span><button type="button" class="secondary" data-dashboard-calendar-today>Today</button><button type="button" class="secondary" data-dashboard-calendar-shift="-1" aria-label="Previous month">‹</button><button type="button" class="secondary" data-dashboard-calendar-shift="1" aria-label="Next month">›</button></span></header><div class="dashboard-calendar-weekdays" aria-hidden="true">${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day) => `<span>${day}</span>`).join('')}</div><div class="dashboard-calendar-grid">${cells}</div><footer><span><i class="is-approval"></i>Approval</span><span><i class="is-task"></i>Task</span><span><i class="is-overdue"></i>Overdue</span></footer>${popover}</div>`;
+  }
+  if (widget.type === 'quick_actions') {
+    const labels = { customersView: 'Customers', workflowRequestsView: 'Approval requests', publishedDashboardsView: 'Dashboards', adminView: 'Admin Portal' };
+    return `<div class="dashboard-quick-actions">${(data.actions || []).filter((key) => key !== 'adminView' || state.user?.role === 'admin').map((key) => `<button type="button" class="secondary" data-dashboard-view="${escapeHtml(key)}"><span>+</span>${escapeHtml(labels[key] || titleCaseMessage(key.replace(/View$/, '')))}</button>`).join('')}</div>`;
+  }
+  if (widget.type === 'recent_records') {
+    const items = data.customers || [];
+    return `<div class="dashboard-work-list">${items.slice(0, config.topN).map((item) => `<button type="button" data-dashboard-view="customersView"><span><strong>${escapeHtml(item.companyName || item.name || `Customer ${item.id}`)}</strong><small>${escapeHtml(item.contactPerson || item.email || '')}</small></span><em class="status-pill">${escapeHtml(titleCaseMessage(item.status || 'active'))}</em></button>`).join('') || '<p class="dashboard-work-empty">No recent records available.</p>'}</div>`;
+  }
+  const items = data.notifications || [];
+  return `<div class="dashboard-work-list">${items.slice(0, config.topN).map((item) => `<button type="button" ${item.requestKey ? `data-dashboard-request="${escapeHtml(item.requestKey)}"` : ''}><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.message)}</small></span>${item.read ? '' : '<i class="dashboard-unread-dot"></i>'}</button>`).join('') || '<p class="dashboard-work-empty">You are all caught up.</p>'}</div>`;
+}
+
+function activateDashboardCalendarPopover() {
+  const open = state.dashboardCalendarOpen;
+  if (!open) return;
+  requestAnimationFrame(() => {
+    const popover = $('.dashboard-calendar-popover');
+    const widget = $(`[data-dashboard-widget-key="${CSS.escape(open.widgetKey)}"]`);
+    const trigger = widget?.querySelector(`[data-dashboard-calendar-date="${CSS.escape(open.date)}"]`);
+    const calendar = popover?.closest('.dashboard-calendar');
+    if (!popover || !trigger || !calendar) return;
+    popover.classList.add('anchored-popover');
+    popover.dataset.surfaceKind = 'parallel';
+    popover.dataset.floatingState = 'closed';
+    const triggerBounds = trigger.getBoundingClientRect();
+    const calendarBounds = calendar.getBoundingClientRect();
+    const width = Math.min(310, Math.max(220, calendarBounds.width - 8));
+    const desiredLeft = triggerBounds.left - calendarBounds.left + (triggerBounds.width / 2) - (width / 2);
+    const left = Math.max(4, Math.min(desiredLeft, calendarBounds.width - width - 4));
+    popover.style.setProperty('--popover-left', `${Math.round(left)}px`);
+    popover.style.setProperty('--popover-top', `${Math.round(triggerBounds.bottom - calendarBounds.top + 8)}px`);
+    positionAnchoredSurface(popover, trigger, calendar);
+    requestAnimationFrame(() => { popover.dataset.floatingState = 'open'; });
+  });
+}
+
+function closeDashboardCalendarPopover(render) {
+  const popover = $('.dashboard-calendar-popover');
+  if (!popover || prefersReducedMotion()) {
+    state.dashboardCalendarOpen = null;
+    render();
+    return;
+  }
+  setFloatingSurfaceOpen(popover, null, false, { onClosed: () => {
+    state.dashboardCalendarOpen = null;
+    render();
+  } });
+}
+
 function renderDashboardWidgetResult(widget) {
   const result = state.dashboardWidgetResults[widget.widgetKey];
+  if (isDashboardWorkspaceWidget(widget)) return renderDashboardWorkspaceWidget(widget, result);
   if (!widget.dataSourceKey) return '<div class="dashboard-widget-message"><strong>Choose Dashboard Data</strong><span>Connect this widget in the settings panel.</span></div>';
   if (!result || result.status === 'loading') return '<div class="dashboard-widget-message is-loading"><strong>Loading dataâ€¦</strong><span>Running the bounded saved source.</span></div>';
   if (result.status === 'error') return `<div class="dashboard-widget-message is-error"><strong>Query failed</strong><span>${escapeHtml(result.message)}</span></div>`;
@@ -5670,6 +6723,7 @@ function renderDashboardWidgetResult(widget) {
 
 async function loadDashboardWidgetPreview(widgetKey, force = false) {
   const widget = state.dashboardConfiguration?.widgets.find((item) => item.widgetKey === widgetKey);
+  if (isDashboardWorkspaceWidget(widget)) return loadDashboardWorkspaceWidget(widget, force, false);
   if (!widget?.dataSourceKey) return;
   const parameters = dashboardWidgetParameters(widget);
   const source = state.dashboardDataSources.find((item) => item.dataSourceKey === widget.dataSourceKey);
@@ -5760,8 +6814,9 @@ function renderDashboardCanvas() {
   canvas.dataset.viewport = state.dashboardLayoutViewport;
   canvas.innerHTML = widgets.map((widget) => {
     const layout = dashboardLayout(widget);
-    return `<article class="dashboard-widget-frame ${widget.widgetKey === state.selectedDashboardWidgetKey ? 'is-selected' : ''}" data-dashboard-widget-key="${escapeHtml(widget.widgetKey)}" tabindex="0" style="grid-column:${layout.x + 1} / span ${layout.width};grid-row:${layout.y + 1} / span ${layout.height}"><header class="dashboard-widget-frame-header"><span class="dashboard-widget-grip" aria-hidden="true">&#8942;&#8942;</span><strong>${escapeHtml(widget.title)}</strong><code>${escapeHtml(titleCaseMessage(widget.type))} &middot; ${layout.width} &times; ${layout.height}</code></header><div class="dashboard-widget-frame-body">${renderDashboardWidgetResult(widget)}</div><button type="button" class="dashboard-widget-resize-handle" aria-label="Resize ${escapeHtml(widget.title)}"></button></article>`;
+    return `<article class="dashboard-widget-frame ${widget.widgetKey === state.selectedDashboardWidgetKey ? 'is-selected' : ''}" data-dashboard-widget-key="${escapeHtml(widget.widgetKey)}" tabindex="0" style="grid-column:${layout.x + 1} / span ${layout.width};grid-row:${layout.y + 1} / span ${layout.height}"><header class="dashboard-widget-frame-header"><span class="dashboard-widget-grip" aria-hidden="true">&#8942;&#8942;</span><strong>${escapeHtml(widget.title)}</strong><code>${escapeHtml(dashboardWidgetTypeLabel(widget.type))} &middot; ${layout.width} &times; ${layout.height}</code></header><div class="dashboard-widget-frame-body">${renderDashboardWidgetResult(widget)}</div><button type="button" class="dashboard-widget-resize-handle" aria-label="Resize ${escapeHtml(widget.title)}"></button></article>`;
   }).join('');
+  activateDashboardCalendarPopover();
   syncDashboardCanvasExtent();
   $('#dashboardCanvasEmpty').hidden = widgets.length > 0;
   $('#dashboardStudioSaveState').textContent = state.dashboardLayoutDirty ? 'Unsaved changes' : 'Saved';
@@ -5781,7 +6836,7 @@ function renderDashboardCanvas() {
     $('#dashboardWidgetHeight').value = layout.height;
     renderDashboardWidgetInspector(selected);
   }
-  widgets.filter((widget) => widget.dataSourceKey).forEach((widget) => loadDashboardWidgetPreview(widget.widgetKey).catch(() => {}));
+  widgets.filter((widget) => widget.dataSourceKey || isDashboardWorkspaceWidget(widget)).forEach((widget) => loadDashboardWidgetPreview(widget.widgetKey).catch(() => {}));
 }
 
 function dashboardColumnOptions(columns, selected = '', allowEmpty = true) {
@@ -5793,10 +6848,12 @@ function renderDashboardWidgetInspector(widget) {
   const columns = dashboardSourceColumns(source);
   const config = dashboardWidgetConfig(widget);
   const mappings = config.mappings;
-  $('#dashboardWidgetType').value = ['number', 'donut', 'bar', 'line', 'table', 'pivot'].includes(widget.type) ? widget.type : 'number';
+  $('#dashboardWidgetType').value = ['number', 'donut', 'bar', 'line', 'table', 'pivot', ...dashboardWorkspaceWidgetTypes].includes(widget.type) ? widget.type : 'number';
   $('#dashboardWidgetDataSource').innerHTML = `<option value="">Choose a data source</option>${state.dashboardDataSources.filter((item) => !item.archived).map((item) => `<option value="${escapeHtml(item.dataSourceKey)}" ${item.dataSourceKey === widget.dataSourceKey ? 'selected' : ''}>${escapeHtml(item.name)} - ${escapeHtml(item.dataSourceKey)}</option>`).join('')}`;
+  $('#dashboardWidgetDataSourceField').hidden = isDashboardWorkspaceWidget(widget);
   const field = (label, key) => `<label>${label}<select data-dashboard-mapping="${key}">${dashboardColumnOptions(columns, mappings[key] || '')}</select></label>`;
   const multiField = (label, key, help) => `<label>${label}<select multiple size="${Math.min(6, Math.max(3, columns.length))}" data-dashboard-mapping="${key}">${columns.map((column) => `<option value="${escapeHtml(column)}" ${(mappings[key] || []).includes(column) ? 'selected' : ''}>${escapeHtml(column)}</option>`).join('')}</select>${help ? `<small>${help}</small>` : ''}</label>`;
+  $('#dashboardWidgetMappingFields').hidden = isDashboardWorkspaceWidget(widget);
   $('#dashboardWidgetMappingFields').innerHTML = !widget.dataSourceKey ? '<p class="muted">Choose Dashboard Data to map its columns.</p>'
     : widget.type === 'number' ? field('Value column', 'value')
       : widget.type === 'line' ? `${field('Date / X-axis column', 'date')}${field('Value / Y-axis column', 'value')}`
@@ -5804,6 +6861,11 @@ function renderDashboardWidgetInspector(widget) {
           : widget.type === 'pivot' ? `${multiField('Row fields', 'pivotRows', 'Select in hierarchy order.')}${multiField('Column fields', 'pivotColumns', 'Optional. Leave empty for one Value column.')}${multiField('Value fields', 'pivotValues', 'Select one or more numeric fields.')}`
           : `${field('Label column', 'label')}${field('Value column', 'value')}`;
   $('#dashboardWidgetDisplayFields').innerHTML = `<label>Aggregation<select data-dashboard-config="aggregation"><option value="sum">Sum</option><option value="count">Count</option><option value="average">Average</option><option value="minimum">Minimum</option><option value="maximum">Maximum</option></select></label><label>Top rows<input type="number" min="1" max="100" value="${config.topN}" data-dashboard-config="topN"></label><label>Number format<select data-dashboard-config="numberFormat"><option value="number">Number</option><option value="currency">Currency (MYR)</option><option value="percentage">Percentage</option></select></label>${widget.type === 'pivot' ? `<label>Date labels<select data-dashboard-config="dateFormat"><option value="medium">Medium date</option><option value="long">Long date</option><option value="month">Month</option><option value="year">Year</option></select></label><label>Sort totals<select data-dashboard-config="sortDirection"><option value="desc">Largest first</option><option value="asc">Smallest first</option></select></label><label>Empty values<input maxlength="40" value="${escapeHtml(config.emptyLabel)}" data-dashboard-config="emptyLabel"></label><label class="checkbox-label"><input type="checkbox" ${config.showSubtotals ? 'checked' : ''} data-dashboard-config="showSubtotals"> Show subtotals</label><label class="checkbox-label"><input type="checkbox" ${config.showGrandTotals ? 'checked' : ''} data-dashboard-config="showGrandTotals"> Show grand totals</label>` : `<label>Colour<input type="color" value="${escapeHtml(config.color)}" data-dashboard-config="color"></label><label class="checkbox-label"><input type="checkbox" ${config.showLegend ? 'checked' : ''} data-dashboard-config="showLegend"> Show legend</label>`}<label>Drill-down type<select data-dashboard-config="drillDownType"><option value="">None</option><option value="module">CRM module page</option><option value="dashboard">Published dashboard</option></select></label><label>Drill-down stable key<input value="${escapeHtml(config.drillDown?.targetKey || '')}" data-dashboard-config="drillDownTarget" placeholder="customers"></label><label>Allowed filter keys<input value="${escapeHtml((config.drillDown?.allowedParameters || []).join(', '))}" data-dashboard-config="drillDownParameters" placeholder="status, owner"></label>`;
+  if (isDashboardWorkspaceWidget(widget)) {
+    const statusOptions = widget.type === 'approval_inbox' ? [['pending', 'Pending'], ['approved', 'Approved']]
+      : widget.type === 'todo_list' ? [['open', 'To do'], ['in_progress', 'In progress'], ['completed', 'Completed']] : [];
+    $('#dashboardWidgetDisplayFields').innerHTML = `${statusOptions.length ? `<label>Default tab<select data-dashboard-config="status">${statusOptions.map(([value, label]) => `<option value="${value}" ${config.status === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>` : ''}<label>Items shown<input type="number" min="1" max="30" value="${Math.min(30, config.topN)}" data-dashboard-config="topN"></label>${widget.type === 'notifications' ? `<label class="checkbox-label"><input type="checkbox" ${config.unreadOnly ? 'checked' : ''} data-dashboard-config="unreadOnly"> Unread only</label>` : ''}${widget.type === 'quick_actions' ? '<p class="muted">Shows Customers, Approval requests and Dashboards. Admin Portal is added for administrators.</p>' : ''}`;
+  }
   const aggregation = $('[data-dashboard-config="aggregation"]'); if (aggregation) aggregation.value = config.aggregation;
   const numberFormat = $('[data-dashboard-config="numberFormat"]'); if (numberFormat) numberFormat.value = config.numberFormat;
   const sortDirection = $('[data-dashboard-config="sortDirection"]'); if (sortDirection) sortDirection.value = config.sortDirection;
@@ -5811,7 +6873,7 @@ function renderDashboardWidgetInspector(widget) {
   const drillDownType = $('[data-dashboard-config="drillDownType"]'); if (drillDownType) drillDownType.value = config.drillDown?.type || '';
   const result = state.dashboardWidgetResults[widget.widgetKey];
   const stale = result?.cache?.staleAt && Date.now() >= new Date(result.cache.staleAt).getTime();
-  $('#dashboardWidgetPreviewStatus').textContent = result?.status === 'ready' ? `${result.page.returned} rows - ${result.durationMs} ms - ${stale ? 'Stale' : result.cache?.status === 'hit' ? 'Cached' : 'Updated'} ${result.cache?.refreshedAt ? new Date(result.cache.refreshedAt).toLocaleTimeString() : ''}` : result?.status === 'error' ? 'Preview failed' : widget.dataSourceKey ? 'Loading...' : 'Not connected';
+  $('#dashboardWidgetPreviewStatus').textContent = result?.status === 'ready' ? (isDashboardWorkspaceWidget(widget) ? `Updated ${new Date(result.refreshedAt).toLocaleTimeString()}` : `${result.page.returned} rows - ${result.durationMs} ms - ${stale ? 'Stale' : result.cache?.status === 'hit' ? 'Cached' : 'Updated'} ${result.cache?.refreshedAt ? new Date(result.cache.refreshedAt).toLocaleTimeString() : ''}`) : result?.status === 'error' ? 'Preview failed' : (widget.dataSourceKey || isDashboardWorkspaceWidget(widget)) ? 'Loading...' : 'Not connected';
   $('#exportDashboardWidgetButton').hidden = !['table', 'pivot'].includes(widget.type) || result?.status !== 'ready';
   $('#exportDashboardWidgetExcelButton').hidden = widget.type !== 'pivot' || result?.status !== 'ready';
 }
@@ -5884,6 +6946,61 @@ function addDashboardWidget() {
   state.dashboardConfiguration.widgets.push({ widgetKey, type: 'number', title: `Widget ${index}`, config: { mappings: {}, aggregation: 'sum', topN: 10, numberFormat: 'number', color: '#6d50df', showLegend: true }, layout: { desktop: { x: 0, y: bottom('desktop'), width: 4, height: 3 }, mobile: { x: 0, y: bottom('mobile'), width: 4, height: 3 } } });
   state.selectedDashboardWidgetKey = widgetKey;
   markDashboardLayoutChanged(previous);
+}
+
+function dashboardWidgetFromEvent(event) {
+  const key = event.target.closest('[data-dashboard-widget-key]')?.dataset.dashboardWidgetKey;
+  return state.dashboardConfiguration?.widgets.find((item) => item.widgetKey === key);
+}
+
+async function handleDashboardWorkspaceClick(event) {
+  const widget = dashboardWidgetFromEvent(event);
+  const published = Boolean(event.target.closest('#publishedDashboardCanvas'));
+  const render = () => published ? renderPublishedDashboardCanvas() : renderDashboardCanvas();
+  const closeCalendar = event.target.closest('[data-dashboard-calendar-close]');
+  if (closeCalendar) { closeDashboardCalendarPopover(render); return; }
+  const today = event.target.closest('[data-dashboard-calendar-today]');
+  const shift = event.target.closest('[data-dashboard-calendar-shift]');
+  if ((today || shift) && widget?.type === 'calendar') {
+    const month = today ? new Date() : dashboardCalendarMonth(widget.widgetKey);
+    if (shift) month.setMonth(month.getMonth() + Number(shift.dataset.dashboardCalendarShift));
+    month.setDate(1);
+    state.dashboardCalendarMonths[widget.widgetKey] = dashboardLocalDateKey(month);
+    state.dashboardCalendarOpen = null;
+    await loadDashboardWorkspaceWidget(widget, true, published);
+    return;
+  }
+  const date = event.target.closest('[data-dashboard-calendar-date]');
+  if (date && widget?.type === 'calendar') {
+    const items = state.dashboardWidgetResults[widget.widgetKey]?.data?.events?.filter((item) => dashboardCalendarEventDateKey(item) === date.dataset.dashboardCalendarDate) || [];
+    state.dashboardCalendarOpen = items.length ? { widgetKey: widget.widgetKey, date: date.dataset.dashboardCalendarDate, published } : null;
+    render();
+    return;
+  }
+  const request = event.target.closest('[data-dashboard-request]');
+  if (request) { state.dashboardCalendarOpen = null; showView('workflowRequestsView'); await openWorkflowRequest(request.dataset.dashboardRequest); return; }
+  const destination = event.target.closest('[data-dashboard-view]');
+  if (destination) showView(destination.dataset.dashboardView);
+}
+
+async function handleDashboardTaskSubmit(event) {
+  const form = event.target.closest('[data-dashboard-task-form]');
+  if (!form) return;
+  event.preventDefault();
+  const title = new FormData(form).get('title')?.trim();
+  if (!title) return;
+  await api('/api/dashboard-workspace/tasks', { method: 'POST', body: JSON.stringify({ title, priority: 'normal' }) });
+  const widget = dashboardWidgetFromEvent(event);
+  if (widget) await loadDashboardWorkspaceWidget(widget, true, Boolean(event.target.closest('#publishedDashboardCanvas')));
+  toast('Task added', 'success');
+}
+
+async function handleDashboardTaskChange(event) {
+  const input = event.target.closest('[data-dashboard-task-id]');
+  if (!input) return;
+  await api(`/api/dashboard-workspace/tasks/${input.dataset.dashboardTaskId}`, { method: 'PATCH', body: JSON.stringify({ status: input.checked ? 'completed' : 'open' }) });
+  const widget = dashboardWidgetFromEvent(event);
+  if (widget) await loadDashboardWorkspaceWidget(widget, true, Boolean(event.target.closest('#publishedDashboardCanvas')));
 }
 
 function undoDashboardLayout() {
@@ -5981,6 +7098,7 @@ async function saveDashboardLayout() {
     state.dashboardLayoutDirty = false;
     state.dashboardLayoutHistory = [];
     state.dashboardLayoutFuture = [];
+    beginBuilderDraft('dashboard');
     renderDashboardCanvas();
     await loadDashboards();
     toast('Dashboard Layout Saved.');
@@ -6020,6 +7138,7 @@ async function openDashboardBuilderStudio(dashboardKey) {
   $('#dashboardBuilderStudioTitle').textContent = dashboard.name;
   $('#dashboardBuilderStudioKey').textContent = `${dashboard.dashboardKey} · ${titleCaseMessage(dashboard.status)}`;
   renderDashboardCanvas();
+  beginBuilderDraft('dashboard');
 }
 
 function dashboardFilterParameterOptions(sourceKey, selected = '') {
@@ -6164,7 +7283,7 @@ async function changeDashboardArchiveState(dashboardKey, reopen = false) {
   const dashboard = state.dashboards.find((item) => item.dashboardKey === dashboardKey);
   if (!dashboard) return;
   if (!reopen) {
-    const confirmed = await showConfirmationModal({ title: 'Archive dashboard', message: `Archive ${dashboard.name}? It will leave the active dashboard list but can be reopened later.`, confirmLabel: 'Archive dashboard' });
+    const confirmed = await showConfirmationModal({ title: 'Archive dashboard', message: `Archive ${dashboard.name}? It will leave the active dashboard list. Reopening creates a draft; it does not automatically republish the dashboard.`, confirmLabel: 'Archive dashboard' });
     if (!confirmed) return;
   }
   await api(`/api/dashboards/${encodeURIComponent(dashboardKey)}/${reopen ? 'reopen' : 'archive'}`, { method: 'POST' });
@@ -6355,8 +7474,12 @@ async function archiveDashboardSource() {
 function toggleAdminMenu() {
   state.adminMenuCollapsed = !state.adminMenuCollapsed;
   document.body.classList.toggle('admin-nav-collapsed', state.adminMenuCollapsed);
-  $('#toggleAdminMenu').textContent = state.adminMenuCollapsed ? '›' : '‹';
-  $('#toggleAdminMenu').setAttribute('aria-label', state.adminMenuCollapsed ? 'Expand admin menu' : 'Collapse admin menu');
+  const button = $('#toggleAdminMenu');
+  const label = state.adminMenuCollapsed ? 'Expand admin menu' : 'Collapse admin menu';
+  button.textContent = state.adminMenuCollapsed ? '›' : '‹';
+  button.setAttribute('aria-label', label);
+  button.setAttribute('aria-expanded', String(!state.adminMenuCollapsed));
+  button.title = label;
 }
 
 function clearStoredSession() {
@@ -7097,6 +8220,7 @@ function renderModuleRuntimeView() {
   $$('.nav-button').forEach((button) => {
     button.classList.toggle('is-active', button.dataset.moduleView === module.moduleKey);
   });
+  syncSidebarCurrentState();
 }
 
 async function loadPublishedModules() {
@@ -7458,14 +8582,32 @@ function permissionUserItems() {
 function renderPermissionPicker(kind, action, items, selectedValues = []) {
   const selected = new Set((selectedValues || []).map(String));
   const selectedCount = items.filter((item) => selected.has(String(item.value))).length;
+  const departmentTree = kind === 'departments' ? (() => {
+    const childrenByParent = hierarchyChildrenIndex(items, (item) => item.parentValue);
+    const selectedPath = hierarchyPathKeys(items, selected, (item) => item.value, (item) => item.parentValue);
+    const renderNodes = (nodes, depth = 0) => nodes.map((item, index) => {
+      const children = childrenByParent.get(String(item.value)) || [];
+      const pathClasses = hierarchyNodePathClasses(nodes, index, selectedPath, (node) => node.value);
+      return `<div class="hierarchy-node permission-department-entry ${pathClasses}" data-hierarchy-key="${escapeHtml(item.value)}" style="--hierarchy-depth:${depth}">
+        <label class="permission-check permission-department-node" data-permission-option data-search="${escapeHtml(item.search || item.label)}" title="${escapeHtml(item.meta || item.label)}">
+          <input type="checkbox" value="${escapeHtml(item.value)}" ${selected.has(String(item.value)) ? 'checked' : ''}>
+          <span>
+            <strong>${escapeHtml(item.label)}</strong><small class="permission-unit-badge">${escapeHtml(item.type === 'organization' ? 'ORG' : item.type === 'department' ? 'DEPT' : 'GROUP')}</small>
+          </span>
+        </label>
+        ${children.length ? `<div class="hierarchy-branch">${renderNodes(children, depth + 1)}</div>` : ''}
+      </div>`;
+    }).join('');
+    return renderNodes(childrenByParent.get('') || []);
+  })() : '';
   return `
     <div class="permission-picker" data-permission-picker="${escapeHtml(kind)}" data-permission-action="${escapeHtml(action)}">
       <div class="permission-picker-toolbar">
         <input type="search" data-permission-search placeholder="Search ${kind}" aria-label="Search ${kind} for ${escapeHtml(permissionActionLabel(action))}">
         <span>${selectedCount}/${items.length}</span>
       </div>
-      <div class="permission-check-list ${kind === 'departments' ? 'permission-department-tree' : ''}">
-        ${items.map((item) => `
+      <div class="permission-check-list ${kind === 'departments' ? 'hierarchy permission-department-tree' : ''}">
+        ${kind === 'departments' ? departmentTree : items.map((item) => `
           <label class="permission-check ${kind === 'departments' ? 'permission-department-node' : ''}" data-permission-option data-search="${escapeHtml(item.search || item.label)}" ${kind === 'departments' ? `style="--permission-tree-depth:${Number(item.depth || 0)}"` : ''}>
             ${kind === 'departments' ? `<span class="permission-tree-branch" aria-hidden="true">${item.hasChildren ? '▾' : ''}</span>` : ''}
             <input type="checkbox" value="${escapeHtml(item.value)}" ${selected.has(String(item.value)) ? 'checked' : ''}>
@@ -7583,8 +8725,44 @@ function updatePermissionPickerCount(picker) {
 
 function filterPermissionPicker(picker) {
   const query = picker.querySelector('[data-permission-search]')?.value.trim().toLowerCase() || '';
+  if (picker.dataset.permissionPicker === 'departments') {
+    const entries = Array.from(picker.querySelectorAll('.permission-department-entry'));
+    entries.forEach((entry) => { entry.hidden = Boolean(query); });
+    picker.querySelectorAll('[data-permission-option]').forEach((option) => {
+      if (query && !String(option.dataset.search || '').toLowerCase().includes(query)) return;
+      let entry = option.closest('.permission-department-entry');
+      while (entry) {
+        entry.hidden = false;
+        entry = entry.parentElement?.closest('.permission-department-entry');
+      }
+    });
+    syncPermissionHierarchyState(picker);
+    return;
+  }
   picker.querySelectorAll('[data-permission-option]').forEach((option) => {
     option.hidden = Boolean(query) && !String(option.dataset.search || '').toLowerCase().includes(query);
+  });
+}
+
+function syncPermissionHierarchyState(picker) {
+  if (!picker || picker.dataset.permissionPicker !== 'departments') return;
+  const entries = Array.from(picker.querySelectorAll('.permission-department-entry'));
+  entries.forEach((entry) => entry.classList.remove('is-hierarchy-path', 'is-hierarchy-rail-through', 'is-hierarchy-rail-entry', 'is-hierarchy-visible-last'));
+  picker.querySelectorAll('.permission-department-entry:not([hidden]) > .permission-department-node input:checked').forEach((checkbox) => {
+    let entry = checkbox.closest('.permission-department-entry');
+    while (entry && !entry.hidden) {
+      entry.classList.add('is-hierarchy-path');
+      entry = entry.parentElement?.closest('.permission-department-entry');
+    }
+  });
+  picker.querySelectorAll('.hierarchy-branch').forEach((branch) => {
+    const visibleEntries = Array.from(branch.children).filter((entry) => !entry.hidden);
+    visibleEntries.at(-1)?.classList.add('is-hierarchy-visible-last');
+    visibleEntries.forEach((entry, index) => {
+      const hasLaterPath = visibleEntries.slice(index + 1).some((candidate) => candidate.classList.contains('is-hierarchy-path'));
+      if (entry.classList.contains('is-hierarchy-path')) entry.classList.add('is-hierarchy-rail-entry');
+      if (hasLaterPath) entry.classList.add('is-hierarchy-rail-through');
+    });
   });
 }
 
@@ -7780,6 +8958,7 @@ function permissionDepartmentItems() {
       label: node.name,
       meta: node.type === 'organization' ? 'All organization units' : nodePath,
       search: `${node.name} ${node.type} ${nodePath}`,
+      parentValue: node.parentId ? String(node.parentId) : '',
       depth,
       type: node.type,
       hasChildren: departmentChildren(node.id).length > 0
@@ -7875,6 +9054,7 @@ function renderPageViewPermissionModal() {
       }).join('')}
     </div>
   `;
+  $$('#pageModulePermissionRows [data-permission-picker="departments"]').forEach(syncPermissionHierarchyState);
 }
 
 async function openPageViewPermissionModal(moduleKey) {
@@ -8354,6 +9534,7 @@ function categoryName(categoryKey) {
 function renderApiCategoryNavigation() {
   const container = $('#apiHierarchyNav');
   if (!container) return;
+  container.classList.add('hierarchy');
   const query = state.apiCategorySearch.trim().toLowerCase();
   const categories = [...state.apiConnectorCategories, { categoryKey: '', name: 'Uncategorized', description: '' }]
     .filter((category) => !query || category.name.toLowerCase().includes(query) || category.description?.toLowerCase().includes(query));
@@ -8361,14 +9542,18 @@ function renderApiCategoryNavigation() {
     const connectors = scope === 'connectors' ? state.apiConnectors : state.apiConnectors.filter((connector) => connectorEndpoints(connector).length);
     const total = scope === 'connectors' ? connectors.length : connectors.reduce((count, connector) => count + connectorEndpoints(connector).length, 0);
     const expanded = state.apiTreeExpanded[scope] || Boolean(query);
-    const children = categories.map((category) => {
+    const selectedCategory = state.activeApiTab === scope && state.activeApiCategory !== 'all' ? String(state.activeApiCategory) : null;
+    const selectedPath = new Set(selectedCategory === null ? [] : [selectedCategory]);
+    const children = categories.map((category, index) => {
       const categoryConnectors = state.apiConnectors.filter((connector) => (connector.categoryKey || '') === category.categoryKey);
       const count = scope === 'connectors' ? categoryConnectors.length : categoryConnectors.reduce((sum, connector) => sum + connectorEndpoints(connector).length, 0);
-      return `<button type="button" class="api-tree-node api-tree-child ${state.activeApiTab === scope && state.activeApiCategory === category.categoryKey ? 'is-selected' : ''}" data-api-category="${escapeHtml(category.categoryKey)}" data-api-category-scope="${scope}" title="${escapeHtml(category.description || category.name)}"><span class="api-tree-label">${escapeHtml(category.name)}</span><small class="api-tree-count">${count}</small></button>`;
+      const pathClasses = hierarchyNodePathClasses(categories, index, selectedPath, (item) => item.categoryKey);
+      return `<div class="hierarchy-node api-tree-child-node ${pathClasses}" style="--hierarchy-depth:1"><button type="button" class="api-tree-node api-tree-child ${state.activeApiTab === scope && state.activeApiCategory === category.categoryKey ? 'is-selected' : ''}" data-api-category="${escapeHtml(category.categoryKey)}" data-api-category-scope="${scope}" title="${escapeHtml(category.description || category.name)}"><span class="api-tree-label">${escapeHtml(category.name)}</span><small class="api-tree-count">${count}</small></button></div>`;
     }).join('');
-    return `<section class="api-tree-group ${expanded ? 'is-expanded' : ''}">
-      <div class="api-tree-root-row"><button type="button" class="api-tree-toggle" data-api-tree-toggle="${scope}" aria-expanded="${expanded}" aria-label="${expanded ? 'Collapse' : 'Expand'} ${label}">${expanded ? '⌄' : '›'}</button><button type="button" class="api-tree-node api-tree-root ${state.activeApiTab === scope && state.activeApiCategory === 'all' ? 'is-selected' : ''}" data-api-tab="${scope}" data-api-category="all"><span class="api-tree-label">${label}</span><small class="api-tree-count">${total}</small></button></div>
-      <div class="api-tree-children" ${expanded ? '' : 'hidden'}>${children || '<p class="api-tree-empty">No matching categories</p>'}</div>
+    const regionId = `api-tree-${scope}-categories`;
+    return `<section class="api-tree-group ${expanded ? 'is-expanded' : ''} ${selectedPath.size ? 'has-selected-descendant' : ''}">
+      <div class="api-tree-root-row"><button type="button" class="api-tree-toggle" data-api-tree-toggle="${scope}" aria-expanded="${expanded}" aria-controls="${regionId}" aria-label="${expanded ? 'Collapse' : 'Expand'} ${label}">${expanded ? '⌄' : '›'}</button><button type="button" class="api-tree-node api-tree-root ${state.activeApiTab === scope && state.activeApiCategory === 'all' ? 'is-selected' : ''}" data-api-tab="${scope}" data-api-category="all"><span class="api-tree-label">${label}</span><small class="api-tree-count">${total}</small></button></div>
+      <div class="hierarchy-branch api-tree-children" id="${regionId}" ${expanded ? '' : 'hidden'}>${children || '<p class="api-tree-empty">No matching categories</p>'}</div>
     </section>`;
   };
   container.innerHTML = `${groupHtml('connectors', 'Connectors')}${groupHtml('interfaces', 'Interfaces')}`;
@@ -8685,17 +9870,21 @@ function renderDepartmentWorkspace() {
   if (!tree || !rows) return;
   const organization = state.departmentNodes.find((node) => node.type === 'organization');
   if (!state.activeDepartmentNodeId && organization) state.activeDepartmentNodeId = organization.id;
-  const treeRows = [];
-  function appendTree(node, depth = 0) {
-    treeRows.push({ node, depth });
-    departmentChildren(node.id).forEach((child) => appendTree(child, depth + 1));
-  }
-  if (organization) appendTree(organization);
-  tree.innerHTML = treeRows.map(({ node, depth }) => `
-    <button type="button" class="department-tree-item ${node.id === state.activeDepartmentNodeId ? 'is-active' : ''}" data-department-node="${node.id}" style="--tree-depth:${depth}">
-      <span>${departmentChildren(node.id).length ? '▾ ' : ''}${escapeHtml(node.name)}</span>
-      <small>${departmentChildren(node.id).length}</small>
-    </button>`).join('') || '<p class="muted">Loading organization...</p>';
+  const childrenByParent = hierarchyChildrenIndex(state.departmentNodes, (node) => node.parentId);
+  const selectedPath = hierarchyPathKeys(state.departmentNodes, [state.activeDepartmentNodeId], (node) => node.id, (node) => node.parentId);
+  const renderNodes = (nodes, depth = 0) => nodes.map((node, index) => {
+    const children = childrenByParent.get(String(node.id)) || [];
+    const pathClasses = hierarchyNodePathClasses(nodes, index, selectedPath, (item) => item.id);
+    return `<div class="hierarchy-node department-tree-node ${pathClasses}" data-hierarchy-key="${node.id}" style="--hierarchy-depth:${depth}">
+      <button type="button" class="department-tree-item ${node.id === state.activeDepartmentNodeId ? 'is-active' : ''}" data-department-node="${node.id}" title="${escapeHtml(node.name)}">
+        <span>${escapeHtml(node.name)}</span>
+        <small aria-label="${children.length} child items">${children.length}</small>
+      </button>
+      ${children.length ? `<div class="hierarchy-branch">${renderNodes(children, depth + 1)}</div>` : ''}
+    </div>`;
+  }).join('');
+  tree.classList.add('hierarchy');
+  tree.innerHTML = organization ? renderNodes([organization]) : '<p class="muted">Loading organization...</p>';
   const active = departmentNode(state.activeDepartmentNodeId) || organization;
   const visible = departmentChildren(active?.id);
   rows.innerHTML = visible.map((node) => `
@@ -9193,7 +10382,8 @@ function renderFormDesignDrawer() {
   const selectedField = selectedFormDesignField();
   const selectedSection = selectedField ? formDesignSectionForField(selectedField.fieldKey) : null;
   const selectedSpan = selectedField ? Number(activeFormDesignLayout().fieldSpans?.[selectedField.fieldKey] || 1) : 1;
-  const selectedIndex = fields.findIndex((field) => field.fieldKey === state.selectedFormDesignFieldKey);
+  const reorderPeers = formDesignReorderPeers(selectedField);
+  const selectedIndex = reorderPeers.findIndex((field) => field.fieldKey === state.selectedFormDesignFieldKey);
   const hiddenFields = fields.filter((field) => !isFormDesignFieldVisible(field));
   const visibleFields = fields.filter((field) => isFormDesignFieldVisible(field));
   const mainFields = visibleFields.filter((field) => field.tableType !== 'detail');
@@ -9218,12 +10408,15 @@ function renderFormDesignDrawer() {
         <span id="formDesignSelectedHelp">${escapeHtml(formDesignSelectedHelpText(selectedField))}</span>
       </div>
       <div class="form-design-actions">
+        <button type="button" class="secondary small-button" data-design-action="move-up" ${selectedField && selectedIndex > 0 ? '' : 'disabled'}>Move up</button>
+        <button type="button" class="secondary small-button" data-design-action="move-down" ${selectedField && selectedIndex >= 0 && selectedIndex < reorderPeers.length - 1 ? '' : 'disabled'}>Move down</button>
         <button type="button" class="secondary small-button" data-design-action="add-field">Add Field</button>
         <button type="button" class="secondary small-button" data-design-action="edit-field" ${selectedField ? '' : 'disabled'}>Edit Field</button>
         <button type="button" class="secondary small-button" data-design-action="formula" ${selectedField ? '' : 'disabled'}>Formula</button>
         <button type="button" class="secondary small-button" data-design-action="field-linkage" ${selectedField ? '' : 'disabled'}>Field Linkage</button>
       </div>
     </div>
+    <p id="formDesignAnnouncement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
     <div class="form-layout-toolbar">
       <button type="button" class="secondary small-button" data-add-form-section>Add Section</button>
       <label>
@@ -9268,6 +10461,10 @@ function renderFormDesignDrawer() {
       </aside>
     </div>
   `;
+  canvas.querySelectorAll('[data-design-field]').forEach((card) => {
+    card.tabIndex = 0;
+    card.setAttribute('aria-label', `${findConfigField(card.dataset.designField)?.label || 'Field'}. Press Enter for arrangement controls.`);
+  });
 }
 
 function fieldLinkageConfig(field) {
@@ -9461,10 +10658,12 @@ function openFormDesignDrawer() {
   renderFieldConfig();
   renderFormDesignDrawer();
   $('#formDesignDrawer').hidden = false;
+  beginBuilderDraft('form');
   document.body.classList.add('modal-open');
 }
 
 function closeFormDesignDrawer() {
+  if (deferBuilderLeave(['form'], closeFormDesignDrawer)) return;
   const drawer = $('#formDesignDrawer');
   if (!drawer) return;
   resetModalFullscreen(drawer);
@@ -9819,23 +11018,114 @@ function menuIcon(icon) {
 function renderSidebarMenu() {
   const nav = $('#mainSidebarNav');
   if (!nav || !state.sidebarMenu.length) return;
-  const roots = state.sidebarMenu.filter((item) => !item.parentKey).sort((a, b) => a.order - b.order);
+  nav.classList.add('hierarchy');
+  const itemsByKey = new Map(state.sidebarMenu.map((item) => [item.key, item]));
+  const childrenByParent = new Map();
+  state.sidebarMenu.forEach((item) => {
+    const parentKey = item.parentKey || '';
+    if (!childrenByParent.has(parentKey)) childrenByParent.set(parentKey, []);
+    childrenByParent.get(parentKey).push(item);
+  });
+  childrenByParent.forEach((items) => items.sort((a, b) => a.order - b.order));
+  const activeView = Array.from(document.querySelectorAll('.view')).find((view) => !view.hidden)?.id || '';
+  const activeEntry = state.sidebarMenu.find((item) => item.type !== 'group' && (item.destination?.type === 'module'
+    ? activeView === 'moduleRuntimeView' && item.destination.key === state.activeRuntimeModuleKey
+    : item.destination?.key === activeView));
+  const currentPath = new Set();
+  let current = activeEntry;
+  while (current) {
+    currentPath.add(current.key);
+    current = current.parentKey ? itemsByKey.get(current.parentKey) : null;
+  }
+  const storageKey = (groupKey) => `crm:navigation-group:${state.user?.id || 'user'}:${groupKey}`;
+  const groupOpen = (groupKey) => localStorage.getItem(storageKey(groupKey)) !== 'closed';
   const itemHtml = (item) => {
     const icon = menuIcon(item.icon);
-    if (item.destination?.type === 'external') return `<a class="nav-button nav-link" href="${escapeHtml(item.destination.url)}" target="_blank" rel="noopener noreferrer">${icon ? `<span class="nav-menu-icon">${escapeHtml(icon)}</span>` : ''}<span>${escapeHtml(item.label)}</span><span class="external-link-mark" aria-label="External link">↗</span></a>`;
+    const visibleIcon = icon || String(item.label || '?').trim().slice(0, 1).toUpperCase();
+    if (item.destination?.type === 'external') return `<a class="nav-button nav-link" href="${escapeHtml(item.destination.url)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(item.label)}"><span class="nav-menu-icon" aria-hidden="true">${escapeHtml(visibleIcon)}</span><span class="nav-button-label">${escapeHtml(item.label)}</span><span class="external-link-mark" aria-label="External link">↗</span></a>`;
     const displayLabel = item.destination?.type === 'view' && item.destination?.key === 'dashboardPagesView' ? 'Homepage' : item.label;
     const attribute = item.destination?.type === 'module' ? `data-module-view="${escapeHtml(item.destination.key)}"` : `data-view="${escapeHtml(item.destination?.key)}"`;
-    return `<button class="nav-button" ${attribute}>${icon ? `<span class="nav-menu-icon">${escapeHtml(icon)}</span>` : ''}<span>${escapeHtml(displayLabel)}</span></button>`;
+    return `<button class="nav-button" ${attribute} title="${escapeHtml(displayLabel)}"><span class="nav-menu-icon" aria-hidden="true">${escapeHtml(visibleIcon)}</span><span class="nav-button-label">${escapeHtml(displayLabel)}</span></button>`;
   };
-  const renderEntry = (entry) => entry.type === 'group'
-    ? `<details class="nav-group" open><summary>${menuIcon(entry.icon) ? `<span class="nav-menu-icon">${escapeHtml(menuIcon(entry.icon))}</span>` : ''}${escapeHtml(entry.label)}</summary><div>${state.sidebarMenu.filter((item) => item.parentKey === entry.key).sort((a,b) => a.order-b.order).map(renderEntry).join('')}</div></details>`
-    : itemHtml(entry);
-  nav.innerHTML = roots.map(renderEntry).join('');
+  const renderEntry = (entry, depth = 0) => {
+    const children = childrenByParent.get(entry.key) || [];
+    const pathClass = currentPath.has(entry.key) ? ' is-current-path' : '';
+    if (entry.type !== 'group') {
+      return `<div class="hierarchy-node nav-node nav-leaf${pathClass}" data-nav-depth="${depth}" style="--nav-depth:${depth}">${itemHtml(entry)}</div>`;
+    }
+    const expanded = currentPath.has(entry.key) || groupOpen(entry.key);
+    const regionId = `nav-children-${entry.key}`;
+    const childHtml = children.map((child) => renderEntry(child, depth + 1)).join('');
+    return `<div class="hierarchy-node nav-node nav-group${pathClass}${expanded ? ' is-expanded' : ''}" data-nav-group-key="${escapeHtml(entry.key)}" data-nav-depth="${depth}" style="--nav-depth:${depth}"><button type="button" class="nav-group-trigger" aria-expanded="${expanded}" aria-controls="${escapeHtml(regionId)}" title="${escapeHtml(entry.label)}"><span class="nav-menu-icon" aria-hidden="true">${escapeHtml(menuIcon(entry.icon) || String(entry.label || '?').trim().slice(0, 1).toUpperCase())}</span><span class="nav-group-label">${escapeHtml(entry.label)}</span><span class="nav-disclosure" aria-hidden="true"></span></button><div class="nav-children" id="${escapeHtml(regionId)}" aria-hidden="${!expanded}"><div class="hierarchy-branch nav-branch">${childHtml}</div></div></div>`;
+  };
+  nav.innerHTML = (childrenByParent.get('') || []).map((entry) => renderEntry(entry)).join('');
+  nav.querySelectorAll('.nav-children[aria-hidden="true"]').forEach((region) => { region.inert = true; });
+  syncSidebarCurrentState();
+}
+
+function setSidebarGroupExpanded(group, expanded, persist = true) {
+  if (!group) return;
+  const open = Boolean(expanded);
+  group.classList.toggle('is-expanded', open);
+  group.querySelector(':scope > .nav-group-trigger')?.setAttribute('aria-expanded', String(open));
+  const region = group.querySelector(':scope > .nav-children');
+  if (region) {
+    region.setAttribute('aria-hidden', String(!open));
+    region.inert = !open;
+  }
+  if (persist) localStorage.setItem(`crm:navigation-group:${state.user?.id || 'user'}:${group.dataset.navGroupKey}`, open ? 'open' : 'closed');
+}
+
+function syncSidebarCurrentState() {
+  const nav = $('#mainSidebarNav');
+  if (!nav) return;
+  const activeView = Array.from(document.querySelectorAll('.view')).find((view) => !view.hidden)?.id || '';
+  nav.querySelectorAll('.nav-node').forEach((node) => node.classList.remove('is-current-path', 'is-current-rail-through', 'is-current-rail-entry'));
+  nav.querySelectorAll('.nav-button').forEach((button) => {
+    const active = button.dataset.moduleView
+      ? activeView === 'moduleRuntimeView' && button.dataset.moduleView === state.activeRuntimeModuleKey
+      : button.dataset.view === activeView;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-current', button.classList.contains('is-active') ? 'page' : 'false');
+  });
+  let pathNode = nav.querySelector('.nav-button.is-active')?.closest('.nav-node');
+  while (pathNode) {
+    pathNode.classList.add('is-current-path');
+    const branch = pathNode.parentElement;
+    if (!branch?.classList.contains('nav-branch')) break;
+    for (const sibling of branch.children) {
+      if (sibling === pathNode) {
+        sibling.classList.add('is-current-rail-entry');
+        break;
+      }
+      sibling.classList.add('is-current-rail-through');
+    }
+    pathNode = branch.closest('.nav-node');
+  }
+  nav.querySelectorAll('.nav-group').forEach((group) => {
+    const active = Boolean(group.querySelector('.nav-button.is-active'));
+    group.classList.toggle('has-current-page', active);
+    if (active) setSidebarGroupExpanded(group, true, false);
+  });
+}
+
+function setMainSidebarCompact(compact, persist = true) {
+  state.sidebarCompact = Boolean(compact);
+  document.body.classList.toggle('main-sidebar-compact', state.sidebarCompact);
+  const button = $('#toggleMainSidebar');
+  if (button) {
+    button.setAttribute('aria-pressed', String(state.sidebarCompact));
+    button.setAttribute('aria-label', state.sidebarCompact ? 'Use expanded navigation' : 'Use compact navigation');
+    button.title = state.sidebarCompact ? 'Use expanded navigation' : 'Use compact navigation';
+    button.querySelector('span').textContent = state.sidebarCompact ? '»' : '«';
+  }
+  if (persist) localStorage.setItem(`crm:navigation-compact:${state.user?.id || 'user'}`, String(state.sidebarCompact));
 }
 
 async function loadSidebarMenu() {
   const payload = await api('/api/menu/sidebar').catch(() => ({ items: [] }));
   state.sidebarMenu = payload.items || [];
+  setMainSidebarCompact(localStorage.getItem(`crm:navigation-compact:${state.user?.id || 'user'}`) === 'true', false);
   renderSidebarMenu();
 }
 
@@ -9849,23 +11139,149 @@ function renderMenuConfigInspector() {
   const item = state.menuConfigDraft?.items?.find((entry) => entry.key === state.selectedMenuItemKey);
   if (!item) { inspector.innerHTML = '<div class="empty-state"><h3>Select an entry</h3><p>Choose a group or menu item to configure it.</p></div>'; return; }
   const destinationValue = item.destination?.type === 'external' ? 'external' : `${item.destination?.type || 'view'}:${item.destination?.key || ''}`;
+  const groups = state.menuConfigDraft.items.filter((group) => {
+    if (group.type !== 'group' || group.key === item.key || group.key === item.parentKey) return false;
+    let ancestor = group;
+    const seen = new Set();
+    while (ancestor?.parentKey && !seen.has(ancestor.key)) {
+      seen.add(ancestor.key);
+      if (ancestor.parentKey === item.key) return false;
+      ancestor = state.menuConfigDraft.items.find((entry) => entry.key === ancestor.parentKey);
+    }
+    return true;
+  });
   inspector.innerHTML = `<div class="menu-inspector-title"><span class="menu-tree-symbol">${item.type === 'group' ? 'G' : 'I'}</span><div><h3>${escapeHtml(item.label)}</h3><small>${escapeHtml(item.key)} · automatic</small></div></div>
     <label>Label<input data-menu-field="label" value="${escapeHtml(item.label)}"></label>
     <label>Stable key (automatic)<input value="${escapeHtml(item.key)}" disabled></label>
     <label>Icon<select data-menu-field="icon">${['none','users','dashboard','approval','module','settings','link'].map((icon) => `<option value="${icon}" ${item.icon === icon ? 'selected' : ''}>${icon === 'none' ? 'No icon' : icon[0].toUpperCase() + icon.slice(1)}</option>`).join('')}</select></label>
     <label class="checkbox-label"><input type="checkbox" data-menu-field="enabled" ${item.enabled ? 'checked' : ''} ${item.systemKey === 'admin_portal' ? 'disabled' : ''}><span><strong>Show this entry</strong><small>Visibility never grants backend permission.</small></span></label>
     ${item.type === 'item' ? `<label>Destination<select data-menu-field="destination" ${item.systemKey === 'admin_portal' ? 'disabled' : ''}>${state.menuConfigCatalog.destinations.map((destination) => `<option value="${destination.type}:${destination.key}" ${destinationValue === `${destination.type}:${destination.key}` ? 'selected' : ''}>${escapeHtml(destination.label)}</option>`).join('')}<option value="external" ${destinationValue === 'external' ? 'selected' : ''}>External HTTPS link</option></select></label>${destinationValue === 'external' ? `<label>HTTPS URL<input type="url" data-menu-field="externalUrl" value="${escapeHtml(item.destination?.url || '')}" placeholder="https://example.com"></label>` : ''}` : ''}
+    <label>Move to group<select id="menuMoveGroup" ${!groups.length || item.systemKey === 'admin_portal' ? 'disabled' : ''}><option value="">Choose a group</option>${groups.map((group) => `<option value="${escapeHtml(group.key)}">${escapeHtml(group.label)}</option>`).join('')}</select></label>
+    <div class="menu-move-controls" aria-label="Move ${escapeHtml(item.label)}"><button type="button" class="secondary" data-move-menu="up" ${item.systemKey === 'admin_portal' || menuSiblings(item.parentKey)[0]?.key === item.key ? 'disabled' : ''}>Move up</button><button type="button" class="secondary" data-move-menu="down" ${item.systemKey === 'admin_portal' || menuSiblings(item.parentKey).at(-1)?.key === item.key ? 'disabled' : ''}>Move down</button><button type="button" class="secondary" data-move-menu="into" disabled>Move into group</button><button type="button" class="secondary" data-move-menu="out" ${!item.parentKey || item.systemKey === 'admin_portal' ? 'disabled' : ''}>Move out of group</button></div>
     ${item.systemKey === 'admin_portal' ? '<div class="menu-config-notice">Admin Portal is protected so administrators cannot be locked out.</div>' : `<details open><summary>Visibility rules</summary><p class="muted">Leave all choices empty to show this entry to everyone with permission.</p><h4>Roles</h4><div class="menu-visibility-grid">${menuVisibilityChecks('roles', [{value:'admin',label:'Admin'},{value:'manager',label:'Manager'},{value:'user',label:'User'}], item.visibility?.roles)}</div><h4>Users</h4><div class="menu-visibility-scroll">${menuVisibilityChecks('userIds', state.menuConfigCatalog.users, item.visibility?.userIds)}</div><h4>Departments</h4><div class="menu-visibility-scroll">${menuVisibilityChecks('departmentIds', state.menuConfigCatalog.departments, item.visibility?.departmentIds)}</div></details><button type="button" class="danger-button full-width" data-remove-menu-item>Remove entry</button>`}`;
+}
+
+function menuSiblings(parentKey, excludeKey = '') {
+  return (state.menuConfigDraft?.items || []).filter((item) => (item.parentKey || null) === (parentKey || null) && item.key !== excludeKey).sort((a, b) => a.order - b.order);
+}
+
+function menuDescendantKeys(parentKey) {
+  const descendants = new Set();
+  const visit = (key) => {
+    (state.menuConfigDraft?.items || []).filter((item) => item.parentKey === key).forEach((item) => {
+      if (descendants.has(item.key)) return;
+      descendants.add(item.key);
+      visit(item.key);
+    });
+  };
+  visit(parentKey);
+  return descendants;
+}
+
+function announceMenuMove(message) {
+  const output = $('#menuConfigAnnouncement');
+  if (output) output.textContent = message;
+}
+
+function normalizeMenuSiblingOrders(parentKey) {
+  menuSiblings(parentKey).forEach((item, index) => { item.order = index + 1; });
+}
+
+function moveMenuItem(sourceKey, targetKey, placement = 'before') {
+  const items = state.menuConfigDraft?.items || [];
+  const source = items.find((item) => item.key === sourceKey);
+  const target = items.find((item) => item.key === targetKey);
+  if (!source || !target || source === target || source.systemKey === 'admin_portal') return false;
+  let ancestor = target;
+  while (ancestor?.parentKey) {
+    if (ancestor.parentKey === source.key) return false;
+    ancestor = items.find((item) => item.key === ancestor.parentKey);
+  }
+  const oldParent = source.parentKey || null;
+  const nextParent = placement === 'inside' && target.type === 'group' ? target.key : (target.parentKey || null);
+  source.parentKey = nextParent;
+  const siblings = menuSiblings(nextParent, source.key);
+  const targetIndex = siblings.findIndex((item) => item.key === target.key);
+  const insertionIndex = placement === 'inside' ? siblings.length : Math.max(0, targetIndex + (placement === 'after' ? 1 : 0));
+  siblings.splice(insertionIndex, 0, source);
+  siblings.forEach((item, index) => { item.order = index + 1; });
+  normalizeMenuSiblingOrders(oldParent);
+  state.selectedMenuItemKey = source.key;
+  announceMenuMove(`${source.label} moved ${placement === 'inside' ? `into ${target.label}` : `${placement} ${target.label}`}.`);
+  renderMenuConfig();
+  return true;
+}
+
+function menuDropPlacement(row, clientY) {
+  const target = state.menuConfigDraft?.items?.find((item) => item.key === row?.dataset.menuItemKey);
+  if (!row || !target) return 'after';
+  const bounds = row.getBoundingClientRect();
+  const ratio = (clientY - bounds.top) / Math.max(1, bounds.height);
+  if (target.type === 'group' && ratio >= .3 && ratio <= .7) return 'inside';
+  return ratio < .5 ? 'before' : 'after';
+}
+
+function showMenuDropTarget(row, placement) {
+  $$('#menuConfigTree [data-menu-item-key]').forEach((item) => item.classList.remove('is-drop-before', 'is-drop-inside', 'is-drop-after'));
+  row?.classList.add(`is-drop-${placement}`);
+  state.menuDropTarget = row ? { key: row.dataset.menuItemKey, placement } : null;
+}
+
+let reorderScrollFrame = null;
+function stopReorderAutoScroll() {
+  cancelAnimationFrame(reorderScrollFrame);
+  reorderScrollFrame = null;
+}
+
+function autoScrollReorderSurface(surface, clientY, clientX) {
+  stopReorderAutoScroll();
+  if (!surface) return;
+  while (surface && surface.scrollHeight <= surface.clientHeight) surface = surface.parentElement;
+  if (!surface) return;
+  const bounds = surface.getBoundingClientRect();
+  const edge = Math.min(56, bounds.height * .18);
+  const delta = clientY < bounds.top + edge ? -Math.min(16, Math.ceil((bounds.top + edge - clientY) / 4)) : clientY > bounds.bottom - edge ? Math.min(16, Math.ceil((clientY - (bounds.bottom - edge)) / 4)) : 0;
+  if (!delta) return;
+  const scroll = () => {
+    const previous = surface.scrollTop;
+    surface.scrollTop += delta;
+    if (surface.scrollTop === previous) { reorderScrollFrame = null; return; }
+    if (Number.isFinite(clientX)) {
+      const hit = document.elementFromPoint(clientX, clientY);
+      if (state.draggingMenuItemKey) {
+        const row = hit?.closest('#menuConfigTree [data-menu-item-key]');
+        showMenuDropTarget(row, menuDropPlacement(row, clientY));
+      } else if (state.draggingFormDesignFieldKey) {
+        const card = hit?.closest('#formDesignCanvas [data-design-field]');
+        state.dragOverFormDesignFieldKey = card?.dataset.designField || '';
+        state.formDesignDropPlacement = formDesignDropPlacement(card, clientY);
+        $$('#formDesignCanvas [data-design-field]').forEach((item) => {
+          item.classList.toggle('is-drop-before', item === card && state.formDesignDropPlacement === 'before');
+          item.classList.toggle('is-drop-after', item === card && state.formDesignDropPlacement === 'after');
+        });
+      }
+    }
+    reorderScrollFrame = requestAnimationFrame(scroll);
+  };
+  reorderScrollFrame = requestAnimationFrame(scroll);
 }
 
 function renderMenuConfig() {
   const tree = $('#menuConfigTree');
   if (!tree || !state.menuConfigDraft) return;
   const items = state.menuConfigDraft.items || [];
-  const row = (item, depth = 0) => `<button type="button" role="treeitem" draggable="true" class="menu-tree-item ${depth ? 'is-nested' : ''} ${item.key === state.selectedMenuItemKey ? 'is-selected' : ''} ${!menuItemVisibleForPreview(item) ? 'is-preview-hidden' : ''}" style="--menu-depth:${depth}" data-menu-item-key="${escapeHtml(item.key)}"><span class="menu-tree-grip" aria-hidden="true">⋮⋮</span><span class="menu-tree-symbol">${item.type === 'group' ? 'G' : menuIcon(item.icon) || 'I'}</span><span><strong>${escapeHtml(item.label)}</strong><small>${item.type === 'group' ? 'Group' : item.destination?.type === 'external' ? 'External link' : item.destination?.key || 'Choose destination'}</small></span><span class="menu-tree-state">${item.enabled ? '' : 'Hidden'}</span></button>`;
+  const row = (item, depth = 0) => `<button type="button" role="treeitem" draggable="true" class="menu-tree-item ${depth ? 'is-nested' : ''} ${item.key === state.selectedMenuItemKey ? 'is-selected' : ''} ${!menuItemVisibleForPreview(item) ? 'is-preview-hidden' : ''}" data-menu-item-key="${escapeHtml(item.key)}" aria-grabbed="${item.key === state.draggingMenuItemKey}"><span class="menu-tree-grip" aria-hidden="true">⋮⋮</span><span class="menu-tree-symbol">${item.type === 'group' ? 'G' : menuIcon(item.icon) || 'I'}</span><span><strong>${escapeHtml(item.label)}</strong><small>${item.type === 'group' ? 'Group · drop here to add inside' : item.destination?.type === 'external' ? 'External link' : item.destination?.key || 'Choose destination'}</small></span><span class="menu-tree-state">${item.enabled ? '' : 'Hidden'}</span></button>`;
   const roots = items.filter((item) => !item.parentKey).sort((a,b) => a.order-b.order);
-  const renderTreeEntry = (item, depth = 0) => `${row(item, depth)}${item.type === 'group' ? items.filter((child) => child.parentKey === item.key).sort((a,b) => a.order-b.order).map((child) => renderTreeEntry(child, depth + 1)).join('') : ''}`;
-  tree.innerHTML = roots.map((item) => renderTreeEntry(item)).join('') || '<div class="empty-state"><h3>No menu entries</h3><p>Add a group or item to begin.</p></div>';
+  const childrenByParent = hierarchyChildrenIndex(items, (item) => item.parentKey);
+  childrenByParent.forEach((children) => children.sort((a, b) => a.order - b.order));
+  const selectedPath = hierarchyPathKeys(items, [state.selectedMenuItemKey], (item) => item.key, (item) => item.parentKey);
+  const renderTreeEntries = (siblings, depth = 0) => siblings.map((item, index) => {
+    const children = item.type === 'group' ? childrenByParent.get(String(item.key)) || [] : [];
+    const pathClasses = hierarchyNodePathClasses(siblings, index, selectedPath, (entry) => entry.key);
+    return `<div class="hierarchy-node menu-tree-node ${pathClasses}" style="--hierarchy-depth:${depth}">${row(item, depth)}${children.length ? `<div class="hierarchy-branch">${renderTreeEntries(children, depth + 1)}</div>` : ''}</div>`;
+  }).join('');
+  tree.classList.add('hierarchy');
+  tree.innerHTML = renderTreeEntries(roots) || '<div class="empty-state"><h3>No menu entries</h3><p>Add a group or item to begin.</p></div>';
   const groupSelect = $('#menuDefaultGroup');
   if (groupSelect) { groupSelect.innerHTML = `<option value="">Top level</option>${items.filter((item) => item.type === 'group').map((group) => `<option value="${escapeHtml(group.key)}" ${state.menuConfigDraft.defaultModuleGroupKey === group.key ? 'selected' : ''}>${escapeHtml(group.label)}</option>`).join('')}`; }
   renderMenuConfigInspector();
@@ -9873,7 +11289,7 @@ function renderMenuConfig() {
 
 function renderMenuVersions() {
   const target = $('#menuConfigVersions'); if (!target) return;
-  target.innerHTML = state.menuConfigVersions.map((version) => `<div class="menu-version-row"><span><strong>Version ${version.version_number}</strong><small>${escapeHtml(version.created_by_name || 'System')} · ${formatDateTime(version.created_at)}</small></span><button type="button" class="secondary" data-restore-menu-version="${version.id}">Restore to draft</button></div>`).join('') || '<p class="muted">No menu has been published yet.</p>';
+  target.innerHTML = state.menuConfigVersions.map((version) => `<div class="menu-version-row"><span><strong>Version ${version.version_number}</strong><small>${escapeHtml(version.created_by_name || 'System')} · ${escapeHtml(versionHistoryDate(version.created_at))}</small></span><button type="button" class="secondary" data-restore-menu-version="${version.id}">Restore to draft</button></div>`).join('') || '<p class="muted">No menu has been published yet.</p>';
 }
 
 async function loadMenuConfiguration() {
@@ -9884,12 +11300,14 @@ async function loadMenuConfiguration() {
   state.selectedMenuItemKey = state.menuConfigDraft.items?.[0]?.key || '';
   $('#menuConfigStatus').textContent = `Draft loaded · Published version ${configuration.publishedVersion || 0}`;
   renderMenuConfig(); renderMenuVersions();
+  beginBuilderDraft('menu');
 }
 
 async function saveMenuConfiguration(publish = false) {
   const path = publish ? '/api/menu/configuration/publish' : '/api/menu/configuration/draft';
   const payload = await api(path, { method: publish ? 'POST' : 'PUT', body: JSON.stringify(state.menuConfigDraft) });
   state.menuConfigDraft = payload.config;
+  beginBuilderDraft('menu');
   if (publish) { await loadSidebarMenu(); await loadMenuConfiguration(); }
   toast(publish ? 'Sidebar Menu Published.' : 'Menu Draft Saved.');
 }
@@ -9939,8 +11357,9 @@ async function loadAccount() {
 
 function toggleAccountMenu(force) {
   const menu = $('#accountMenu'); const button = $('#accountMenuButton');
-  const open = force === undefined ? menu.hidden : Boolean(force);
-  menu.hidden = !open; button.setAttribute('aria-expanded', String(open));
+  const open = force === undefined ? button.getAttribute('aria-expanded') !== 'true' : Boolean(force);
+  setFloatingSurfaceOpen(menu, button, open, { container: $('#accountHub') });
+  button.setAttribute('aria-expanded', String(open));
   if (open) toggleNotificationDrawer(false);
 }
 
@@ -10198,6 +11617,23 @@ function configureAuthUi() {
 }
 
 function bindEvents() {
+  initializeBuilderDraftControls();
+  ['pointerup', 'pointercancel', 'drop', 'dragend'].forEach((type) => window.addEventListener(type, stopReorderAutoScroll));
+  window.addEventListener('blur', stopReorderAutoScroll);
+  $('#dismissToast')?.addEventListener('click', dismissToast);
+  $('#toast')?.addEventListener('mouseenter', pauseToastDismiss);
+  $('#toast')?.addEventListener('mouseleave', resumeToastDismiss);
+  $('#toast')?.addEventListener('focusin', pauseToastDismiss);
+  $('#toast')?.addEventListener('focusout', resumeToastDismiss);
+  document.addEventListener('invalid', (event) => {
+    if (event.target.matches('input, select, textarea')) showFieldError(event.target);
+  }, true);
+  document.addEventListener('input', (event) => {
+    if (event.target.matches('input, select, textarea') && event.target.validity.valid) clearFieldError(event.target);
+  });
+  document.addEventListener('change', (event) => {
+    if (event.target.matches('select, input[type="checkbox"], input[type="radio"]') && event.target.validity.valid) clearFieldError(event.target);
+  });
   $('#notificationBell')?.addEventListener('click', () => toggleNotificationDrawer());
   $('#accountMenuButton')?.addEventListener('click', () => toggleAccountMenu());
   $('#accountMenu')?.addEventListener('click', (event) => {
@@ -10207,18 +11643,18 @@ function bindEvents() {
   });
   $$('[data-account-tab]').forEach((button) => button.addEventListener('click', () => selectAccountTab(button.dataset.accountTab)));
   $('#backFromAccountSettings')?.addEventListener('click', () => showView(state.accountReturnView || 'customersView'));
-  $('#accountProfileForm')?.addEventListener('submit', (event) => runWorkflowUi(() => saveAccountProfile(event)));
-  $('#accountPreferencesForm')?.addEventListener('submit', (event) => runWorkflowUi(() => saveAccountPreferences(event)));
-  $('#accountPasswordForm')?.addEventListener('submit', (event) => runWorkflowUi(() => changeAccountPassword(event)));
+  bindAsyncSubmit($('#accountProfileForm'), (event) => runWorkflowUi(() => saveAccountProfile(event)));
+  bindAsyncSubmit($('#accountPreferencesForm'), (event) => runWorkflowUi(() => saveAccountPreferences(event)));
+  bindAsyncSubmit($('#accountPasswordForm'), (event) => runWorkflowUi(() => changeAccountPassword(event)));
   $('#accountAvatarInput')?.addEventListener('change', (event) => runWorkflowUi(() => uploadAccountAvatar(event.target.files?.[0])));
   $('#removeAccountAvatar')?.addEventListener('click', () => runWorkflowUi(removeAccountAvatar));
   $('#notificationUnreadOnly')?.addEventListener('change', (event) => { state.notificationUnreadOnly = event.target.checked; runWorkflowUi(loadNotifications); });
   $('#markAllNotificationsRead')?.addEventListener('click', () => runWorkflowUi(async () => { await api('/api/notifications/read-all', { method: 'POST', body: '{}' }); await loadNotifications(); }));
   $('#notificationList')?.addEventListener('click', (event) => { const button = event.target.closest('[data-notification-id]'); if (!button) return; const item = state.notifications.find((entry) => entry.id === Number(button.dataset.notificationId)); if (item) runWorkflowUi(() => openNotification(item)); });
-  $('#emailSettingsForm')?.addEventListener('submit', (event) => runWorkflowUi(() => saveEmailSettings(event)));
+  bindAsyncSubmit($('#emailSettingsForm'), (event) => runWorkflowUi(() => saveEmailSettings(event)));
   $('#emailSettingsForm select[name="provider"]')?.addEventListener('change', syncEmailProviderExamples);
   $('#sendTestEmail')?.addEventListener('click', () => runWorkflowUi(sendEmailSettingsTest));
-  $('#loginForm').addEventListener('submit', async (event) => {
+  bindAsyncSubmit($('#loginForm'), async (event) => {
     event.preventDefault();
     const rememberMe = Boolean(event.currentTarget.elements.rememberMe?.checked);
     try {
@@ -10262,6 +11698,14 @@ function bindEvents() {
   });
 
   $('#mainSidebarNav')?.addEventListener('click', (event) => {
+    const groupTrigger = event.target.closest('.nav-group-trigger');
+    if (groupTrigger) {
+      const group = groupTrigger.closest('[data-nav-group-key]');
+      const expanded = groupTrigger.getAttribute('aria-expanded') === 'true';
+      if (group?.classList.contains('has-current-page') && expanded) return;
+      setSidebarGroupExpanded(group, !expanded);
+      return;
+    }
     const button = event.target.closest('[data-module-view]');
     if (button && state.token) return openRuntimeModulePage(button.dataset.moduleView).catch((error) => toast(titleCaseMessage(error.message), 'error'));
     const viewButton = event.target.closest('[data-view]');
@@ -10273,6 +11717,7 @@ function bindEvents() {
     if (viewButton.dataset.view === 'workflowMonitoringView') runWorkflowUi(loadWorkflowMonitoring);
     if (viewButton.dataset.view === 'workflowDelegationView') runWorkflowUi(loadWorkflowDelegations);
   });
+  $('#toggleMainSidebar')?.addEventListener('click', () => setMainSidebarCompact(!state.sidebarCompact));
   document.addEventListener('click', (event) => {
     if (!event.target.closest('#accountHub')) toggleAccountMenu(false);
   });
@@ -10363,15 +11808,41 @@ function bindEvents() {
   $('#publishMenuConfig')?.addEventListener('click', () => runWorkflowUi(() => saveMenuConfiguration(true)));
   $('#resetMenuConfig')?.addEventListener('click', () => runWorkflowUi(async () => { const confirmed = await showConfirmationModal({ title: 'Reset menu draft', message: 'Replace the current draft with the safe default sidebar? The published menu remains unchanged until you publish.', confirmLabel: 'Reset draft' }); if (!confirmed) return; const payload = await api('/api/menu/configuration/reset', { method: 'POST' }); state.menuConfigDraft = payload.config; state.selectedMenuItemKey = state.menuConfigDraft.items[0]?.key || ''; renderMenuConfig(); toast('Menu Draft Reset.'); }));
   $('#menuConfigTree')?.addEventListener('click', (event) => { const row = event.target.closest('[data-menu-item-key]'); if (!row) return; state.selectedMenuItemKey = row.dataset.menuItemKey; renderMenuConfig(); });
-  $('#menuConfigTree')?.addEventListener('dragstart', (event) => { const row = event.target.closest('[data-menu-item-key]'); if (!row) return; state.draggingMenuItemKey = row.dataset.menuItemKey; event.dataTransfer.effectAllowed = 'move'; });
-  $('#menuConfigTree')?.addEventListener('dragover', (event) => { if (event.target.closest('[data-menu-item-key]')) event.preventDefault(); });
+  $('#menuConfigTree')?.addEventListener('dragstart', (event) => { const row = event.target.closest('[data-menu-item-key]'); if (!row) return; state.draggingMenuItemKey = row.dataset.menuItemKey; event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', state.draggingMenuItemKey); });
+  $('#menuConfigTree')?.addEventListener('dragover', (event) => { const row = event.target.closest('[data-menu-item-key]'); if (!row) return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; showMenuDropTarget(row, menuDropPlacement(row, event.clientY)); autoScrollReorderSurface($('#menuConfigTree'), event.clientY, event.clientX); });
   $('#menuConfigTree')?.addEventListener('drop', (event) => {
-    event.preventDefault(); const targetRow = event.target.closest('[data-menu-item-key]'); const source = state.menuConfigDraft.items.find((item) => item.key === state.draggingMenuItemKey); const target = state.menuConfigDraft.items.find((item) => item.key === targetRow?.dataset.menuItemKey); if (!source || !target || source === target || source.systemKey === 'admin_portal') return;
-    let ancestor = target; while (ancestor?.parentKey) { if (ancestor.parentKey === source.key) return; ancestor = state.menuConfigDraft.items.find((item) => item.key === ancestor.parentKey); }
-    if (target.type === 'group') source.parentKey = target.key; else { source.parentKey = target.parentKey || null; const siblings = state.menuConfigDraft.items.filter((item) => item.parentKey === source.parentKey && item !== source).sort((a,b) => a.order-b.order); const index = siblings.indexOf(target); siblings.splice(index < 0 ? siblings.length : index, 0, source); siblings.forEach((item, order) => { item.order = order + 1; }); }
-    state.draggingMenuItemKey = ''; renderMenuConfig();
+    event.preventDefault(); const targetRow = event.target.closest('[data-menu-item-key]'); const placement = state.menuDropTarget?.placement || menuDropPlacement(targetRow, event.clientY); moveMenuItem(event.dataTransfer.getData('text/plain') || state.draggingMenuItemKey, targetRow?.dataset.menuItemKey, placement); state.draggingMenuItemKey = ''; state.menuDropTarget = null;
   });
+  $('#menuConfigTree')?.addEventListener('dragend', () => { state.draggingMenuItemKey = ''; state.menuDropTarget = null; showMenuDropTarget(null, 'after'); });
+  $('#menuConfigTree')?.addEventListener('pointerdown', (event) => {
+    if (event.pointerType === 'mouse' || !event.target.closest('.menu-tree-grip')) return;
+    const row = event.target.closest('[data-menu-item-key]');
+    if (!row) return;
+    state.menuPointerDrag = { pointerId: event.pointerId, key: row.dataset.menuItemKey, startX: event.clientX, startY: event.clientY, active: false };
+    row.setPointerCapture?.(event.pointerId);
+  });
+  window.addEventListener('pointermove', (event) => {
+    const drag = state.menuPointerDrag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    if (!drag.active && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 10) return;
+    drag.active = true;
+    state.draggingMenuItemKey = drag.key;
+    const row = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('[data-menu-item-key]');
+    showMenuDropTarget(row?.closest('#menuConfigTree') ? row : null, menuDropPlacement(row, event.clientY));
+    autoScrollReorderSurface($('#menuConfigTree'), event.clientY, event.clientX);
+    event.preventDefault();
+  }, { passive: false });
+  const finishMenuPointerDrag = (event) => {
+    const drag = state.menuPointerDrag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    const row = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('#menuConfigTree [data-menu-item-key]');
+    if (event.type === 'pointerup' && drag.active && row) moveMenuItem(drag.key, row.dataset.menuItemKey, menuDropPlacement(row, event.clientY));
+    state.menuPointerDrag = null; state.draggingMenuItemKey = ''; state.menuDropTarget = null; showMenuDropTarget(null, 'after');
+  };
+  window.addEventListener('pointerup', finishMenuPointerDrag);
+  window.addEventListener('pointercancel', finishMenuPointerDrag);
   $('#menuConfigInspector')?.addEventListener('input', (event) => {
+    if (event.target.id === 'menuMoveGroup') return;
     const item = state.menuConfigDraft?.items?.find((entry) => entry.key === state.selectedMenuItemKey); if (!item) return;
     const field = event.target.dataset.menuField;
     if (field === 'label') item.label = event.target.value;
@@ -10382,12 +11853,45 @@ function bindEvents() {
     if (field !== 'label' && field !== 'externalUrl') renderMenuConfig();
   });
   $('#menuConfigInspector')?.addEventListener('change', (event) => {
+    if (event.target.id === 'menuMoveGroup') { $('#menuConfigInspector [data-move-menu="into"]').disabled = !event.target.value; return; }
     const item = state.menuConfigDraft?.items?.find((entry) => entry.key === state.selectedMenuItemKey); if (!item || event.target.dataset.menuField !== 'destination') return;
     const value = event.target.value; item.destination = value === 'external' ? { type: 'external', url: 'https://' } : { type: value.split(':')[0], key: value.split(':').slice(1).join(':') }; renderMenuConfig();
   });
-  $('#menuConfigInspector')?.addEventListener('click', (event) => { if (!event.target.closest('[data-remove-menu-item]')) return; const key = state.selectedMenuItemKey; state.menuConfigDraft.items = state.menuConfigDraft.items.filter((item) => item.key !== key && item.parentKey !== key); state.selectedMenuItemKey = state.menuConfigDraft.items[0]?.key || ''; renderMenuConfig(); });
+  $('#menuConfigInspector')?.addEventListener('click', async (event) => {
+    const move = event.target.closest('[data-move-menu]');
+    if (move) {
+      const item = state.menuConfigDraft.items.find((entry) => entry.key === state.selectedMenuItemKey);
+      if (!item || item.systemKey === 'admin_portal') return;
+      const siblings = menuSiblings(item.parentKey, item.key);
+      const ordered = menuSiblings(item.parentKey);
+      const index = ordered.findIndex((entry) => entry.key === item.key);
+      if (move.dataset.moveMenu === 'up' && index > 0) moveMenuItem(item.key, ordered[index - 1].key, 'before');
+      if (move.dataset.moveMenu === 'down' && index < ordered.length - 1) moveMenuItem(item.key, ordered[index + 1].key, 'after');
+      if (move.dataset.moveMenu === 'out' && item.parentKey) moveMenuItem(item.key, state.menuConfigDraft.items.find((entry) => entry.key === item.parentKey)?.key, 'after');
+      if (move.dataset.moveMenu === 'into') { const groupKey = $('#menuMoveGroup')?.value; if (groupKey) moveMenuItem(item.key, groupKey, 'inside'); }
+      $('#menuConfigInspector [data-move-menu="' + move.dataset.moveMenu + '"]:not(:disabled)')?.focus();
+      return;
+    }
+    if (!event.target.closest('[data-remove-menu-item]')) return;
+    const key = state.selectedMenuItemKey;
+    const item = state.menuConfigDraft.items.find((entry) => entry.key === key);
+    const descendants = menuDescendantKeys(key);
+    if (descendants.size) {
+      const confirmed = await showConfirmationModal({
+        title: 'Remove Menu Branch',
+        message: `Remove ${item?.label || 'this group'} and all ${descendants.size} descendant ${descendants.size === 1 ? 'entry' : 'entries'}? This only changes the draft until you publish.`,
+        confirmLabel: `Remove ${descendants.size + 1} Entries`
+      });
+      if (!confirmed) return;
+    }
+    descendants.add(key);
+    if (descendants.has(state.menuConfigDraft.defaultModuleGroupKey)) state.menuConfigDraft.defaultModuleGroupKey = '';
+    state.menuConfigDraft.items = state.menuConfigDraft.items.filter((entry) => !descendants.has(entry.key));
+    state.selectedMenuItemKey = state.menuConfigDraft.items[0]?.key || '';
+    renderMenuConfig();
+  });
   $('#menuConfigVersions')?.addEventListener('click', (event) => { const button = event.target.closest('[data-restore-menu-version]'); if (!button) return; runWorkflowUi(async () => { const payload = await api(`/api/menu/configuration/versions/${button.dataset.restoreMenuVersion}/restore`, { method: 'POST' }); state.menuConfigDraft = payload.config; state.selectedMenuItemKey = state.menuConfigDraft.items[0]?.key || ''; renderMenuConfig(); toast('Menu Version Restored To Draft.'); }); });
-  $('#newWorkflowRequestButton')?.addEventListener('click', openWorkflowSubmitModal);
+  $('#newWorkflowRequestButton')?.addEventListener('click', () => openWorkflowSubmitModal().catch((error) => toast(titleCaseMessage(error.message), 'error')));
   $('#refreshWorkflowMonitoring')?.addEventListener('click', () => runWorkflowUi(state.workflowMonitoringTab === 'history' ? loadWorkflowReport : loadWorkflowMonitoring));
   $('#runWorkflowSlaButton')?.addEventListener('click', () => runWorkflowUi(runWorkflowSlaCheck));
   $('#workflowMonitoringStatus')?.addEventListener('change', (event) => { state.workflowMonitoringStatus = event.target.value; runWorkflowUi(loadWorkflowMonitoring); });
@@ -10409,23 +11913,33 @@ function bindEvents() {
     if (filter) { state.workflowMonitoringSla = filter.dataset.monitoringSlaFilter; $('#workflowMonitoringSla').value = state.workflowMonitoringSla; runWorkflowUi(loadWorkflowMonitoring); }
   });
   $('#newWorkflowDelegationButton')?.addEventListener('click', openWorkflowDelegationModal);
-  $('#workflowDelegationForm')?.addEventListener('submit', (event) => runWorkflowUi(() => saveWorkflowDelegation(event)));
+  bindAsyncSubmit($('#workflowDelegationForm'), (event) => runWorkflowUi(() => saveWorkflowDelegation(event)));
   $('#closeWorkflowDelegationModal')?.addEventListener('click', () => closeWorkflowModal('workflowDelegationModal'));
   $('#cancelWorkflowDelegationModal')?.addEventListener('click', () => closeWorkflowModal('workflowDelegationModal'));
   $('#workflowDelegationStatus')?.addEventListener('change', (event) => { state.workflowDelegationStatus = event.target.value; runWorkflowUi(loadWorkflowDelegations); });
   $('#workflowDelegationSearch')?.addEventListener('input', debounce((event) => { state.workflowDelegationSearch = event.target.value.trim(); runWorkflowUi(loadWorkflowDelegations); }, 200));
   $('#workflowDelegationList')?.addEventListener('click', (event) => { const button = event.target.closest('[data-cancel-workflow-delegation]'); if (button) runWorkflowUi(() => cancelWorkflowDelegation(button.dataset.cancelWorkflowDelegation)); });
-  $('#workflowReassignForm')?.addEventListener('submit', (event) => runWorkflowUi(() => reassignWorkflowAssignment(event)));
+  bindAsyncSubmit($('#workflowReassignForm'), (event) => runWorkflowUi(() => reassignWorkflowAssignment(event)));
   $('#closeWorkflowReassignModal')?.addEventListener('click', () => closeWorkflowModal('workflowReassignModal'));
   $('#cancelWorkflowReassignModal')?.addEventListener('click', () => closeWorkflowModal('workflowReassignModal'));
-  $('#workflowSubmitForm')?.elements.workflowKey.addEventListener('change', syncWorkflowSubmitBinding);
-  $('#workflowSubmitForm')?.addEventListener('submit', (event) => runWorkflowUi(() => submitWorkflowRequest(event)));
+  $('#workflowSubmitForm')?.elements.workflowKey.addEventListener('change', () => {
+    syncWorkflowSubmitBinding();
+    $('#workflowSourceRecordSearch').value = '';
+    $('#workflowSubmitForm').dataset.preferredRecordId = '';
+    loadWorkflowSourceRecords().catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  });
+  $('#workflowSourceRecordSearch')?.addEventListener('input', debounce(() => loadWorkflowSourceRecords().catch((error) => toast(titleCaseMessage(error.message), 'error')), 250));
+  $('#workflowSourceRecordOptions')?.addEventListener('click', (event) => {
+    const record = event.target.closest('[data-workflow-source-record]');
+    if (record) selectWorkflowSourceRecord(record.dataset.workflowSourceRecord);
+  });
+  bindAsyncSubmit($('#workflowSubmitForm'), (event) => runWorkflowUi(() => submitWorkflowRequest(event)));
   $('#closeWorkflowSubmitModal')?.addEventListener('click', () => closeWorkflowModal('workflowSubmitModal'));
   $('#cancelWorkflowSubmitModal')?.addEventListener('click', () => closeWorkflowModal('workflowSubmitModal'));
-  $('#workflowDecisionForm')?.addEventListener('submit', (event) => runWorkflowUi(() => decideWorkflowRequest(event)));
+  bindAsyncSubmit($('#workflowDecisionForm'), (event) => runWorkflowUi(() => decideWorkflowRequest(event)));
   $('#closeWorkflowDecisionModal')?.addEventListener('click', () => closeWorkflowModal('workflowDecisionModal'));
   $('#cancelWorkflowDecisionModal')?.addEventListener('click', () => closeWorkflowModal('workflowDecisionModal'));
-  $('#workflowLifecycleForm')?.addEventListener('submit', (event) => runWorkflowUi(() => runWorkflowLifecycle(event)));
+  bindAsyncSubmit($('#workflowLifecycleForm'), (event) => runWorkflowUi(() => runWorkflowLifecycle(event)));
   $('#closeWorkflowLifecycleModal')?.addEventListener('click', () => closeWorkflowModal('workflowLifecycleModal'));
   $('#cancelWorkflowLifecycleModal')?.addEventListener('click', () => closeWorkflowModal('workflowLifecycleModal'));
   $('#workflowRequestList')?.addEventListener('click', (event) => {
@@ -10473,7 +11987,7 @@ function bindEvents() {
     renderWorkflowDefinitionList();
     showWorkflowDefinition(activeWorkflowDefinition());
   });
-  $('#workflowDefinitionForm')?.addEventListener('submit', (event) => runWorkflowUi(() => saveWorkflowDefinition(event)));
+  bindAsyncSubmit($('#workflowDefinitionForm'), (event) => runWorkflowUi(() => saveWorkflowDefinition(event)));
   $('#workflowDefinitionForm')?.elements.name.addEventListener('input', syncWorkflowStableKey);
   $('#workflowDefinitionForm')?.elements.sourceModuleKey.addEventListener('change', () => renderWorkflowCanvasInspector());
   $('#workflowDefinitionForm')?.elements.requestFormKey.addEventListener('change', () => renderWorkflowCanvasInspector());
@@ -10481,6 +11995,7 @@ function bindEvents() {
   $('#workflowConnectButton')?.addEventListener('click', () => {
     state.workflowConnectFrom = state.workflowConnectFrom ? '' : state.selectedWorkflowNodeId;
     if (!state.workflowConnectFrom) toast('Select a source node, then click Connect.', 'error');
+    else announceWorkflowCanvas('Connection mode started. Tab to a destination node and press Enter. Press Escape to cancel.');
     renderWorkflowCanvas();
   });
   $('#workflowZoomOut')?.addEventListener('click', () => { state.workflowCanvasZoom = Math.max(.4, state.workflowCanvasZoom - .1); renderWorkflowCanvas(); });
@@ -10491,6 +12006,10 @@ function bindEvents() {
   $('#saveWorkflowRouteDesigner')?.addEventListener('click', () => runWorkflowUi(saveWorkflowRouteDesigner));
   $('#workflowInspectorToggle')?.addEventListener('click', () => setWorkflowInspectorCollapsed(!state.workflowInspectorCollapsed));
   $('#workflowCanvas')?.addEventListener('click', (event) => {
+    if (state.workflowCanvasSuppressClick) {
+      state.workflowCanvasSuppressClick = false;
+      return;
+    }
     const nodeButton = event.target.closest('[data-workflow-node-id]');
     const edgeButton = event.target.closest('[data-workflow-edge-id]');
     if (nodeButton) {
@@ -10507,12 +12026,45 @@ function bindEvents() {
       renderWorkflowCanvas();
     }
   });
+  $('#workflowCanvas')?.addEventListener('keydown', (event) => {
+    const nodeButton = event.target.closest('[data-workflow-node-id]');
+    if (!nodeButton) return;
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+      moveWorkflowNodeByKeyboard(nodeButton.dataset.workflowNodeId, event.key, event.shiftKey);
+      event.preventDefault();
+      return;
+    }
+    if ((event.key === 'Delete' || event.key === 'Backspace') && nodeButton.dataset.workflowNodeId === state.selectedWorkflowNodeId) {
+      const node = state.workflowBuilderGraph.nodes.find((item) => item.id === nodeButton.dataset.workflowNodeId);
+      if (node?.type !== 'start') {
+        removeSelectedWorkflowNode();
+        event.preventDefault();
+      }
+    }
+  });
   $('#workflowCanvas')?.addEventListener('pointerdown', (event) => {
     const button = event.target.closest('[data-workflow-node-id]');
     if (!button || state.workflowConnectFrom) return;
     const node = state.workflowBuilderGraph.nodes.find((item) => item.id === button.dataset.workflowNodeId);
     if (!node) return;
-    state.workflowCanvasDrag = { nodeId: node.id, startX: event.clientX, startY: event.clientY, x: Number(node.x), y: Number(node.y) };
+    const bounds = button.getBoundingClientRect();
+    state.workflowCanvasDrag = {
+      nodeId: node.id,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      x: Number(node.x),
+      y: Number(node.y),
+      previewX: Number(node.x),
+      previewY: Number(node.y),
+      maxX: 1600 - (bounds.width / state.workflowCanvasZoom),
+      maxY: 820 - (bounds.height / state.workflowCanvasZoom),
+      width: bounds.width,
+      height: bounds.height,
+      grabOffsetX: (event.clientX - bounds.left) / state.workflowCanvasZoom,
+      grabOffsetY: (event.clientY - bounds.top) / state.workflowCanvasZoom,
+      dragging: false
+    };
     button.setPointerCapture?.(event.pointerId);
     event.preventDefault();
   });
@@ -10524,14 +12076,14 @@ function bindEvents() {
     viewport.setPointerCapture?.(event.pointerId);
   });
   window.addEventListener('pointermove', (event) => {
-    if (state.workflowCanvasDrag) {
+    if (state.workflowCanvasDrag && event.pointerId === state.workflowCanvasDrag.pointerId) {
       const drag = state.workflowCanvasDrag;
-      const node = state.workflowBuilderGraph.nodes.find((item) => item.id === drag.nodeId);
-      if (node) {
-        node.x = Math.max(0, drag.x + ((event.clientX - drag.startX) / state.workflowCanvasZoom));
-        node.y = Math.max(0, drag.y + ((event.clientY - drag.startY) / state.workflowCanvasZoom));
-        renderWorkflowCanvas();
-      }
+      const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
+      if (!drag.dragging && distance < 8) return;
+      drag.dragging = true;
+      const position = workflowDragPosition(drag, event.clientX, event.clientY);
+      Object.assign(drag, { previewX: position.x, previewY: position.y, maxX: position.maxX, maxY: position.maxY });
+      queueWorkflowDragFrame();
     }
     if (state.workflowCanvasPan) {
       const viewport = $('#workflowCanvasViewport');
@@ -10539,10 +12091,13 @@ function bindEvents() {
       viewport.scrollTop = state.workflowCanvasPan.top - (event.clientY - state.workflowCanvasPan.startY);
     }
   });
-  window.addEventListener('pointerup', () => {
-    state.workflowCanvasDrag = null;
-    state.workflowCanvasPan = null;
-    $('#workflowCanvasViewport')?.classList.remove('is-panning');
+  window.addEventListener('pointerup', finishWorkflowCanvasInteraction);
+  window.addEventListener('pointercancel', finishWorkflowCanvasInteraction);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && state.workflowRouteDesignerOpen && cancelWorkflowCanvasMode()) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
   });
   $('#workflowCanvasInspector')?.addEventListener('change', (event) => {
     if (event.target.dataset.workflowNodeField) updateWorkflowInspectorField(event.target.dataset.workflowNodeField, event.target);
@@ -10588,6 +12143,11 @@ function bindEvents() {
     }
   });
   $('#checkWorkflowDefinitionButton')?.addEventListener('click', () => runWorkflowUi(checkWorkflowDefinition));
+  $('#workflowCheckPanel')?.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-workflow-check-target-type]');
+    if (target) openWorkflowCheckTarget(target);
+    if (event.target.closest('[data-check-workflow-again]')) runWorkflowUi(checkWorkflowDefinition);
+  });
   $('#publishWorkflowDefinitionButton')?.addEventListener('click', () => runWorkflowUi(publishWorkflowDefinition));
   $('#checkpointWorkflowDefinitionButton')?.addEventListener('click', () => runWorkflowUi(checkpointWorkflowDefinition));
   $('#cloneWorkflowDefinitionButton')?.addEventListener('click', () => runWorkflowUi(cloneWorkflowDefinition));
@@ -10598,7 +12158,7 @@ function bindEvents() {
   $('#closeDashboardSourceDrawer')?.addEventListener('click', closeDashboardSourceDrawer);
   $('#cancelDashboardSourceDrawer')?.addEventListener('click', closeDashboardSourceDrawer);
   $('#dashboardSourceDrawer')?.addEventListener('click', (event) => { if (event.target === event.currentTarget) closeDashboardSourceDrawer(); });
-  $('#dashboardSourceForm')?.addEventListener('submit', (event) => saveDashboardSource(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  bindAsyncSubmit($('#dashboardSourceForm'), (event) => saveDashboardSource(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
   $('#dashboardSourceForm [name="sourceType"]')?.addEventListener('change', updateDashboardSourceFormMode);
   $('#dashboardSourceSearch')?.addEventListener('input', (event) => { state.dashboardSourceSearch = event.currentTarget.value; renderDashboardSourceList(); });
   $('#dashboardSourceList')?.addEventListener('click', (event) => {
@@ -10615,7 +12175,7 @@ function bindEvents() {
   $('#closeDashboardFormModal')?.addEventListener('click', closeDashboardFormModal);
   $('#cancelDashboardFormModal')?.addEventListener('click', closeDashboardFormModal);
   $('#dashboardFormModal')?.addEventListener('click', (event) => { if (event.target === event.currentTarget) closeDashboardFormModal(); });
-  $('#dashboardForm')?.addEventListener('submit', (event) => saveDashboard(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  bindAsyncSubmit($('#dashboardForm'), (event) => saveDashboard(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
   $('#dashboardManagementSearch')?.addEventListener('input', (event) => { state.dashboardManagementSearch = event.currentTarget.value; renderDashboardManagement(); });
   $('.dashboard-status-filter')?.addEventListener('click', (event) => {
     const button = event.target.closest('[data-dashboard-status]');
@@ -10649,14 +12209,14 @@ function bindEvents() {
   $('#closeDashboardLifecycleDrawer')?.addEventListener('click', closeDashboardLifecycleDrawer);
   $('#cancelDashboardLifecycleDrawer')?.addEventListener('click', closeDashboardLifecycleDrawer);
   $('#dashboardLifecycleDrawer')?.addEventListener('click', (event) => { if (event.target === event.currentTarget) closeDashboardLifecycleDrawer(); });
-  $('#dashboardLifecycleForm')?.addEventListener('submit', (event) => createDashboardCheckpoint(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  bindAsyncSubmit($('#dashboardLifecycleForm'), (event) => createDashboardCheckpoint(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
   $('#dashboardVersionList')?.addEventListener('click', (event) => { const button = event.target.closest('[data-restore-dashboard-version]'); if (button) restoreDashboardVersion(button.dataset.restoreDashboardVersion).catch((error) => toast(titleCaseMessage(error.message), 'error')); });
   $('#exportDashboardConfigurationButton')?.addEventListener('click', () => exportDashboardConfiguration().catch((error) => toast(titleCaseMessage(error.message), 'error')));
   $('#importDashboardConfigurationInput')?.addEventListener('change', (event) => importDashboardConfiguration(event.target.files?.[0]).catch((error) => toast(titleCaseMessage(error.message), 'error')).finally(() => { event.target.value = ''; }));
   $('#closeDashboardAccessDrawer')?.addEventListener('click', closeDashboardAccessDrawer);
   $('#cancelDashboardAccessDrawer')?.addEventListener('click', closeDashboardAccessDrawer);
   $('#dashboardAccessDrawer')?.addEventListener('click', (event) => { if (event.target === event.currentTarget) closeDashboardAccessDrawer(); });
-  $('#dashboardAccessForm')?.addEventListener('submit', (event) => saveDashboardAccess(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  bindAsyncSubmit($('#dashboardAccessForm'), (event) => saveDashboardAccess(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
   $('#dashboardAccessRules')?.addEventListener('input', (event) => {
     const search = event.target.closest('[data-permission-search]');
     if (search) filterPermissionPicker(search.closest('[data-permission-picker]'));
@@ -10670,7 +12230,7 @@ function bindEvents() {
   $('#closeDashboardFilterDrawer')?.addEventListener('click', closeDashboardFilterDrawer);
   $('#cancelDashboardFilterDrawer')?.addEventListener('click', closeDashboardFilterDrawer);
   $('#dashboardFilterDrawer')?.addEventListener('click', (event) => { if (event.target === event.currentTarget) closeDashboardFilterDrawer(); });
-  $('#dashboardFilterForm')?.addEventListener('submit', saveDashboardFilter);
+  bindAsyncSubmit($('#dashboardFilterForm'), saveDashboardFilter);
   $('#dashboardFilterForm [name="type"]')?.addEventListener('change', updateDashboardFilterFormFields);
   $('#dashboardFilterForm [name="dataSourceKey"]')?.addEventListener('change', updateDashboardFilterFormFields);
   $('#removeDashboardFilterButton')?.addEventListener('click', removeDashboardFilter);
@@ -10700,6 +12260,8 @@ function bindEvents() {
     renderDashboardCanvas();
   });
   $('#dashboardCanvas')?.addEventListener('click', (event) => {
+    handleDashboardWorkspaceClick(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+    if (event.target.closest('[data-dashboard-task-form], [data-dashboard-task-id], [data-dashboard-request], [data-dashboard-view], [data-dashboard-calendar-date], [data-dashboard-calendar-shift], [data-dashboard-calendar-today], [data-dashboard-calendar-close], .dashboard-calendar-popover')) return;
     const pageButton = event.target.closest('[data-dashboard-table-page]');
     const pivotToggle = event.target.closest('[data-dashboard-pivot-toggle]');
     const frame = event.target.closest('[data-dashboard-widget-key]');
@@ -10722,9 +12284,14 @@ function bindEvents() {
     renderDashboardCanvas();
   });
   $('#dashboardCanvas')?.addEventListener('pointerdown', startDashboardLayoutInteraction);
+  bindAsyncSubmit($('#dashboardCanvas'), (event) => handleDashboardTaskSubmit(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  $('#dashboardCanvas')?.addEventListener('change', (event) => handleDashboardTaskChange(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
   document.addEventListener('pointermove', moveDashboardLayoutInteraction);
   document.addEventListener('pointerup', endDashboardLayoutInteraction);
-  window.addEventListener('resize', syncDashboardCanvasExtent);
+  window.addEventListener('resize', debounce(() => {
+    syncDashboardCanvasExtent();
+    if (!$('#publishedDashboardPage')?.hidden && state.dashboardConfiguration) renderPublishedDashboardCanvas();
+  }, 120));
   $('#dashboardCanvas')?.addEventListener('keydown', (event) => {
     const frame = event.target.closest('[data-dashboard-widget-key]');
     if (!frame || !['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return;
@@ -10754,7 +12321,11 @@ function bindEvents() {
   });
   $('#duplicateDashboardWidgetButton')?.addEventListener('click', duplicateSelectedDashboardWidget);
   $('#removeDashboardWidgetButton')?.addEventListener('click', removeSelectedDashboardWidget);
-  $('#dashboardWidgetType')?.addEventListener('change', (event) => updateSelectedDashboardWidgetConfiguration((widget) => { widget.type = event.currentTarget.value; widget.config = { ...dashboardWidgetConfig(widget), mappings: {} }; }));
+  $('#dashboardWidgetType')?.addEventListener('change', (event) => updateSelectedDashboardWidgetConfiguration((widget) => {
+    widget.type = event.currentTarget.value;
+    if (isDashboardWorkspaceWidget(widget)) widget.dataSourceKey = '';
+    widget.config = { ...dashboardWidgetConfig(widget), mappings: {}, status: widget.type === 'approval_inbox' ? 'pending' : widget.type === 'todo_list' ? 'open' : undefined };
+  }));
   $('#dashboardWidgetDataSource')?.addEventListener('change', (event) => updateSelectedDashboardWidgetConfiguration((widget) => { widget.dataSourceKey = event.currentTarget.value; widget.config = { ...dashboardWidgetConfig(widget), mappings: {} }; }));
   $('#dashboardWidgetMappingFields')?.addEventListener('change', (event) => {
     const control = event.target.closest('[data-dashboard-mapping]');
@@ -10791,6 +12362,8 @@ function bindEvents() {
   $('#backToPublishedDashboardList')?.addEventListener('click', renderPublishedDashboardList);
   $('#publishedDashboardSelector')?.addEventListener('change', (event) => openPublishedDashboard(event.currentTarget.value).catch((error) => toast(titleCaseMessage(error.message), 'error')));
   $('#publishedDashboardCanvas')?.addEventListener('click', (event) => {
+    handleDashboardWorkspaceClick(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+    if (event.target.closest('[data-dashboard-task-form], [data-dashboard-task-id], [data-dashboard-request], [data-dashboard-view], [data-dashboard-calendar-date], [data-dashboard-calendar-shift], [data-dashboard-calendar-today], [data-dashboard-calendar-close], .dashboard-calendar-popover')) return;
     const refresh = event.target.closest('[data-refresh-published-widget]');
     if (refresh) {
       const widget = state.dashboardConfiguration?.widgets.find((item) => item.widgetKey === refresh.dataset.refreshPublishedWidget);
@@ -10800,6 +12373,8 @@ function bindEvents() {
     const drillDown = event.target.closest('[data-dashboard-drill-down]');
     if (drillDown) openDashboardWidgetDrillDown(drillDown.dataset.dashboardDrillDown).catch((error) => toast(titleCaseMessage(error.message), 'error'));
   });
+  bindAsyncSubmit($('#publishedDashboardCanvas'), (event) => handleDashboardTaskSubmit(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  $('#publishedDashboardCanvas')?.addEventListener('change', (event) => handleDashboardTaskChange(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
   $('#publishedDashboardFilters')?.addEventListener('change', (event) => {
     const control = event.target.closest('[data-dashboard-filter-key]');
     if (!control) return;
@@ -10818,7 +12393,7 @@ function bindEvents() {
   });
   $('#newActionFlowButton')?.addEventListener('click', createActionFlow);
   $('#createManagedActionFlowButton')?.addEventListener('click', createActionFlow);
-  $('#actionFlowCreateForm')?.addEventListener('submit', (event) => saveNewActionFlow(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  bindAsyncSubmit($('#actionFlowCreateForm'), (event) => saveNewActionFlow(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
   $('#closeActionFlowCreateModal')?.addEventListener('click', closeActionFlowCreateModal);
   $('#cancelActionFlowCreateModal')?.addEventListener('click', closeActionFlowCreateModal);
   $('#actionFlowCreateModal')?.addEventListener('click', (event) => {
@@ -10868,7 +12443,7 @@ function bindEvents() {
   });
   $('#runActionFlowButton')?.addEventListener('click', openActionFlowRunModal);
   $('#clearActionFlowRunButton')?.addEventListener('click', clearActionFlowRun);
-  $('#actionFlowRunForm')?.addEventListener('submit', (event) => runActiveActionFlowOnce(event).catch((error) => {
+  bindAsyncSubmit($('#actionFlowRunForm'), (event) => runActiveActionFlowOnce(event).catch((error) => {
     state.actionFlowRun = { status: 'failed', steps: [], error: error.message };
     renderActionFlowStudio();
     toast(titleCaseMessage(error.message), 'error');
@@ -10882,11 +12457,7 @@ function bindEvents() {
   $('#actionFlowList')?.addEventListener('click', (event) => {
     const button = event.target.closest('[data-action-flow-key]');
     if (!button) return;
-    state.activeActionFlowKey = button.dataset.actionFlowKey;
-    state.selectedActionFlowNodeId = '';
-    state.actionFlowDirty = false;
-    state.actionFlowRun = null;
-    renderActionFlowStudio();
+    openActionFlowCanvas(button.dataset.actionFlowKey);
   });
   $('#actionFlowPalette')?.addEventListener('click', (event) => {
     const button = event.target.closest('[data-flow-node-type]');
@@ -11082,7 +12653,7 @@ function bindEvents() {
     state.actionFlowZoom = Math.max(.4, Math.min(1, Number(Math.min(horizontalFit, verticalFit).toFixed(2))));
     renderActionFlowCanvas();
     $('#actionFlowZoomLabel').textContent = `${Math.round(state.actionFlowZoom * 100)}%`;
-    viewport.scrollTo({ left: 0, top: 0, behavior: 'smooth' });
+    viewport.scrollTo({ left: 0, top: 0, behavior: preferredScrollBehavior() });
   });
   $('#departmentTree')?.addEventListener('click', (event) => {
     const button = event.target.closest('[data-department-node]');
@@ -11101,7 +12672,7 @@ function bindEvents() {
   $('#closeDepartmentNodeModal')?.addEventListener('click', closeDepartmentNodeModal);
   $('#cancelDepartmentNodeModal')?.addEventListener('click', closeDepartmentNodeModal);
   $('#departmentNodeModal')?.addEventListener('click', (event) => { if (event.target === event.currentTarget) closeDepartmentNodeModal(); });
-  $('#departmentNodeForm')?.addEventListener('submit', (event) => saveDepartmentNode(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  bindAsyncSubmit($('#departmentNodeForm'), (event) => saveDepartmentNode(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
   $('#departmentNodeForm select[name="type"]')?.addEventListener('change', (event) => {
     if (!$('#departmentNodeForm').elements.id.value) $('#departmentNodeFormTitle').textContent = `New ${titleCaseMessage(event.target.value)}`;
   });
@@ -11122,8 +12693,8 @@ function bindEvents() {
   $('#formBuilderCreateModal')?.addEventListener('click', (event) => {
     if (event.target === event.currentTarget) closeFormBuilderCreateModal();
   });
-  $('#formBuilderCreateForm')?.addEventListener('submit', (event) => {
-    saveFormBuilderCreate(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  bindAsyncSubmit($('#formBuilderCreateForm'), (event) => {
+    return saveFormBuilderCreate(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
   });
   $('#formBuilderCreateForm [name="formType"]')?.addEventListener('change', syncFormBuilderCreateFields);
   $('#formBuilderCreateForm [name="name"]')?.addEventListener('input', (event) => {
@@ -11142,8 +12713,8 @@ function bindEvents() {
   });
   $('#closeModuleModal')?.addEventListener('click', closeModuleModal);
   $('#cancelModuleButton')?.addEventListener('click', closeModuleModal);
-  $('#moduleForm')?.addEventListener('submit', (event) => {
-    saveModule(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  bindAsyncSubmit($('#moduleForm'), (event) => {
+    return saveModule(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
   });
   $('#moduleModal')?.addEventListener('click', (event) => {
     if (event.target === event.currentTarget) closeModuleModal();
@@ -11215,8 +12786,8 @@ function bindEvents() {
       openModuleModal(editButton.dataset.editModule).catch((error) => toast(titleCaseMessage(error.message), 'error'));
     }
   });
-  $('#pageViewPermissionForm')?.addEventListener('submit', (event) => {
-    savePageViewPermission(event);
+  bindAsyncSubmit($('#pageViewPermissionForm'), (event) => {
+    return savePageViewPermission(event);
   });
   $('#closePageViewPermissionModal')?.addEventListener('click', closePageViewPermissionModal);
   $('#cancelPageViewPermissionButton')?.addEventListener('click', closePageViewPermissionModal);
@@ -11229,7 +12800,11 @@ function bindEvents() {
   });
   $('#pageViewPermissionForm')?.addEventListener('change', (event) => {
     const checkbox = event.target.closest('.permission-check input[type="checkbox"]');
-    if (checkbox) updatePermissionPickerCount(checkbox.closest('[data-permission-picker]'));
+    if (checkbox) {
+      const picker = checkbox.closest('[data-permission-picker]');
+      updatePermissionPickerCount(picker);
+      syncPermissionHierarchyState(picker);
+    }
   });
   $('#moduleRuntimeSearchButton')?.addEventListener('click', () => {
     state.moduleRuntimeSearch = $('#moduleRuntimeSearch').value;
@@ -11247,8 +12822,8 @@ function bindEvents() {
   $('#moduleRecordModal')?.addEventListener('click', (event) => {
     if (event.target === event.currentTarget) closeModuleRecordModal();
   });
-  $('#moduleRecordForm')?.addEventListener('submit', (event) => {
-    saveModuleRecord(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  bindAsyncSubmit($('#moduleRecordForm'), (event) => {
+    return saveModuleRecord(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
   });
   $('#moduleRecordRows')?.addEventListener('click', (event) => {
     const editButton = event.target.closest('[data-edit-module-record]');
@@ -11287,8 +12862,8 @@ function bindEvents() {
   $('#apiCategoryModal')?.addEventListener('click', (event) => {
     if (event.target === event.currentTarget) closeApiCategoryModal();
   });
-  $('#apiCategoryForm')?.addEventListener('submit', (event) => {
-    saveApiCategory(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  bindAsyncSubmit($('#apiCategoryForm'), (event) => {
+    return saveApiCategory(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
   });
   $('#apiCategoryRows')?.addEventListener('click', (event) => {
     const editButton = event.target.closest('[data-edit-api-category]');
@@ -11311,8 +12886,8 @@ function bindEvents() {
   $('#apiConnectorModal')?.addEventListener('click', (event) => {
     if (event.target === event.currentTarget) closeApiConnectorModal();
   });
-  $('#apiConnectorForm')?.addEventListener('submit', (event) => {
-    saveApiConnector(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  bindAsyncSubmit($('#apiConnectorForm'), (event) => {
+    return saveApiConnector(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
   });
   $('#apiConnectorForm [name="name"]')?.addEventListener('input', (event) => {
     const form = event.currentTarget.form;
@@ -11354,8 +12929,8 @@ function bindEvents() {
   $('#apiInterfaceModal')?.addEventListener('click', (event) => {
     if (event.target === event.currentTarget) closeApiInterfaceModal();
   });
-  $('#apiInterfaceForm')?.addEventListener('submit', (event) => {
-    saveApiInterface(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  bindAsyncSubmit($('#apiInterfaceForm'), (event) => {
+    return saveApiInterface(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
   });
   $('#apiInterfaceForm')?.addEventListener('input', (event) => updateApiDefinitionRow(event.target));
   $('#apiInterfaceForm')?.addEventListener('change', (event) => {
@@ -11479,7 +13054,7 @@ function bindEvents() {
     updatePermissionPickerCount(checkbox.closest('[data-permission-picker]'));
   });
 
-  $('#browserButtonForm').addEventListener('submit', async (event) => {
+  bindAsyncSubmit($('#browserButtonForm'), async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
     const data = serializeForm(form);
@@ -12117,6 +13692,14 @@ function bindEvents() {
       return;
     }
     if (!field) return;
+    if (actionButton.dataset.designAction === 'move-up') {
+      moveFormDesignField(field.fieldKey, -1);
+      return;
+    }
+    if (actionButton.dataset.designAction === 'move-down') {
+      moveFormDesignField(field.fieldKey, 1);
+      return;
+    }
     if (actionButton.dataset.designAction === 'edit-field') {
       openFieldConfigModal(field);
       $('#fieldConfigModal').classList.add('is-over-drawer');
@@ -12131,6 +13714,13 @@ function bindEvents() {
     }
   });
   $('#formDesignCanvas').addEventListener('keydown', (event) => {
+    const card = event.target.closest('[data-design-field]');
+    if (card && event.target === card && ['Enter', ' '].includes(event.key)) {
+      event.preventDefault();
+      selectFormDesignField(card.dataset.designField);
+      $('#formDesignCanvas [data-design-action="move-up"]:not(:disabled), #formDesignCanvas [data-design-action="move-down"]:not(:disabled)')?.focus();
+      return;
+    }
     const input = event.target.closest('[data-detail-table-name-input]');
     if (!input) return;
     if (event.key === 'Enter') {
@@ -12231,12 +13821,18 @@ function bindEvents() {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
     const nextDragOver = fieldCard?.dataset.designField || '';
+    state.formDesignDropPlacement = fieldCard ? formDesignDropPlacement(fieldCard, event.clientY) : '';
     if (state.dragOverFormDesignFieldKey !== nextDragOver) {
       state.dragOverFormDesignFieldKey = nextDragOver;
       $$('#formDesignCanvas [data-design-field]').forEach((card) => {
         card.classList.toggle('is-drag-over', card.dataset.designField === state.dragOverFormDesignFieldKey);
       });
     }
+    $$('#formDesignCanvas [data-design-field]').forEach((card) => {
+      card.classList.toggle('is-drop-before', card === fieldCard && state.formDesignDropPlacement === 'before');
+      card.classList.toggle('is-drop-after', card === fieldCard && state.formDesignDropPlacement === 'after');
+    });
+    autoScrollReorderSurface($('#formDesignCanvas'), event.clientY, event.clientX);
     $$('#formDesignCanvas [data-design-dropzone]').forEach((zone) => {
       zone.classList.toggle('is-drop-active', zone === dropzone && !fieldCard);
     });
@@ -12271,7 +13867,7 @@ function bindEvents() {
       if (!isFormDesignFieldVisible(draggedField)) {
         await setFormDesignFieldVisibility(draggedFieldKey, true);
       }
-      reorderFormDesignField(draggedFieldKey, fieldCard.dataset.designField);
+      reorderFormDesignFieldAt(draggedFieldKey, fieldCard.dataset.designField, state.formDesignDropPlacement || 'before');
     } else if (dropzone?.dataset.designDropzone === 'form') {
       await setFormDesignFieldVisibility(draggedFieldKey, true);
     }
@@ -12281,13 +13877,55 @@ function bindEvents() {
     state.dragOverFormDesignFieldKey = '';
     state.draggingFormDesignDetailTable = '';
     state.dragOverFormDesignDetailTable = '';
+    state.formDesignDropPlacement = '';
     $$('#formDesignCanvas [data-design-field]').forEach((card) => {
-      card.classList.remove('is-dragging', 'is-drag-over');
+      card.classList.remove('is-dragging', 'is-drag-over', 'is-drop-before', 'is-drop-after');
     });
     $$('#formDesignCanvas [data-design-detail-table]').forEach((table) => {
       table.classList.remove('is-dragging', 'is-drag-over');
     });
     $$('#formDesignCanvas [data-design-dropzone]').forEach((zone) => zone.classList.remove('is-drop-active'));
+  });
+  $('#formDesignCanvas').addEventListener('pointerdown', (event) => {
+    if (event.pointerType === 'mouse' || !event.target.closest('.form-reorder-grip')) return;
+    const card = event.target.closest('[data-design-field]');
+    if (!card) return;
+    state.formDesignPointerDrag = { pointerId: event.pointerId, key: card.dataset.designField, startX: event.clientX, startY: event.clientY, active: false };
+    card.setPointerCapture?.(event.pointerId);
+  });
+  window.addEventListener('pointermove', (event) => {
+    const drag = state.formDesignPointerDrag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    if (!drag.active && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 10) return;
+    drag.active = true;
+    state.draggingFormDesignFieldKey = drag.key;
+    const card = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('[data-design-field]');
+    const placement = card ? formDesignDropPlacement(card, event.clientY) : '';
+    state.dragOverFormDesignFieldKey = card?.dataset.designField || '';
+    state.formDesignDropPlacement = placement;
+    $$('#formDesignCanvas [data-design-field]').forEach((item) => {
+      item.classList.toggle('is-dragging', item.dataset.designField === drag.key);
+      item.classList.toggle('is-drop-before', item === card && placement === 'before');
+      item.classList.toggle('is-drop-after', item === card && placement === 'after');
+    });
+    autoScrollReorderSurface($('#formDesignCanvas'), event.clientY, event.clientX);
+    event.preventDefault();
+  }, { passive: false });
+  const finishFormDesignPointerDrag = (event) => {
+    const drag = state.formDesignPointerDrag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    const card = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('#formDesignCanvas [data-design-field]');
+    if (event.type === 'pointerup' && drag.active && card) reorderFormDesignFieldAt(drag.key, card.dataset.designField, formDesignDropPlacement(card, event.clientY));
+    state.formDesignPointerDrag = null; state.draggingFormDesignFieldKey = ''; state.dragOverFormDesignFieldKey = ''; state.formDesignDropPlacement = '';
+    $$('#formDesignCanvas [data-design-field]').forEach((card) => card.classList.remove('is-dragging', 'is-drop-before', 'is-drop-after'));
+  };
+  window.addEventListener('pointerup', finishFormDesignPointerDrag);
+  window.addEventListener('pointercancel', finishFormDesignPointerDrag);
+  window.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    stopReorderAutoScroll();
+    if (state.menuPointerDrag) finishMenuPointerDrag({ type: 'pointercancel', pointerId: state.menuPointerDrag.pointerId, clientX: 0, clientY: 0 });
+    if (state.formDesignPointerDrag) finishFormDesignPointerDrag({ type: 'pointercancel', pointerId: state.formDesignPointerDrag.pointerId, clientX: 0, clientY: 0 });
   });
   $('#formDesignCanvas').addEventListener('dblclick', (event) => {
     const fieldCard = event.target.closest('[data-design-field]');
@@ -12315,7 +13953,7 @@ function bindEvents() {
       removeButton.closest('tr')?.remove();
     }
   });
-  $('#fieldLinkageForm')?.addEventListener('submit', async (event) => {
+  bindAsyncSubmit($('#fieldLinkageForm'), async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
     const fieldKey = form.elements.fieldKey.value;
@@ -12395,7 +14033,7 @@ function bindEvents() {
     if (!button) return;
     insertAtCursor($('#formulaBuilderForm').elements.formulaExpression, button.dataset.insertFormula);
   });
-  $('#formulaBuilderForm').addEventListener('submit', async (event) => {
+  bindAsyncSubmit($('#formulaBuilderForm'), async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
     const fieldKey = form.elements.fieldKey.value;
@@ -12433,7 +14071,7 @@ function bindEvents() {
     }
   });
 
-  $('#fieldConfigForm').addEventListener('submit', async (event) => {
+  bindAsyncSubmit($('#fieldConfigForm'), async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
     const data = serializeForm(form);
@@ -12535,7 +14173,7 @@ function bindEvents() {
     form.elements.databaseFieldName.value = preview;
   });
 
-  $('#batchFieldForm').addEventListener('submit', async (event) => {
+  bindAsyncSubmit($('#batchFieldForm'), async (event) => {
     event.preventDefault();
     const existingRows = state.batchShowingArchived ? [] : state.batchEditRows.filter((row) => row.label.trim());
     const newRows = state.batchDraftRows.filter((row) => row.label.trim());
@@ -12630,7 +14268,7 @@ function bindEvents() {
     }
   });
 
-  $('#fieldPropertiesForm').addEventListener('submit', async (event) => {
+  bindAsyncSubmit($('#fieldPropertiesForm'), async (event) => {
     event.preventDefault();
     const rows = Array.from($('#fieldPropertiesRows').querySelectorAll('[data-properties-field]'));
     const submitButton = $('#saveFieldPropertiesButton');
@@ -12671,7 +14309,7 @@ function bindEvents() {
     }
   });
 
-  $('#importExportMappingForm').addEventListener('submit', async (event) => {
+  bindAsyncSubmit($('#importExportMappingForm'), async (event) => {
     event.preventDefault();
     const rows = Array.from($('#importExportMappingRows').querySelectorAll('[data-mapping-field]'));
     const submitButton = $('#saveImportExportMappingButton');
@@ -12736,7 +14374,7 @@ function bindEvents() {
     if (button) editUser(Number(button.dataset.editUser));
   });
 
-  $('#customerForm').addEventListener('submit', async (event) => {
+  bindAsyncSubmit($('#customerForm'), async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
     const data = customerFormData(form);
@@ -12757,7 +14395,7 @@ function bindEvents() {
     }
   });
 
-  $('#userForm').addEventListener('submit', async (event) => {
+  bindAsyncSubmit($('#userForm'), async (event) => {
     event.preventDefault();
     try {
       const form = event.currentTarget;
@@ -12789,7 +14427,7 @@ function bindEvents() {
     }
   });
 
-  $('#importForm').addEventListener('submit', async (event) => {
+  bindAsyncSubmit($('#importForm'), async (event) => {
     event.preventDefault();
     const submitButton = event.currentTarget.querySelector('button[type="submit"]');
     submitButton.disabled = true;
@@ -12835,6 +14473,8 @@ async function init() {
     toast(titleCaseMessage(error.message), 'error');
   }
   initializeScrollableModalFrames();
+  initializeModalSurfaces();
+  initializeParallelInspectors();
   bindEvents();
   configureAuthUi();
 

@@ -86,9 +86,9 @@ function normalizeAttachmentPolicy(policy = {}) {
     mode: String(policy.mode || 'disabled').trim().toLowerCase(),
     allowedTypes: Array.isArray(policy.allowedTypes)
       ? [...new Set(policy.allowedTypes.map((value) => String(value).trim().toLowerCase()).filter(Boolean))]
-      : [],
-    maxFileSize: Number(policy.maxFileSize || 0),
-    maxFileCount: Number(policy.maxFileCount || 0),
+      : ['application/pdf', 'image/jpeg', 'image/png'],
+    maxFileSize: Number(policy.maxFileSize || 5 * 1024 * 1024),
+    maxFileCount: Number(policy.maxFileCount || 3),
     actions: Array.isArray(policy.actions)
       ? [...new Set(policy.actions.map((value) => String(value).trim().toLowerCase()).filter(Boolean))]
       : [],
@@ -279,17 +279,17 @@ function canonicalValue(value) {
 function validateAttachmentPolicy(policy = {}, path, findings, allowedActions) {
   const mode = policy.mode || 'disabled';
   if (!attachmentModes.has(mode)) findings.push(errorFinding('WORKFLOW_CONFIG_ATTACHMENT_MODE_INVALID', `${path}.mode`, 'Attachment mode is invalid.', 'Select disabled, optional, or required.'));
+  const maxFileSize = Number(policy.maxFileSize || 0);
+  const maxFileCount = Number(policy.maxFileCount || 0);
+  if (maxFileSize <= 0 || maxFileSize > 25 * 1024 * 1024) findings.push(errorFinding('WORKFLOW_CONFIG_ATTACHMENT_SIZE_INVALID', `${path}.maxFileSize`, 'Attachment size must be between 1 byte and 25 MB.', 'Set an allowed maximum file size.'));
+  if (maxFileCount < 1 || maxFileCount > 20) findings.push(errorFinding('WORKFLOW_CONFIG_ATTACHMENT_COUNT_INVALID', `${path}.maxFileCount`, 'Attachment count must be between 1 and 20.', 'Set an allowed maximum file count.'));
+  if (!Array.isArray(policy.allowedTypes) || !policy.allowedTypes.length) findings.push(errorFinding('WORKFLOW_CONFIG_ATTACHMENT_TYPES_REQUIRED', `${path}.allowedTypes`, 'File uploads need at least one allowed file type.', 'Select one or more supported file types.'));
+  for (const [index, contentType] of (policy.allowedTypes || []).entries()) {
+    if (!safeAttachmentTypes.has(contentType)) findings.push(errorFinding('WORKFLOW_CONFIG_ATTACHMENT_TYPE_UNSAFE', `${path}.allowedTypes[${index}]`, `File type ${contentType} is unsupported.`, 'Use PDF, JPEG, PNG, plain text, DOCX, or XLSX.'));
+  }
   if (mode !== 'disabled') {
-    const maxFileSize = Number(policy.maxFileSize || 0);
-    const maxFileCount = Number(policy.maxFileCount || 0);
-    if (maxFileSize <= 0 || maxFileSize > 25 * 1024 * 1024) findings.push(errorFinding('WORKFLOW_CONFIG_ATTACHMENT_SIZE_INVALID', `${path}.maxFileSize`, 'Attachment size must be between 1 byte and 25 MB.', 'Set an allowed maximum file size.'));
-    if (maxFileCount < 1 || maxFileCount > 20) findings.push(errorFinding('WORKFLOW_CONFIG_ATTACHMENT_COUNT_INVALID', `${path}.maxFileCount`, 'Attachment count must be between 1 and 20.', 'Set an allowed maximum file count.'));
-    if (!Array.isArray(policy.allowedTypes) || !policy.allowedTypes.length) findings.push(errorFinding('WORKFLOW_CONFIG_ATTACHMENT_TYPES_REQUIRED', `${path}.allowedTypes`, 'Enabled attachments need at least one allowed file type.', 'Select one or more supported file types.'));
-    for (const [index, contentType] of (policy.allowedTypes || []).entries()) {
-      if (!safeAttachmentTypes.has(contentType)) findings.push(errorFinding('WORKFLOW_CONFIG_ATTACHMENT_TYPE_UNSAFE', `${path}.allowedTypes[${index}]`, `File type ${contentType} is unsupported.`, 'Use PDF, JPEG, PNG, plain text, DOCX, or XLSX.'));
-    }
     const actionSet = new Set(allowedActions || []);
-    if (!Array.isArray(policy.actions) || !policy.actions.length) findings.push(errorFinding('WORKFLOW_CONFIG_ATTACHMENT_ACTION_REQUIRED', `${path}.actions`, 'Enabled attachments must apply to at least one action.', 'Select an attachment action.'));
+    if (!Array.isArray(policy.actions) || !policy.actions.length) findings.push(errorFinding('WORKFLOW_CONFIG_ATTACHMENT_ACTION_REQUIRED', `${path}.actions`, 'Additional supporting files must apply to at least one action.', 'Select an action for additional supporting files.'));
     for (const [index, action] of (policy.actions || []).entries()) {
       if (!actionSet.has(action)) findings.push(errorFinding('WORKFLOW_CONFIG_ATTACHMENT_ACTION_INVALID', `${path}.actions[${index}]`, `Attachment action ${action} is unsupported here.`, 'Select an action supported by this node.'));
     }
