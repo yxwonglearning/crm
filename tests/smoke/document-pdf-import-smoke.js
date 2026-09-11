@@ -1,7 +1,8 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const { analyzePdf, validatePdfUpload, inferTable, inferVectorTables, inferAlignedTables } = require('../../src/modules/document-templates/document-pdf-importer');
+const { analyzePdf, validatePdfUpload, inferTable, inferVectorTables, inferAlignedTables, inferRuledTables, inferFormTables, mergeParagraphLines } = require('../../src/modules/document-templates/document-pdf-importer');
 const { templateSchema } = require('../../src/modules/document-templates/document-templates.schema');
+const documentOutput = require('../../public/document-output');
 
 function pdfFixture(width = 595.28, height = 841.89, rows = [['Invoice No:', 'INV-001'], ['Description', 'Amount'], ['Product A', '100.00']]) {
   const content = rows.map((row, rowIndex) => row.map((value, columnIndex) => `BT /F1 11 Tf ${50 + (columnIndex * 220)} ${height - 200 - (rowIndex * 28)} Td (${String(value).replace(/[()\\]/g, '\\$&')}) Tj ET`).join('\n')).join('\n');
@@ -126,6 +127,31 @@ async function run() {
   const uneven = inferAlignedTables([100, 124, 157].map((y, row) => ({ y, x: 50, width: 270, height: 10, fontSize: 10, items: [{ x: 50, width: 150, text: `Line ${row}` }, { x: 270, width: 50, text: `${row}.00` }] })));
   assert.equal(uneven.length, 1, 'uneven but unambiguous row spacing remains one table');
   assert.equal(inferVectorTables([], [{ axis: 'h', p: 100, start: 40, end: 400 }, { axis: 'h', p: 180, start: 40, end: 400 }]).length, 0, 'decorative separators alone never create a table');
+  const businessLines = [
+    { y: 60, x: 30, width: 500, height: 10, fontSize: 10, items: [{ x: 30, width: 70, text: 'Supplier' }, { x: 145, width: 120, text: 'Example Trading' }, { x: 300, width: 80, text: 'Document No' }, { x: 415, width: 100, text: 'DOC-1001' }] },
+    { y: 76, x: 30, width: 490, height: 10, fontSize: 10, items: [{ x: 30, width: 70, text: 'Address' }, { x: 145, width: 190, text: '10 Sample Road' }, { x: 300, width: 60, text: 'Date' }, { x: 415, width: 90, text: '01/01/2026' }] },
+    { y: 90, x: 145, width: 130, height: 10, fontSize: 10, items: [{ x: 145, width: 130, text: 'Example City' }] },
+    { y: 170, x: 30, width: 520, height: 10, fontSize: 10, items: [{ x: 30, width: 20, text: 'No.' }, { x: 55, width: 120, text: 'Description' }, { x: 220, width: 30, text: 'Qty' }, { x: 275, width: 55, text: 'Unit Price' }, { x: 350, width: 45, text: 'Tax' }, { x: 440, width: 50, text: 'Total' }] },
+    { y: 190, x: 30, width: 500, height: 10, fontSize: 10, items: [{ x: 30, width: 10, text: '1' }, { x: 55, width: 150, text: 'Editable service item' }, { x: 220, width: 12, text: '2' }, { x: 275, width: 35, text: '50.00' }, { x: 350, width: 30, text: '6.00' }, { x: 440, width: 45, text: '106.00' }] },
+    { y: 204, x: 55, width: 145, height: 10, fontSize: 10, items: [{ x: 55, width: 145, text: 'with wrapped detail' }] },
+    { y: 240, x: 300, width: 190, height: 10, fontSize: 10, items: [{ x: 300, width: 60, text: 'Subtotal' }, { x: 440, width: 50, text: '106.00' }] },
+    { y: 298, x: 30, width: 460, height: 10, fontSize: 10, items: [{ x: 30, width: 80, text: 'Tax Type' }, { x: 155, width: 70, text: 'Tax Rate' }, { x: 255, width: 80, text: 'Tax Amount' }, { x: 355, width: 100, text: 'Total incl tax' }] },
+    { y: 322, x: 30, width: 450, height: 10, fontSize: 10, items: [{ x: 30, width: 90, text: 'Standard tax' }, { x: 155, width: 45, text: '6.00%' }, { x: 255, width: 40, text: '6.00' }, { x: 355, width: 45, text: '106.00' }] }
+  ];
+  const businessRules = [40, 145, 225, 260].map((p) => ({ axis: 'h', p, start: 28, end: 550 }))
+    .concat([291, 315, 340].map((p) => ({ axis: 'h', p, start: 28, end: 350 })));
+  const forms = inferFormTables(businessLines, businessRules, 595.28);
+  const metadataForm = forms.find((table) => table.rows[0]?.cells[0]?.content === 'Supplier');
+  assert.ok(metadataForm, 'synthetic two-sided metadata reconstructs as an editable form table');
+  assert.match(metadataForm.rows[1].cells[1].content, /Example City/, 'multi-line address stays in its value column');
+  const ruled = inferRuledTables(businessLines, businessRules, 595.28);
+  assert.equal(ruled.length, 2, 'separate product and tax rule bands remain separate editable tables');
+  assert.match(ruled[0].rows[1].cells[1].content, /wrapped detail/, 'wrapped descriptions stay in the product row');
+  const paragraphs = mergeParagraphLines([
+    { y: 700, x: 30, width: 480, height: 10, fontSize: 9, text: 'This synthetic notice continues', items: [{ x: 30, width: 480, text: 'This synthetic notice continues' }] },
+    { y: 712, x: 30, width: 470, height: 10, fontSize: 9, text: 'without colliding with the footer.', items: [{ x: 30, width: 470, text: 'without colliding with the footer.' }] }
+  ]);
+  assert.equal(paragraphs[0].text, 'This synthetic notice continues\nwithout colliding with the footer.', 'long notices retain explicit line structure');
   const prose = await analyzePdf(pdfFixture(595.28, 841.89, [['Bill to', 'Acme Ltd'], ['123 Main Street'], ['Kuala Lumpur'], ['Terms', 'Due on receipt']]), 'metadata.pdf');
   assert.equal(prose.detectedLayout.tables, 0, 'address and header metadata are not promoted into a table');
   const landscape = await analyzePdf(pdfFixture(841.89, 595.28), 'landscape.pdf');
@@ -142,9 +168,15 @@ async function run() {
   const multiImages = await analyzePdf(multiPageImagePdfFixture(), 'two-page-images.pdf');
   assert.equal(multiImages.template.pages.length, 2); assert.equal(multiImages.template.pages.every((page) => page.regions.body.some((element) => element.type === 'image')), true, 'images remain associated with each source page');
   await assert.rejects(analyzePdf(multiPagePdfFixture(Array.from({ length: 26 }, (_, index) => [[`Page ${index + 1}`]])), 'too-many.pdf'), /limited to 25 pages/);
-  await assert.rejects(analyzePdf(multiPagePdfFixture([[['Portrait']], [['Landscape']]], { widths: [595.28, 841.89], heights: [841.89, 595.28] }), 'mixed.pdf'), /Mixed portrait and landscape/);
+  await assert.rejects(analyzePdf(multiPagePdfFixture([[['Portrait']], [['Landscape']]], { widths: [595.28, 841.89], heights: [841.89, 595.28] }), 'mixed.pdf'), /Mixed page sizes/);
   await assert.rejects(analyzePdf(multiPagePdfFixture([[['Valid page']], [['Broken page']]], { corruptPage: 2 }), 'corrupt-page.pdf'), /Page 2/, 'one invalid page rejects the complete import with its page number');
-  await assert.rejects(analyzePdf(pdfFixture(612, 792), 'letter.pdf'), { statusCode: 422 });
+  const letter = await analyzePdf(pdfFixture(612, 792), 'letter.pdf');
+  assert.deepEqual(letter.template.page, { ...letter.template.page, size: 'custom', widthCm: 21.59, heightCm: 27.94 });
+  assert.deepEqual(documentOutput.geometry(letter.template.page), { width: 21.59, height: 27.94 }, 'designer, preview and PDF output share imported physical geometry');
+  const letterMulti = await analyzePdf(multiPagePdfFixture([[['Page one']], [['Page two']], [['Page three']]], { widths: [612, 612, 612], heights: [792, 792, 792] }), 'letter-multi.pdf');
+  assert.equal(letterMulti.template.pages.length, 3); assert.equal(letterMulti.template.pages.every((page) => page.page.widthCm === 21.59 && page.page.heightCm === 27.94), true, 'multi-page custom geometry persists per page');
+  await assert.rejects(analyzePdf(pdfFixture(1500, 100), 'extreme.pdf'), /Unsupported page size: 529 × 35 mm/);
+  await assert.rejects(analyzePdf(multiPagePdfFixture([[['Letter']], [['A4']]], { widths: [612, 595.28], heights: [792, 841.89] }), 'mixed-size.pdf'), /Mixed page sizes/);
   await assert.rejects(analyzePdf(pdfFixture(595.28, 841.89, []), 'scan.pdf'), { statusCode: 422 });
   await assert.rejects(analyzePdf(Buffer.from('%PDF-corrupted'), 'bad.pdf'), { statusCode: 422 });
   console.log('PDF import checks passed: validation, A4 geometry, text, table conversion, canonical schema, landscape, scanned and corrupted handling.');

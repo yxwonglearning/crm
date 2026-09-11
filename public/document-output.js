@@ -4,6 +4,7 @@
   const escape = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const number = (value, fallback, min, max) => Math.min(max, Math.max(min, Number.isFinite(Number(value)) ? Number(value) : fallback));
   function geometry(page) {
+    if (page.size === 'custom' && Number.isFinite(Number(page.widthCm)) && Number.isFinite(Number(page.heightCm))) return { width: Number(page.widthCm), height: Number(page.heightCm) };
     return page.orientation === 'landscape' ? { width: 29.7, height: 21 } : { width: 21, height: 29.7 };
   }
   function lookup(object, path) {
@@ -24,7 +25,7 @@
   }
   const alignment = (v) => ['left', 'center', 'right'].includes(v) ? v : 'left';
   function block(element, context) {
-    const style = `grid-column:${number(element.column, 1, 1, 3)};text-align:${alignment(element.alignment)};padding:${number(element.padding, 4, 0, 40)}px;margin-left:${number(element.leftIndent, 0, 0, 28)}cm;margin-right:${number(element.rightIndent, 0, 0, 28)}cm;font-size:${number(element.fontSize, 11, 7, 48)}pt;font-weight:${['400', '600', '700'].includes(String(element.fontWeight)) ? element.fontWeight : '400'}`;
+    const style = `grid-column:${number(element.column, 1, 1, 3)};text-align:${alignment(element.alignment)};padding:${number(element.padding, 4, 0, 40)}px;margin-top:${number(element.spacingBefore, 0, 0, 2)}cm;margin-left:${number(element.leftIndent, 0, 0, 28)}cm;margin-right:${number(element.rightIndent, 0, 0, 28)}cm;font-size:${number(element.fontSize, 11, 7, 48)}pt;font-weight:${['400', '600', '700'].includes(String(element.fontWeight)) ? element.fontWeight : '400'}`;
     if (element.type === 'image') {
       const source = String(element.source || '');
       const content = /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(source)
@@ -49,7 +50,7 @@
   }
   function tableShell(table) {
     const sum = table.columns.reduce((total, col) => total + number(col.width, 8, 8, 100), 0);
-    return `<div class="output-table ${table.printableBorders ? 'with-borders' : ''}"><table><colgroup>${table.columns.map((col) => `<col style="width:${number(col.width, 8, 8, 100) / sum * 100}%">`).join('')}</colgroup><tbody></tbody></table></div>`;
+    return `<div class="output-table ${table.printableBorders ? 'with-borders' : ''}" style="margin-top:${number(table.spacingBefore, 0, 0, 2)}cm"><table><colgroup>${table.columns.map((col) => `<col style="width:${number(col.width, 8, 8, 100) / sum * 100}%">`).join('')}</colgroup><tbody></tbody></table></div>`;
   }
   const css = `
     *{box-sizing:border-box}html,body{margin:0;padding:0;background:#fff}
@@ -58,12 +59,12 @@
     .output-region{position:absolute;display:grid;align-content:start;min-width:0;padding:5px;border:1px solid transparent;overflow-wrap:anywhere}
     .output-header,.output-footer{height:2.1cm;align-items:center}
     .output-body{padding-top:12px;padding-bottom:12px}
-    .output-block{display:block;min-width:0;min-height:24px;border:1px solid transparent;border-radius:2px;white-space:normal;overflow-wrap:anywhere;line-height:1.35}
+    .output-block{display:block;min-width:0;min-height:24px;border:1px solid transparent;border-radius:2px;white-space:pre-line;overflow-wrap:anywhere;line-height:1.25}
     .output-image{display:flex;gap:8px;align-items:center;color:#6d6678}.output-image img{max-width:100%;object-fit:contain}.image-placeholder{display:grid;place-items:center;width:40px;height:40px;border:1px solid #a9a2b2;font-size:22px}
     .output-table{grid-column:1/-1;width:100%;min-width:0;margin:10px 0;padding:2px;border:2px solid transparent}
     .output-table table{width:100%;min-width:0;max-width:100%;table-layout:fixed;border-collapse:collapse}
     .output-table td{border:1px solid transparent;overflow-wrap:anywhere;word-break:break-word;vertical-align:middle}
-    .output-table.with-borders td{border-color:#4f4b55}.output-cell{min-height:28px;font-size:9pt;line-height:1.35;white-space:normal;overflow-wrap:anywhere}
+    .output-table.with-borders td{border-color:#4f4b55}.output-cell{min-height:28px;font-size:9pt;line-height:1.25;white-space:pre-line;overflow-wrap:anywhere}
     [data-page-value]{display:inline-block;min-width:3ch;font-variant-numeric:tabular-nums}
     @media print{html,body{margin:0!important;padding:0!important}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
   `;

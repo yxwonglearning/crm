@@ -15,9 +15,10 @@ const element = z.object({
   leftIndent: z.number().min(0).max(28).default(0), rightIndent: z.number().min(0).max(28).default(0),
   alignment, fontSize: z.number().min(7).max(48).default(11), fontWeight: z.enum(['400', '600', '700']).default('400'),
   padding: z.number().min(0).max(40).default(4),
+  spacingBefore: z.number().min(0).max(2).default(0),
   source: z.string().max(700000).regex(/^(?:data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/=]+)?$/).optional(),
   imageWidthCm: z.number().min(.1).max(28).optional(), imageHeightCm: z.number().min(.1).max(15).optional(),
-  width: z.literal(100).optional(), printableBorders: z.boolean().optional(), repeatingSource: binding.optional(),
+  width: z.literal(100).optional(), printableBorders: z.boolean().optional(), layoutRole: z.enum(['data', 'form']).optional(), repeatingSource: binding.optional(),
   columns: z.array(z.object({ id: key, label: z.string().max(200), width: z.number().min(8).max(100) })).min(2).max(12).optional(),
   rows: z.array(z.object({ id: key, heightCm: z.number().min(.65).max(3.2), repeat: z.boolean().default(false), cells: z.array(cell).min(2).max(12) })).min(1).max(100).optional()
 }).superRefine((item, ctx) => {
@@ -37,7 +38,8 @@ const element = z.object({
   }
 });
 const pageSchema = z.object({
-  size: z.literal('A4'), orientation: z.enum(['portrait', 'landscape']),
+  size: z.enum(['A4', 'custom']), orientation: z.enum(['portrait', 'landscape']),
+  widthCm: z.number().min(7).max(43.2).optional(), heightCm: z.number().min(7).max(43.2).optional(),
   margins: z.object({ top: z.number().min(0).max(15), bottom: z.number().min(0).max(15), left: z.number().min(0).max(26), right: z.number().min(0).max(26) }),
   headerFromTop: z.number().min(.5).max(3), footerFromBottom: z.number().min(.5).max(3),
   headerColumns: z.number().int().min(1).max(3), footerColumns: z.number().int().min(1).max(3),
@@ -55,8 +57,9 @@ const templateSchema = z.object({
   const pages = template.pages || [{ page: template.page, regions: template.regions }];
   for (const physicalPage of pages) {
   const p = physicalPage.page;
-  const width = p.orientation === 'portrait' ? 21 : 29.7;
-  const height = p.orientation === 'portrait' ? 29.7 : 21;
+  const width = p.size === 'custom' ? p.widthCm : (p.orientation === 'portrait' ? 21 : 29.7);
+  const height = p.size === 'custom' ? p.heightCm : (p.orientation === 'portrait' ? 29.7 : 21);
+  if (!Number.isFinite(width) || !Number.isFinite(height)) { ctx.addIssue({ code: 'custom', message: 'Custom page dimensions are required.' }); continue; }
   if (width - p.margins.left - p.margins.right < 3 || height - Math.max(p.margins.top, p.headerFromTop + 2.1) - Math.max(p.margins.bottom, p.footerFromBottom + 2.1) < 5) ctx.addIssue({ code: 'custom', message: 'Margins leave insufficient body space.' });
   for (const [region, elements] of Object.entries(physicalPage.regions)) {
     const columns = region === 'body' ? 1 : p[`${region}Columns`];

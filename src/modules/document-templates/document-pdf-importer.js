@@ -263,6 +263,91 @@ function inferAlignedTables(lines, segments = []) {
   return tables;
 }
 
+function horizontalRuleGroups(segments, pageWidth) {
+  const horizontal = segments.filter((segment) => segment.axis === 'h' && segment.end - segment.start >= pageWidth * .35).sort((a, b) => a.p - b.p);
+  const groups = []; let current = []; let partialEnd = false;
+  for (const line of horizontal) {
+    const previous = current.at(-1); const baseline = current[0];
+    const similar = baseline && overlap(baseline.start, baseline.end, line.start, line.end) && Math.min(baseline.end - baseline.start, line.end - line.start) / Math.max(baseline.end - baseline.start, line.end - line.start) >= .7;
+    if (previous && (partialEnd || line.p - previous.p > 120 || (!similar && line.p - previous.p > 30))) { if (current.length >= 3) groups.push(current); current = []; partialEnd = false; }
+    current.push(line); if (!similar && current.length >= 3) partialEnd = true;
+  }
+  if (current.length >= 3) groups.push(current);
+  return groups;
+}
+
+function tableFromBands(lines, boundaries, anchors, printableBorders = true) {
+  const rows = [];
+  for (let row = 0; row < boundaries.length - 1; row++) {
+    const top = boundaries[row]; const bottom = boundaries[row + 1]; const cells = Array.from({ length: anchors.length - 1 }, (_, column) => ({ column, span: 1, content: '' }));
+    const rowLines = lines.filter((line) => line.y + line.height >= top - 2 && line.y <= bottom + 2);
+    for (const line of rowLines) for (const item of line.items) {
+      const center = item.x + item.width / 2; let column = anchors.findIndex((left, index) => index < anchors.length - 1 && center >= left - 3 && center < anchors[index + 1] + 3);
+      if (column < 0) column = Math.max(0, Math.min(cells.length - 1, anchors.slice(0, -1).reduce((best, x, index) => Math.abs(x - item.x) < Math.abs(anchors[best] - item.x) ? index : best, 0)));
+      cells[column].content += `${cells[column].content ? '\n' : ''}${item.text}`;
+    }
+    if (cells.some((cell) => cell.content)) rows.push({ top, bottom, cells });
+  }
+  if (rows.length < 2) return null;
+  const total = anchors.at(-1) - anchors[0];
+  return { y: boundaries[0], rows, columnCount: anchors.length - 1, widths: anchors.slice(0, -1).map((x, index) => round((anchors[index + 1] - x) / total * 100, 3)), confidence: 'high', printableBorders, sourceLines: lines };
+}
+
+function inferRuledTables(lines, segments, pageWidth) {
+  const tables = [];
+  for (const group of horizontalRuleGroups(segments, pageWidth)) {
+    const boundaries = clusters(group.map((line) => line.p)); const top = boundaries[0]; const bottom = boundaries.at(-1);
+    const tableLines = lines.filter((line) => line.y + line.height >= top - 2 && line.y <= bottom + 2);
+    if (tableLines.length < 2) continue;
+    const left = Math.min(...group.map((line) => line.start)); const right = Math.max(...group.map((line) => line.end));
+    const verticals = clusters(segments.filter((line) => line.axis === 'v' && line.p >= left - 4 && line.p <= right + 4 && line.start <= top + 3 && line.end >= bottom - 3).map((line) => line.p));
+    let anchors = verticals;
+    if (anchors.length < 3) {
+      const strongest = [...tableLines].sort((a, b) => b.items.length - a.items.length)[0];
+      if (!strongest || strongest.items.length < 3) continue;
+      const starts = strongest.items.map((item) => item.x);
+      anchors = [left, ...starts.slice(1).map((start, index) => (starts[index] + start) / 2), right];
+    }
+    const table = tableFromBands(tableLines, boundaries, anchors, true); if (table) tables.push(table);
+  }
+  return tables;
+}
+
+function inferFormTables(lines, segments, pageWidth) {
+  const separators = segments.filter((line) => line.axis === 'h' && line.end - line.start >= pageWidth * .65).map((line) => line.p).sort((a, b) => a - b);
+  const boundaries = [-1, ...separators, Infinity]; const tables = [];
+  for (let band = 0; band < boundaries.length - 1; band++) {
+    const bandLines = lines.filter((line) => line.y > boundaries[band] + 4 && line.y < boundaries[band + 1] - 4 && line.items.length <= 4);
+    const strongest = [...bandLines].sort((a, b) => b.items.length - a.items.length)[0];
+    if (!strongest || strongest.items.length < 3) continue;
+    const anchors = strongest.items.map((item) => item.x); if (anchors.some((x, index) => index && x - anchors[index - 1] < pageWidth * .12)) continue;
+    const columnCount = anchors.length;
+    const rows = []; let active = null;
+    for (const line of bandLines) {
+      const mapped = line.items.map((item) => ({ item, column: anchors.reduce((best, x, index) => Math.abs(x - item.x) < Math.abs(anchors[best] - item.x) ? index : best, 0) }));
+      const begins = mapped.some(({ column }) => column === 0) && !(mapped.length === 1 && active && line.y - active.bottom < line.fontSize * 1.8);
+      if (begins || !active) { active = { top: line.y, bottom: line.y + line.height, cells: Array.from({ length: columnCount }, (_, column) => ({ column, span: 1, content: '' })) }; rows.push(active); }
+      for (const { item, column } of mapped) active.cells[column].content += `${active.cells[column].content ? '\n' : ''}${item.text}`;
+      active.bottom = Math.max(active.bottom, line.y + line.height);
+    }
+    if (rows.length < 2 || rows.filter((row) => row.cells[0].content && row.cells[1].content).length < 2) continue;
+    const right = Math.max(...bandLines.flatMap((line) => line.items.map((item) => item.x + item.width))); const ends = [...anchors.slice(1), Math.max(right, pageWidth - 28)];
+    const total = ends.at(-1) - anchors[0];
+    tables.push({ y: rows[0].top, rows, columnCount, widths: anchors.map((x, index) => round((ends[index] - x) / total * 100, 3)), confidence: 'high', printableBorders: false, sourceLines: bandLines });
+  }
+  return tables;
+}
+
+function mergeParagraphLines(lines) {
+  const result = [];
+  for (const line of [...lines].sort((a, b) => a.y - b.y)) {
+    const previous = result.at(-1); const sameBlock = previous && previous.items.length === 1 && line.items.length === 1 && near(previous.x, line.x, 8) && Math.abs(previous.fontSize - line.fontSize) <= 1 && line.y - (previous.y + previous.height) <= Math.max(8, line.fontSize * .75);
+    if (!sameBlock) { result.push({ ...line, items: line.items.map((item) => ({ ...item })) }); continue; }
+    previous.text += `\n${line.text}`; previous.items[0].text = previous.text; previous.height = line.y + line.height - previous.y; previous.width = Math.max(previous.width, line.width);
+  }
+  return result;
+}
+
 function textElement(line, index, pageWidth, margins) {
   const contentWidth = pageWidth - margins.left - margins.right;
   const left = Math.max(0, (line.x / POINTS_PER_CM) - margins.left);
@@ -272,11 +357,13 @@ function textElement(line, index, pageWidth, margins) {
     leftIndent: round(Math.min(Math.max(0, contentWidth - 1), left), 1),
     rightIndent: round(Math.min(Math.max(0, contentWidth - left - 4), right), 1),
     alignment: left > contentWidth * .55 ? 'right' : (left > contentWidth * .25 && right > contentWidth * .25 ? 'center' : 'left'),
-    fontSize: round(line.fontSize, 1), fontWeight: /bold|black|heavy/i.test(line.fontFamily) ? '700' : '400', padding: 1
+    fontSize: round(line.fontSize, 1), fontWeight: /bold|black|heavy/i.test(line.fontFamily) ? '700' : '400', padding: 1, spacingBefore: 0
   };
 }
 
 function tableElement(table, index) {
+  const base = table.widths.map((width) => Math.max(0, width)); const available = Math.max(0, 100 - base.length * 8); const weight = base.reduce((sum, width) => sum + width, 0) || base.length;
+  const widths = base.map((width) => round(8 + available * width / weight, 3)); widths[widths.length - 1] = round(100 - widths.slice(0, -1).reduce((sum, width) => sum + width, 0), 3);
   const rows = table.rows.map((line, row) => {
     if (!line.cells) return { id: safeId(`imported_row_${index + 1}`, row), heightCm: round(Math.max(.65, Math.min(3.2, line.height / POINTS_PER_CM + .25)), 2), repeat: false,
       cells: Array.from({ length: table.columnCount }, (_, column) => ({ id: safeId(`imported_cell_${index + 1}_${row + 1}`, column), content: line.items[column]?.text || '', binding: '', alignment: column > 0 && /^[-+]?[$€£RM\s]*[\d,.%]+$/i.test(line.items[column]?.text || '') ? 'right' : 'left', padding: 4, colSpan: 1 })) };
@@ -285,8 +372,8 @@ function tableElement(table, index) {
     return { id: safeId(`imported_row_${index + 1}`, row), heightCm: round(Math.max(.65, Math.min(3.2, (line.bottom - line.top) / POINTS_PER_CM)), 2), repeat: false, cells };
   });
   return {
-    id: safeId('imported_table', index), type: 'table', column: 1, width: 100, printableBorders: table.printableBorders !== false, repeatingSource: '',
-    columns: table.widths.map((width, column) => ({ id: safeId(`imported_col_${index + 1}`, column), label: `Column ${column + 1}`, width })),
+    id: safeId('imported_table', index), type: 'table', column: 1, width: 100, printableBorders: table.printableBorders !== false, layoutRole: table.layoutRole || 'data', repeatingSource: '', spacingBefore: 0,
+    columns: widths.map((width, column) => ({ id: safeId(`imported_col_${index + 1}`, column), label: `Column ${column + 1}`, width })),
     rows
   };
 }
@@ -318,8 +405,10 @@ async function analyzePdf(buffer, name = 'Imported PDF') {
     const viewport = page.getViewport({ scale: 1 });
     const widthCm = viewport.width / POINTS_PER_CM; const heightCm = viewport.height / POINTS_PER_CM;
     const orientation = widthCm > heightCm ? 'landscape' : 'portrait';
+    const aspect = Math.max(widthCm, heightCm) / Math.min(widthCm, heightCm);
+    if (widthCm < 7 || heightCm < 7 || widthCm > 43.2 || heightCm > 43.2 || aspect > 3 || widthCm * heightCm > 1400) throw new AppError(`Unsupported page size: ${Math.round(widthCm * 10)} × ${Math.round(heightCm * 10)} mm. No pages were imported.`, 422);
     const expected = orientation === 'portrait' ? [21, 29.7] : [29.7, 21];
-    if (Math.abs(widthCm - expected[0]) > .8 || Math.abs(heightCm - expected[1]) > .8) throw new AppError(`Page ${pageNumber} is not A4. No pages were imported.`, 422);
+    const isA4 = Math.abs(widthCm - expected[0]) <= .8 && Math.abs(heightCm - expected[1]) <= .8;
     let text; let operators;
     try { text = await page.getTextContent({ disableNormalization: false }); operators = await page.getOperatorList(); } catch { throw new AppError(`Page ${pageNumber} is corrupted or unsupported. No pages were imported.`, 422); }
     const OPS = pdfjs.OPS;
@@ -338,36 +427,48 @@ async function analyzePdf(buffer, name = 'Imported PDF') {
     const lineCount = operators.fnArray.filter((operation) => operation === OPS.constructPath || operation === OPS.stroke).length;
     const margins = { top: 1, right: 1, bottom: 1, left: 1 };
     const possibleHeader = lines.filter((line) => line.y < viewport.height * .14); const possibleFooter = lines.filter((line) => line.y > viewport.height * .86);
-    const headerLines = lines.filter((line) => line.y < viewport.height * .08);
-    const footerLines = lines.filter((line) => line.y > viewport.height * .92);
+    const headerLines = lines.filter((line) => line.y < viewport.height * .06);
+    const footerLines = lines.filter((line) => line.y > viewport.height * .96);
     let bodyLines = lines.filter((line) => !headerLines.includes(line) && !footerLines.includes(line));
+    const ruledTables = inferRuledTables(bodyLines, vectorSegments, viewport.width);
+    const ruledLines = new Set(ruledTables.flatMap((table) => table.sourceLines));
+    bodyLines = bodyLines.filter((line) => !ruledLines.has(line));
+    const formTables = inferFormTables(bodyLines, vectorSegments, viewport.width);
+    const formLines = new Set(formTables.flatMap((table) => table.sourceLines));
+    bodyLines = bodyLines.filter((line) => !formLines.has(line));
     const vectorTables = inferVectorTables(bodyLines, vectorSegments);
     const vectorLines = new Set(vectorTables.flatMap((table) => table.sourceLines));
     bodyLines = bodyLines.filter((line) => !vectorLines.has(line));
     const alignedTables = inferAlignedTables(bodyLines, vectorSegments);
     const alignedLines = new Set(alignedTables.flatMap((table) => table.sourceLines));
-    bodyLines = bodyLines.filter((line) => !alignedLines.has(line));
-    const detectedTables = [...vectorTables, ...alignedTables].sort((left, right) => left.y - right.y);
-    const pageCm = orientation === 'portrait' ? { width: 21, height: 29.7 } : { width: 29.7, height: 21 };
+    bodyLines = mergeParagraphLines(bodyLines.filter((line) => !alignedLines.has(line)));
+    formTables.forEach((table) => { table.layoutRole = 'form'; table.printableBorders = false; });
+    const trueTables = [...ruledTables, ...vectorTables, ...alignedTables];
+    const detectedTables = [...trueTables, ...formTables].sort((left, right) => left.y - right.y);
+    const pageCm = { width: round(widthCm, 3), height: round(heightCm, 3) };
     const regionForY = (y) => y < viewport.height * .08 ? 'header' : y > viewport.height * .92 ? 'footer' : 'body';
     const regions = { header: [], body: [], footer: [] };
     const idOffset = pageNumber * 10000;
-    for (const [prefix, source] of [[1, headerLines], [2, bodyLines], [3, footerLines]]) source.forEach((line, index) => regions[regionForY(line.y)].push({ y: line.y, element: textElement(line, idOffset + index + prefix * 100, pageCm.width, margins) }));
-    extractedImages.forEach((image, index) => regions[regionForY(image.y)].push({ y: image.y, element: imageElement(image, idOffset + index, pageCm.width, margins) }));
-    detectedTables.forEach((table, index) => regions.body.push({ y: table.y, element: tableElement(table, idOffset + index) }));
-    for (const region of Object.keys(regions)) regions[region] = regions[region].sort((a, b) => a.y - b.y).map((entry) => entry.element);
-    return { page: { size: 'A4', orientation, margins, headerFromTop: .7, footerFromBottom: .7, showMarginGuides: true, showGrid: false, headerColumns: 1, footerColumns: 1 }, regions,
-      summary: { pageNumber, page: { width: round(widthCm), height: round(heightCm), size: 'A4', orientation }, extractionMethod,
+    for (const [prefix, source] of [[1, headerLines], [2, bodyLines], [3, footerLines]]) source.forEach((line, index) => regions[regionForY(line.y)].push({ y: line.y, bottom: line.y + line.height, element: textElement(line, idOffset + index + prefix * 100, pageCm.width, margins) }));
+    extractedImages.forEach((image, index) => regions[regionForY(image.y)].push({ y: image.y, bottom: image.y + image.height, element: imageElement(image, idOffset + index, pageCm.width, margins) }));
+    detectedTables.forEach((table, index) => regions.body.push({ y: table.y, bottom: Math.max(...table.rows.map((row) => row.bottom || row.y + row.height)), element: tableElement(table, idOffset + index) }));
+    for (const region of Object.keys(regions)) {
+      const ordered = regions[region].sort((a, b) => a.y - b.y); let previousBottom = null;
+      for (const entry of ordered) { if (previousBottom !== null) entry.element.spacingBefore = round(Math.min(1.2, Math.max(0, (entry.y - previousBottom - 5) / POINTS_PER_CM)), 2); previousBottom = Math.max(previousBottom || 0, entry.bottom || entry.y); }
+      regions[region] = ordered.map((entry) => entry.element);
+    }
+    return { page: { size: isA4 ? 'A4' : 'custom', orientation, ...(isA4 ? {} : { widthCm: pageCm.width, heightCm: pageCm.height }), margins, headerFromTop: .7, footerFromBottom: .7, showMarginGuides: true, showGrid: false, headerColumns: 1, footerColumns: 1 }, regions,
+      summary: { pageNumber, page: { width: pageCm.width, height: pageCm.height, size: isA4 ? 'A4' : 'custom', orientation }, extractionMethod,
         ocr: ocrResult ? { confidence: ocrResult.confidence, reviewRecommended: ocrResult.confidence !== 'high', rotation: page.rotate || 0 } : null,
-        textBlocks: lines.length, images: imageCount, importedImages: extractedImages.length, skippedImages: extractionMethod === 'digital' ? Math.max(0, imageCount - extractedImages.length) : 0, lines: lineCount, tables: detectedTables.length, possibleHeader: possibleHeader.length ? { confidence: headerLines.length ? 'high' : 'medium' } : null, possibleFooter: possibleFooter.length ? { confidence: footerLines.length ? 'high' : 'medium' } : null, possibleRepeatingRow: detectedTables.length ? { confidence: 'low' } : null } };
+        textBlocks: lines.length, images: imageCount, importedImages: extractedImages.length, skippedImages: extractionMethod === 'digital' ? Math.max(0, imageCount - extractedImages.length) : 0, lines: lineCount, tables: trueTables.length, forms: formTables.length, possibleHeader: possibleHeader.length ? { confidence: headerLines.length ? 'high' : 'medium' } : null, possibleFooter: possibleFooter.length ? { confidence: footerLines.length ? 'high' : 'medium' } : null, possibleRepeatingRow: trueTables.length ? { confidence: 'low' } : null } };
     };
     const physicalPages = [];
     for (let start = 1; start <= pdf.numPages; start += 4) {
       const batch = Array.from({ length: Math.min(4, pdf.numPages - start + 1) }, (_, index) => analyzePage(start + index));
       physicalPages.push(...await Promise.all(batch));
     }
-    const orientations = new Set(physicalPages.map((entry) => entry.page.orientation));
-    if (orientations.size > 1) throw new AppError('Mixed portrait and landscape pages are not supported. No pages were imported.', 422);
+    const firstGeometry = physicalPages[0].summary.page;
+    if (physicalPages.some((entry) => Math.abs(entry.summary.page.width - firstGeometry.width) > .2 || Math.abs(entry.summary.page.height - firstGeometry.height) > .2)) throw new AppError('Mixed page sizes are not supported. No pages were imported.', 422);
     const first = physicalPages[0];
     const template = {
       templateKey: `template_${Date.now()}`, name: `${String(name).replace(/\.pdf$/i, '').slice(0, 145)} — imported`, status: 'draft', source: 'module:customers', updatedAt: new Date().toISOString(),
@@ -379,4 +480,4 @@ async function analyzePdf(buffer, name = 'Imported PDF') {
   } finally { await ocr.close(); await loadingTask?.destroy().catch(() => {}); }
 }
 
-module.exports = { MAX_PDF_BYTES, MAX_PDF_PAGES, validatePdfUpload, groupTextItems, inferTable, extractVectorSegments, inferVectorTables, inferAlignedTables, imageDataUrl, requiresOcr, analyzePdf };
+module.exports = { MAX_PDF_BYTES, MAX_PDF_PAGES, validatePdfUpload, groupTextItems, inferTable, extractVectorSegments, inferVectorTables, inferAlignedTables, inferRuledTables, inferFormTables, mergeParagraphLines, imageDataUrl, requiresOcr, analyzePdf };

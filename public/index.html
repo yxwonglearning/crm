@@ -2433,12 +2433,12 @@
       <div class="document-import-heading"><span class="eyebrow">Create template</span><h2 id="documentCreateTitle">Choose a starting point</h2><p>Import creates an editable draft for review; it does not change the existing Preview or PDF output path.</p></div>
       <div class="document-start-options">
         <button type="button" data-document-start="blank"><strong>Blank template</strong><small>Start with the standard A4 document structure.</small></button>
-        <button type="button" data-document-start="pdf"><strong>Import from PDF</strong><small>Analyze a digital A4 PDF and create editable pages.</small></button>
+        <button type="button" data-document-start="pdf"><strong>Import from PDF</strong><small>Analyze a business-document PDF and create editable pages.</small></button>
         <button type="button" data-document-start="duplicate"><strong>Duplicate existing</strong><small>Copy the most recently updated template.</small></button>
       </div>
       <form id="documentPdfImportForm" hidden>
         <ol class="document-import-steps"><li class="is-current">Upload PDF</li><li>Analyze document</li><li>Review structure</li><li>Import &amp; Edit</li></ol>
-        <label class="document-pdf-drop">PDF file<input id="documentPdfFile" name="pdf" type="file" accept="application/pdf,.pdf" required><small>Digital A4 PDF · up to 25 pages · maximum 10 MB · scanned PDFs are not supported yet</small></label>
+        <label class="document-pdf-drop">PDF file<input id="documentPdfFile" name="pdf" type="file" accept="application/pdf,.pdf" required><small>Supported business-document sizes · digital or scanned · up to 25 pages · maximum 10 MB</small></label>
         <div id="documentImportSummary" class="document-import-summary" aria-live="polite"></div>
         <div class="form-actions"><button type="submit" id="analyzeDocumentPdf">Analyze PDF</button><button type="button" id="importAnalyzedDocument" hidden>Import &amp; Edit</button></div>
       </form>
