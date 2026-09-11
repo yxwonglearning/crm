@@ -80,6 +80,8 @@ const state = {
   dashboardLayoutDirty: false,
   dashboardLayoutInteraction: null,
   dashboardWidgetResults: {},
+  dashboardCalendarMonths: {},
+  dashboardCalendarOpen: null,
   dashboardFilterValues: {},
   publishedDashboards: [],
   activePublishedDashboardKey: '',
@@ -107,12 +109,37 @@ const state = {
   selectedWorkflowEdgeId: '',
   workflowCanvasZoom: 1,
   workflowCanvasDrag: null,
+  workflowCanvasDragFrame: null,
+  workflowCanvasSuppressClick: false,
   workflowCanvasPan: null,
   workflowConnectFrom: '',
   workflowRouteDesignerOpen: false,
   workflowInspectorCollapsed: false,
   workflowRouteReturnScrollY: 0,
   workflowRouteSaveNoticeTimer: null,
+  documentTemplates: [],
+  activeDocumentTemplateKey: '',
+  documentDesignerMode: 'design',
+  documentSelectedRegion: 'body',
+  documentSelectedColumn: 1,
+  documentSelectedElementId: '',
+  documentSelectedCell: null,
+  documentHistory: [],
+  documentFuture: [],
+  documentDirty: false,
+  documentPropertiesTab: 'properties',
+  documentPaletteTab: 'fields',
+  documentFieldQuery: '',
+  documentMarginDrag: null,
+  documentRulerDrag: null,
+  documentModeBeforePrint: null,
+  documentImportResult: null,
+  documentOriginalPdfUrl: '',
+  documentOriginalPdfFile: null,
+  documentCompareMode: 'generated',
+  documentPageIndex: 0,
+  documentRejectedSuggestions: new Set(),
+  workflowDocumentOutputs: {},
   workflowRequests: [],
   workflowInbox: [],
   workflowRequestMode: 'requests',
@@ -138,11 +165,14 @@ const state = {
   activeAccountTab: 'profile',
   accountReturnView: 'customersView',
   sidebarMenu: [],
+  sidebarCompact: false,
   menuConfigDraft: null,
   menuConfigCatalog: { destinations: [], users: [], departments: [] },
   menuConfigVersions: [],
   selectedMenuItemKey: '',
   draggingMenuItemKey: '',
+  menuDropTarget: null,
+  menuPointerDrag: null,
   workflowDelegations: [],
   workflowDelegationStatus: 'all',
   workflowDelegationSearch: '',
@@ -179,6 +209,8 @@ const state = {
   selectedFormDesignFieldKey: '',
   draggingFormDesignFieldKey: '',
   dragOverFormDesignFieldKey: '',
+  formDesignDropPlacement: '',
+  formDesignPointerDrag: null,
   draggingFormDesignDetailTable: '',
   dragOverFormDesignDetailTable: '',
   editingFieldLinkageFieldKey: '',
@@ -685,6 +717,9 @@ function updateFormDesignDraftOrder(type, fields) {
   const layouts = readFormDesignLayouts();
   layouts.draft[type].order = fields.map((field) => field.fieldKey);
   syncFormDesignSectionsWithOrder(layouts.draft[type]);
+  layouts.draft[type].sections.forEach((section) => {
+    section.fieldKeys.sort((a, b) => layouts.draft[type].order.indexOf(a) - layouts.draft[type].order.indexOf(b));
+  });
   writeFormDesignLayouts(layouts);
 }
 
@@ -771,14 +806,22 @@ function syncFormDesignDisplayVisibility(visibilityByFieldKey, moduleKey = state
 }
 
 function moveFormDesignField(fieldKey, direction) {
-  let fields = orderedFormDesignFields();
+  const fields = formDesignReorderPeers(findConfigField(fieldKey));
   const index = fields.findIndex((field) => field.fieldKey === fieldKey);
   const nextIndex = index + direction;
   if (index < 0 || nextIndex < 0 || nextIndex >= fields.length) return;
-  const nextFields = [...fields];
-  [nextFields[index], nextFields[nextIndex]] = [nextFields[nextIndex], nextFields[index]];
-  updateFormDesignDraftOrder(state.activeFormDesignType, nextFields);
-  renderFormDesignDrawer();
+  reorderFormDesignFieldAt(fieldKey, fields[nextIndex].fieldKey, direction < 0 ? 'before' : 'after');
+  const button = $(`#formDesignCanvas [data-design-action="move-${direction < 0 ? 'up' : 'down'}"]`);
+  if (button && !button.disabled) button.focus();
+  else $$('#formDesignCanvas [data-design-field]').find((card) => card.dataset.designField === fieldKey)?.focus();
+}
+
+function formDesignReorderPeers(selected) {
+  if (!selected || !isFormDesignFieldVisible(selected)) return [];
+  return orderedFormDesignFields().filter((field) => isFormDesignFieldVisible(field)
+    && (selected.tableType === 'detail'
+      ? field.tableType === 'detail' && field.detailTableName === selected.detailTableName
+      : field.tableType !== 'detail' && formDesignSectionForField(field.fieldKey)?.id === formDesignSectionForField(selected.fieldKey)?.id));
 }
 
 function detailTableKeysFromFields(fields) {
@@ -883,6 +926,20 @@ function updateFormDesignSelectionUI() {
   $$('[data-design-action="edit-field"], [data-design-action="formula"], [data-design-action="field-linkage"]').forEach((button) => {
     button.disabled = !selectedField;
   });
+  const fields = formDesignReorderPeers(selectedField);
+  const index = fields.findIndex((field) => field.fieldKey === selectedField?.fieldKey);
+  $('#formDesignCanvas [data-design-action="move-up"]').disabled = index <= 0;
+  $('#formDesignCanvas [data-design-action="move-down"]').disabled = index < 0 || index >= fields.length - 1;
+  const section = $('#formDesignCanvas [data-selected-field-section]');
+  const span = $('#formDesignCanvas [data-selected-field-span]');
+  if (section) {
+    section.disabled = !selectedField || selectedField.tableType === 'detail';
+    section.value = selectedField ? formDesignSectionForField(selectedField.fieldKey)?.id || '' : '';
+  }
+  if (span) {
+    span.disabled = !selectedField || selectedField.tableType === 'detail';
+    span.value = selectedField ? String(activeFormDesignLayout().fieldSpans?.[selectedField.fieldKey] || 1) : '1';
+  }
 }
 
 function selectFormDesignField(fieldKey) {
@@ -909,6 +966,7 @@ function formDesignFieldCard(field) {
     <article class="form-design-field form-design-preview-field ${field.fieldKey === state.selectedFormDesignFieldKey ? 'is-selected' : ''} ${field.fieldKey === state.draggingFormDesignFieldKey ? 'is-dragging' : ''} ${field.fieldKey === state.dragOverFormDesignFieldKey ? 'is-drag-over' : ''}" data-design-field="${escapeHtml(field.fieldKey)}" draggable="true" title="Drag to reorder. Double-click to configure formula." style="grid-column: span ${span};">
       ${renderFormDesignMainField(field)}
       <div class="form-design-field-meta">
+        <span class="form-reorder-grip" aria-hidden="true" title="Drag to reorder">⋮⋮</span>
         ${field.formulaEnabled ? '<span class="formula-badge">fx</span>' : ''}
       </div>
     </article>
@@ -1118,6 +1176,7 @@ function renderFormDesignDetailTable(group) {
                 <td>
                   <div class="form-design-detail-cell ${field.fieldKey === state.selectedFormDesignFieldKey ? 'is-selected' : ''} ${field.fieldKey === state.draggingFormDesignFieldKey ? 'is-dragging' : ''} ${field.fieldKey === state.dragOverFormDesignFieldKey ? 'is-drag-over' : ''}" data-design-field="${escapeHtml(field.fieldKey)}" draggable="true" title="Drag to reorder. Double-click to configure formula.">
                     ${renderFormDesignPreviewControl(field)}
+                    <span class="form-reorder-grip" aria-hidden="true" title="Drag to reorder">⋮⋮</span>
                   </div>
                 </td>
               `).join('')}
@@ -1176,6 +1235,7 @@ async function saveFormDesignDraft() {
     });
     setModuleConfig(state.activeConfigModule, config.fields, config.formLayouts);
     showSuccessPrompt('Draft Saved', `${formName} form draft saved successfully.`);
+    markFormLayoutSaved();
     toast(`${formName} Form Draft Saved Successfully.`);
   } catch (error) {
     toast(titleCaseMessage(error.message), 'error');
@@ -1199,6 +1259,7 @@ async function publishFormDesign() {
     });
     setModuleConfig(state.activeConfigModule, config.fields, config.formLayouts);
     showSuccessPrompt('Form Published', `${formName} form published successfully.`);
+    markFormLayoutSaved();
     toast(`${formName} Form Published Successfully.`);
   } catch (error) {
     toast(titleCaseMessage(error.message), 'error');
@@ -1804,6 +1865,238 @@ function closeFormulaBuilderModal() {
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
+const prefersReducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+const preferredScrollBehavior = () => prefersReducedMotion() ? 'auto' : 'smooth';
+
+const modalSurfaceState = new WeakMap();
+let modalSurfaceStack = [];
+let modalInteractionSource = null;
+
+function modalSurfaceCard(modal) {
+  return modal?.querySelector([
+    '.modal-card',
+    '.form-builder-tool-drawer',
+    '.form-design-drawer',
+    '.version-history-drawer',
+    '.page-permission-drawer',
+    '.permission-audit-drawer',
+    '.api-connector-drawer',
+    '.api-interface-drawer',
+    '.dashboard-source-drawer'
+  ].join(', ')) || modal?.firstElementChild || null;
+}
+
+function formDesignDropPlacement(card, clientY) {
+  if (!card) return 'after';
+  const bounds = card.getBoundingClientRect();
+  return clientY < bounds.top + (bounds.height / 2) ? 'before' : 'after';
+}
+
+function reorderFormDesignFieldAt(draggedFieldKey, targetFieldKey, placement = 'before') {
+  if (!draggedFieldKey || !targetFieldKey || draggedFieldKey === targetFieldKey) return;
+  const fields = orderedFormDesignFields();
+  const fromIndex = fields.findIndex((field) => field.fieldKey === draggedFieldKey);
+  const targetIndex = fields.findIndex((field) => field.fieldKey === targetFieldKey);
+  if (fromIndex < 0 || targetIndex < 0) return;
+  const source = fields[fromIndex];
+  const target = fields[targetIndex];
+  if (!isFormDesignFieldVisible(source) || !isFormDesignFieldVisible(target)) return;
+  if ((source.tableType === 'detail' || target.tableType === 'detail')
+      && (source.tableType !== target.tableType || source.detailTableName !== target.detailTableName)) return;
+  if (source.tableType !== 'detail') {
+    const layouts = readFormDesignLayouts();
+    const layout = layouts.draft[state.activeFormDesignType];
+    const destination = layout.sections.find((section) => section.fieldKeys.includes(targetFieldKey));
+    if (destination) {
+      layout.sections.forEach((section) => { section.fieldKeys = section.fieldKeys.filter((key) => key !== draggedFieldKey); });
+      destination.fieldKeys.push(draggedFieldKey);
+      writeFormDesignLayouts(layouts);
+    }
+  }
+  const nextFields = [...fields];
+  const [draggedField] = nextFields.splice(fromIndex, 1);
+  const adjustedTarget = nextFields.findIndex((field) => field.fieldKey === targetFieldKey);
+  nextFields.splice(adjustedTarget + (placement === 'after' ? 1 : 0), 0, draggedField);
+  state.selectedFormDesignFieldKey = draggedFieldKey;
+  updateFormDesignDraftOrder(state.activeFormDesignType, nextFields);
+  renderFormDesignDrawer();
+  announceFormDesign(`${draggedField.label} moved ${placement} ${fields[targetIndex].label}.`);
+}
+
+function announceFormDesign(message) {
+  const output = $('#formDesignAnnouncement');
+  if (output) requestAnimationFrame(() => { output.textContent = message; });
+}
+
+function modalSurfaceTitle(modal) {
+  return String(modal?.id || 'dialog')
+    .replace(/(Modal|Drawer|Prompt)$/i, '')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .trim() || 'Dialog';
+}
+
+function configureModalSurface(modal) {
+  const card = modalSurfaceCard(modal);
+  if (!card) return;
+  if (!card.hasAttribute('role')) card.setAttribute('role', modal.id === 'confirmationModal' ? 'alertdialog' : 'dialog');
+  card.setAttribute('aria-modal', 'true');
+  if (!card.hasAttribute('tabindex')) card.setAttribute('tabindex', '-1');
+
+  const heading = card.querySelector('h1, h2, h3');
+  if (heading) {
+    if (!heading.id) heading.id = `${modal.id || 'modal'}Title`;
+    card.setAttribute('aria-labelledby', heading.id);
+    card.removeAttribute('aria-label');
+  } else if (!card.hasAttribute('aria-label')) {
+    card.setAttribute('aria-label', modalSurfaceTitle(modal));
+  }
+
+  let description = card.querySelector('.modal-header p, :scope > p, .field-hint, .muted');
+  if (!description) {
+    description = document.createElement('p');
+    description.className = 'sr-only modal-generated-description';
+    description.textContent = card.matches('form')
+      ? `Complete the ${modalSurfaceTitle(modal)} form, then save or cancel.`
+      : `${modalSurfaceTitle(modal)} dialog.`;
+    card.prepend(description);
+  }
+  if (!description.id) description.id = `${modal.id || 'modal'}Description`;
+  card.setAttribute('aria-describedby', description.id);
+  modal.dataset.modalSurface = 'true';
+}
+
+function modalFocusableElements(modal) {
+  return Array.from(modal.querySelectorAll([
+    'a[href]',
+    'button:not([disabled])',
+    'input:not([disabled]):not([type="hidden"])',
+    'select:not([disabled])',
+    'textarea:not([disabled])',
+    '[tabindex]:not([tabindex="-1"])'
+  ].join(', '))).filter((element) => {
+    const style = getComputedStyle(element);
+    return !element.hidden && style.display !== 'none' && style.visibility !== 'hidden';
+  });
+}
+
+function topmostModalSurface() {
+  modalSurfaceStack = modalSurfaceStack.filter((modal) => modal.isConnected && !modal.hidden);
+  return modalSurfaceStack.at(-1) || $$('.modal-backdrop:not([hidden])').at(-1) || null;
+}
+
+function syncModalSurfaceState() {
+  const openModals = $$('.modal-backdrop:not([hidden])');
+  document.body.classList.toggle('modal-open', openModals.length > 0);
+  const topmost = topmostModalSurface();
+  openModals.forEach((modal) => {
+    const isTopmost = modal === topmost;
+    modal.setAttribute('aria-hidden', String(!isTopmost));
+    modal.inert = !isTopmost;
+  });
+}
+
+function focusModalSurface(modal) {
+  if (!modal) return;
+  requestAnimationFrame(() => {
+    if (!modal.isConnected || modal.hidden || modal.contains(document.activeElement)) return;
+    const preferred = modal.querySelector('[autofocus], [data-modal-initial-focus]');
+    (preferred || modalFocusableElements(modal)[0] || modalSurfaceCard(modal))?.focus();
+  });
+}
+
+function handleModalSurfaceOpened(modal) {
+  configureModalSurface(modal);
+  const opener = modalInteractionSource?.isConnected
+    ? modalInteractionSource
+    : (!modal.contains(document.activeElement) ? document.activeElement : null);
+  modalSurfaceState.set(modal, { opener });
+  modalSurfaceStack = modalSurfaceStack.filter((item) => item !== modal);
+  modalSurfaceStack.push(modal);
+  syncModalSurfaceState();
+  focusModalSurface(modal);
+}
+
+function handleModalSurfaceClosed(modal) {
+  const { opener } = modalSurfaceState.get(modal) || {};
+  modalSurfaceStack = modalSurfaceStack.filter((item) => item !== modal);
+  modal.removeAttribute('aria-hidden');
+  modal.inert = false;
+  syncModalSurfaceState();
+  requestAnimationFrame(() => {
+    if (opener?.isConnected && !opener.closest('[hidden]')) opener.focus();
+    else focusModalSurface(topmostModalSurface());
+  });
+}
+
+function requestModalSurfaceDismiss(modal) {
+  const dismissControl = modal.querySelector([
+    '[data-modal-dismiss]',
+    'button[id^="cancel"]',
+    'button[id^="close"]:not([data-modal-fullscreen])'
+  ].join(', '));
+  if (dismissControl) dismissControl.click();
+  else modal.hidden = true;
+}
+
+function trapModalSurfaceFocus(event, modal) {
+  const focusable = modalFocusableElements(modal);
+  if (!focusable.length) {
+    event.preventDefault();
+    modalSurfaceCard(modal)?.focus();
+    return;
+  }
+  const first = focusable[0];
+  const last = focusable.at(-1);
+  if (event.shiftKey && (document.activeElement === first || !modal.contains(document.activeElement))) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && (document.activeElement === last || !modal.contains(document.activeElement))) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function initializeModalSurfaces() {
+  const modals = $$('.modal-backdrop');
+  modals.forEach((modal) => {
+    modal.dataset.surfaceKind = 'modal';
+    configureModalSurface(modal);
+  });
+  const observer = new MutationObserver((records) => {
+    records.forEach(({ target }) => {
+      if (target.hidden) handleModalSurfaceClosed(target);
+      else handleModalSurfaceOpened(target);
+    });
+  });
+  modals.forEach((modal) => {
+    observer.observe(modal, { attributes: true, attributeFilter: ['hidden'] });
+    modal.addEventListener('click', (event) => {
+      if (event.target === modal && modal === topmostModalSurface()) requestModalSurfaceDismiss(modal);
+    });
+  });
+  document.addEventListener('click', (event) => {
+    const control = event.target.closest('button, a[href], input, select, textarea, [tabindex]');
+    if (control) modalInteractionSource = control;
+  }, true);
+  document.addEventListener('keydown', (event) => {
+    const modal = topmostModalSurface();
+    if (!modal) return;
+    if (event.key === 'Tab') trapModalSurfaceFocus(event, modal);
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      requestModalSurfaceDismiss(modal);
+    }
+  }, true);
+}
+
+function initializeParallelInspectors() {
+  $$('#menuConfigInspector, #actionFlowInspector, #workflowCanvasInspector, #dashboardWidgetInspector').forEach((inspector) => {
+    inspector.classList.add('parallel-inspector');
+    inspector.dataset.surfaceKind = 'parallel';
+    inspector.setAttribute('aria-modal', 'false');
+  });
+}
 
 function setModalFullscreen(modal, enabled) {
   const card = modal?.querySelector('.modal-card, .form-design-drawer, .version-history-drawer, .page-permission-drawer, .permission-audit-drawer, .api-connector-drawer, .api-interface-drawer, .dashboard-source-drawer');
@@ -1827,14 +2120,94 @@ function toggleModalFullscreen(button) {
   setModalFullscreen(modal, !card.classList.contains('is-fullscreen'));
 }
 
+const toastState = { timer: null, remaining: 4200, startedAt: 0 };
+
+function dismissToast() {
+  window.clearTimeout(toastState.timer);
+  toastState.timer = null;
+  $('#toast').hidden = true;
+}
+
+function scheduleToastDismiss(delay = 4200) {
+  window.clearTimeout(toastState.timer);
+  toastState.remaining = delay;
+  toastState.startedAt = Date.now();
+  toastState.timer = window.setTimeout(dismissToast, delay);
+}
+
+function pauseToastDismiss() {
+  if (!toastState.timer) return;
+  window.clearTimeout(toastState.timer);
+  toastState.timer = null;
+  toastState.remaining = Math.max(250, toastState.remaining - (Date.now() - toastState.startedAt));
+}
+
+function resumeToastDismiss() {
+  const element = $('#toast');
+  if (!element.hidden && !element.classList.contains('error') && !element.matches(':hover, :focus-within')) {
+    scheduleToastDismiss(toastState.remaining);
+  }
+}
+
+function activeFeedbackForm() {
+  return document.querySelector('form[aria-busy="true"]') || document.activeElement?.closest?.('form') || null;
+}
+
+function clearFormErrorSummary(form) {
+  form?.querySelector(':scope > .form-error-summary')?.remove();
+}
+
+function showFormErrorSummary(form, message) {
+  if (!form) return;
+  clearFormErrorSummary(form);
+  const summary = document.createElement('div');
+  summary.className = 'form-error-summary';
+  summary.setAttribute('role', 'alert');
+  summary.textContent = message;
+  form.prepend(summary);
+}
+
 function toast(message, type = 'ok') {
   const element = $('#toast');
-  element.textContent = message;
-  element.className = `toast ${type === 'error' ? 'error' : ''}`;
+  const isError = type === 'error';
+  const form = activeFeedbackForm();
+  window.clearTimeout(toastState.timer);
+  toastState.timer = null;
+  $('#toastMessage').textContent = message;
+  element.className = `toast ${isError ? 'error' : ''}`;
+  element.setAttribute('role', isError ? 'alert' : 'status');
+  element.setAttribute('aria-live', isError ? 'assertive' : 'polite');
+  element.setAttribute('aria-atomic', 'true');
   element.hidden = false;
-  setTimeout(() => {
-    element.hidden = true;
-  }, 4200);
+  $('#dismissToast').hidden = !isError;
+  if (isError) showFormErrorSummary(form, message);
+  else {
+    clearFormErrorSummary(form);
+    scheduleToastDismiss();
+  }
+}
+
+function clearFieldError(input) {
+  const errorId = input.dataset.validationErrorId;
+  if (errorId) document.getElementById(errorId)?.remove();
+  delete input.dataset.validationErrorId;
+  input.removeAttribute('aria-invalid');
+  const describedBy = (input.getAttribute('aria-describedby') || '').split(/\s+/).filter((id) => id && id !== errorId);
+  if (describedBy.length) input.setAttribute('aria-describedby', describedBy.join(' '));
+  else input.removeAttribute('aria-describedby');
+}
+
+function showFieldError(input) {
+  clearFieldError(input);
+  const id = `field-error-${input.id || input.name || Date.now()}`.replace(/[^a-zA-Z0-9_-]/g, '-');
+  const error = document.createElement('span');
+  error.id = id;
+  error.className = 'field-error';
+  error.textContent = input.validationMessage;
+  input.insertAdjacentElement('afterend', error);
+  input.dataset.validationErrorId = id;
+  input.setAttribute('aria-invalid', 'true');
+  input.setAttribute('aria-describedby', [input.getAttribute('aria-describedby'), id].filter(Boolean).join(' '));
 }
 
 function showSuccessPrompt(title, message) {
@@ -1886,6 +2259,38 @@ function renderNotifications() {
   $('#notificationList').innerHTML = state.notifications.map((item) => `<button type="button" class="notification-item ${item.read ? '' : 'is-unread'}" data-notification-id="${item.id}" data-notification-request="${escapeHtml(item.requestKey || '')}"><span class="notification-item-mark"></span><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.message)}</small><time>${escapeHtml(new Date(item.createdAt).toLocaleString())}</time></span></button>`).join('') || '<div class="notification-empty"><strong>You are all caught up</strong><span>Workflow updates will appear here automatically.</span></div>';
 }
 
+const floatingSurfaceTimers = new WeakMap();
+
+function positionAnchoredSurface(surface, trigger, container = trigger?.offsetParent) {
+  if (!surface || !trigger || !container) return;
+  const triggerBounds = trigger.getBoundingClientRect();
+  const surfaceBounds = surface.getBoundingClientRect();
+  const anchorX = triggerBounds.left + (triggerBounds.width / 2) - surfaceBounds.left;
+  surface.style.setProperty('--popover-origin-x', `${Math.round(anchorX)}px`);
+}
+
+function setFloatingSurfaceOpen(surface, trigger, open, options = {}) {
+  if (!surface) return;
+  clearTimeout(floatingSurfaceTimers.get(surface));
+  if (open) {
+    surface.hidden = false;
+    positionAnchoredSurface(surface, trigger, options.container);
+    surface.dataset.floatingState = 'closed';
+    requestAnimationFrame(() => {
+      if (!surface.hidden) surface.dataset.floatingState = 'open';
+    });
+    return;
+  }
+  surface.dataset.floatingState = 'closed';
+  const finish = () => {
+    surface.hidden = true;
+    delete surface.dataset.floatingState;
+    options.onClosed?.();
+  };
+  if (prefersReducedMotion()) finish();
+  else floatingSurfaceTimers.set(surface, setTimeout(finish, 160));
+}
+
 async function loadNotifications() {
   if (!state.user) return;
   const payload = await api(`/api/notifications?unread=${state.notificationUnreadOnly}&limit=50`);
@@ -1893,8 +2298,10 @@ async function loadNotifications() {
 }
 
 function toggleNotificationDrawer(force) {
-  const drawer = $('#notificationDrawer'); const open = force ?? drawer.hidden;
-  drawer.hidden = !open; $('#notificationBell').setAttribute('aria-expanded', String(open)); if (open) runWorkflowUi(loadNotifications);
+  const drawer = $('#notificationDrawer'); const bell = $('#notificationBell');
+  const open = force ?? bell.getAttribute('aria-expanded') !== 'true';
+  setFloatingSurfaceOpen(drawer, bell, open, { container: $('#notificationHub') });
+  bell.setAttribute('aria-expanded', String(open)); if (open) runWorkflowUi(loadNotifications);
 }
 
 async function openNotification(item) {
@@ -1959,11 +2366,12 @@ function closeConfirmationModal(confirmed = false) {
   resolve?.(confirmed);
 }
 
-function showConfirmationModal({ title = 'Confirm action', message = '', confirmLabel = 'Confirm' } = {}) {
+function showConfirmationModal({ title = 'Confirm action', message = '', confirmLabel = 'Confirm', cancelLabel = 'Cancel' } = {}) {
   if (confirmationResolver) closeConfirmationModal(false);
   $('#confirmationModalTitle').textContent = title;
   $('#confirmationModalMessage').textContent = message;
   $('#confirmModalAction').textContent = confirmLabel;
+  $('#cancelConfirmationModal').textContent = cancelLabel;
   $('#confirmationModal').hidden = false;
   document.body.classList.add('modal-open');
   return new Promise((resolve) => {
@@ -2498,6 +2906,43 @@ async function openBrowserLookup(button) {
   }
 }
 
+function hierarchyChildrenIndex(items, getParentKey) {
+  const childrenByParent = new Map();
+  items.forEach((item) => {
+    const parentKey = String(getParentKey(item) ?? '');
+    if (!childrenByParent.has(parentKey)) childrenByParent.set(parentKey, []);
+    childrenByParent.get(parentKey).push(item);
+  });
+  return childrenByParent;
+}
+
+function hierarchyPathKeys(items, selectedKeys, getKey, getParentKey) {
+  const itemsByKey = new Map(items.map((item) => [String(getKey(item)), item]));
+  const pathKeys = new Set();
+  (selectedKeys || []).forEach((selectedKey) => {
+    let current = itemsByKey.get(String(selectedKey));
+    const visited = new Set();
+    while (current && !visited.has(String(getKey(current)))) {
+      const key = String(getKey(current));
+      visited.add(key);
+      pathKeys.add(key);
+      const parentKey = getParentKey(current);
+      current = parentKey === null || parentKey === undefined || parentKey === '' ? null : itemsByKey.get(String(parentKey));
+    }
+  });
+  return pathKeys;
+}
+
+function hierarchyNodePathClasses(siblings, index, pathKeys, getKey) {
+  const key = String(getKey(siblings[index]));
+  const isPath = pathKeys.has(key);
+  const hasLaterPath = siblings.slice(index + 1).some((item) => pathKeys.has(String(getKey(item))));
+  return [
+    isPath ? 'is-hierarchy-path is-hierarchy-rail-entry' : '',
+    hasLaterPath ? 'is-hierarchy-rail-through' : ''
+  ].filter(Boolean).join(' ');
+}
+
 const actionFlowPaletteItems = [
   { category: 'record', type: 'add_record', label: 'Add record', icon: 'A', help: 'Create a new record' },
   { category: 'record', type: 'update_record', label: 'Update record', icon: 'U', help: 'Change fields on a record' },
@@ -2606,7 +3051,7 @@ function renderActionFlowManagement() {
 }
 
 function showActionFlowManagement() {
-  if (state.actionFlowDirty && !window.confirm('Leave the canvas without saving your changes?')) return;
+  if (deferBuilderLeave(['automation'], showActionFlowManagement)) return;
   state.actionFlowMode = 'management';
   state.selectedActionFlowNodeId = '';
   state.actionFlowDirty = false;
@@ -2617,6 +3062,7 @@ function showActionFlowManagement() {
 }
 
 function openActionFlowCanvas(flowKey) {
+  if (deferBuilderLeave(['automation'], () => openActionFlowCanvas(flowKey))) return;
   const flow = state.actionFlows.find((item) => item.flowKey === flowKey);
   if (!flow) return;
   state.activeActionFlowKey = flow.flowKey;
@@ -2627,6 +3073,7 @@ function openActionFlowCanvas(flowKey) {
   $('#actionFlowManagement').hidden = true;
   $('#actionFlowStudio').hidden = false;
   renderActionFlowStudio();
+  beginBuilderDraft('automation');
   requestAnimationFrame(() => {
     const viewport = $('#actionFlowCanvasViewport');
     if (viewport) viewport.scrollTo({ left: 100, top: 0 });
@@ -3550,6 +3997,7 @@ async function saveActiveActionFlow() {
   const index = state.actionFlows.findIndex((item) => item.flowKey === flow.flowKey);
   state.actionFlows[index] = result.flow;
   state.actionFlowDirty = false;
+  beginBuilderDraft('automation');
   renderActionFlowStudio();
   toast('Automation Flow Saved.');
 }
@@ -3656,6 +4104,7 @@ async function restoreActionFlowVersion(versionId, versionNumber) {
   $('#actionFlowVersionRemark').value = '';
   renderActionFlowVersions();
   renderActionFlowStudio();
+  beginBuilderDraft('automation');
   toast(`Version ${versionNumber} Restored As A New Draft.`);
 }
 
@@ -3759,7 +4208,166 @@ function fieldValidationRulesFromForm(form) {
   };
 }
 
+const builderDrafts = new Map();
+let builderLeavePending = false;
+
+function builderDraftAdapter(name) {
+  if (name === 'menu') return {
+    root: '#adminMenuConfigurationSection', label: 'Menu',
+    read: () => state.menuConfigDraft,
+    restore: value => { state.menuConfigDraft = value; renderMenuConfig(); }
+  };
+  if (name === 'automation') return {
+    root: '#actionFlowStudio', label: 'Automation flow',
+    read: () => { const flow = activeActionFlow(); return flow ? { definition: flow.definition, triggerType: flow.triggerType, triggerModule: flow.triggerModule } : null; },
+    restore: value => { Object.assign(activeActionFlow(), value); state.selectedActionFlowNodeId = ''; renderActionFlowStudio(); }
+  };
+  if (name === 'workflow') return {
+    root: '#workflowDefinitionForm', label: 'Workflow',
+    read: () => ({ graph: state.workflowBuilderGraph, stages: state.workflowDraftStages, fields: Array.from($('#workflowDefinitionForm').elements)
+      .filter(field => field.name && !field.closest('#workflowCanvasInspector'))
+      .map(field => [field.name, field.type === 'checkbox' ? field.checked : field.value]) }),
+    restore: value => {
+      state.workflowBuilderGraph = value.graph; state.workflowDraftStages = value.stages;
+      for (const [name, val] of value.fields) { const field = $('#workflowDefinitionForm').elements.namedItem(name); if (field) { if (field.type === 'checkbox') field.checked = val; else field.value = val; } }
+      state.selectedWorkflowNodeId = ''; state.selectedWorkflowEdgeId = ''; state.workflowConnectFrom = '';
+      renderWorkflowStages(); renderWorkflowCheck(null);
+    }
+  };
+  if (name === 'form') return {
+    root: '#formDesignDrawer', label: 'Form layout',
+    read: () => readFormDesignLayouts().draft,
+    restore: value => { const layouts = readFormDesignLayouts(); layouts.draft = value; writeFormDesignLayouts(layouts); renderFormDesignDrawer(); }
+  };
+  if (name === 'dashboard') return {
+    root: '#dashboardBuilderStudio', label: 'Dashboard',
+    read: () => state.dashboardConfiguration,
+    restore: value => { state.dashboardConfiguration = value; state.dashboardLayoutHistory = []; state.dashboardLayoutFuture = []; state.dashboardLayoutDirty = false; renderDashboardCanvas(); }
+  };
+}
+
+function beginBuilderDraft(name) {
+  const adapter = builderDraftAdapter(name);
+  builderDrafts.set(name, new DraftHistory(adapter.read()));
+  refreshBuilderDraftFeedback(name);
+}
+
+function markFormLayoutSaved() {
+  const history = builderDrafts.get('form');
+  if (!history) return beginBuilderDraft('form');
+  const current = builderDraftAdapter('form').read();
+  const saved = JSON.parse(history.saved);
+  saved[state.activeFormDesignType] = current[state.activeFormDesignType];
+  history.saved = JSON.stringify(saved);
+  history.current = JSON.stringify(current);
+  history.past = []; history.future = [];
+  refreshBuilderDraftFeedback('form');
+}
+
+function captureBuilderDraft(name) {
+  const history = builderDrafts.get(name);
+  if (!history) return;
+  history.record(builderDraftAdapter(name).read());
+  refreshBuilderDraftFeedback(name);
+}
+
+function refreshBuilderDraftFeedback(name) {
+  const history = builderDrafts.get(name);
+  if (!history) return;
+  $$(`[data-builder-history="${name}"]`).forEach(bar => {
+    bar.querySelector('[data-draft-undo]').disabled = !history.past.length;
+    bar.querySelector('[data-draft-redo]').disabled = !history.future.length;
+    const status = bar.querySelector('[data-draft-status]');
+    const text = history.dirty ? 'Unsaved changes' : 'No unsaved changes';
+    if (status.textContent !== text) status.textContent = text;
+    bar.classList.toggle('is-dirty', history.dirty);
+  });
+  if (name === 'automation') {
+    state.actionFlowDirty = history.dirty;
+    $('#saveActionFlowButton').disabled = !history.dirty;
+    $('#actionFlowSaveState').textContent = history.dirty ? 'Unsaved draft changes' : 'No unsaved changes';
+  }
+  if (name === 'dashboard') {
+    state.dashboardLayoutDirty = history.dirty;
+    $('#dashboardStudioSaveState').textContent = history.dirty ? 'Unsaved changes' : 'No unsaved changes';
+  }
+}
+
+function restoreBuilderHistory(name, redo = false) {
+  captureBuilderDraft(name);
+  const history = builderDrafts.get(name);
+  const value = redo ? history?.redo() : history?.undo();
+  if (!value) return;
+  builderDraftAdapter(name).restore(value);
+  refreshBuilderDraftFeedback(name);
+  $$(`[data-builder-history="${name}"] [data-draft-status]`).forEach(status => { status.textContent = `${redo ? 'Redone' : 'Undone'}. ${history.dirty ? 'Unsaved changes' : 'No unsaved changes'}`; });
+}
+
+function visibleDirtyBuilders(names = [...builderDrafts.keys()]) {
+  return names.filter(name => {
+    const root = $(builderDraftAdapter(name).root);
+    if (!root || root.closest('[hidden]')) return false;
+    captureBuilderDraft(name);
+    return builderDrafts.get(name)?.dirty;
+  });
+}
+
+// Keep navigation synchronous when clean. Dirty navigation is resumed only after
+// an explicit discard; cancelling does not mutate the draft or change selection.
+function deferBuilderLeave(names, proceed) {
+  const dirty = visibleDirtyBuilders(names);
+  if (!dirty.length) return false;
+  if (builderLeavePending) return true;
+  builderLeavePending = true;
+  showConfirmationModal({ title: 'Leave without saving?', message: `${dirty.map(name => builderDraftAdapter(name).label).join(', ')} has unsaved changes. Stay to save your work, or discard these draft changes. Published versions are unchanged.`, confirmLabel: 'Discard changes', cancelLabel: 'Keep editing' })
+    .then(discard => {
+      if (!discard) return;
+      for (const name of dirty) {
+        const history = builderDrafts.get(name);
+        const saved = JSON.parse(history.saved);
+        builderDraftAdapter(name).restore(saved);
+        history.markSaved(saved);
+        refreshBuilderDraftFeedback(name);
+      }
+      proceed();
+    }).finally(() => { builderLeavePending = false; });
+  return true;
+}
+
+function initializeBuilderDraftControls() {
+  document.addEventListener('click', event => {
+    const navigation = event.target.closest?.('[data-view], [data-module-view], .admin-section-button, [data-workflow-definition], #newWorkflowDefinitionButton, #emptyNewWorkflowDefinitionButton, [data-action-flow-key], [data-open-flow-canvas], [data-open-dashboard], [data-open-account-settings], #logoutButton');
+    if (navigation && deferBuilderLeave(undefined, () => navigation.click())) {
+      event.preventDefault(); event.stopImmediatePropagation();
+    }
+  }, true);
+  for (const [name, selector] of [['menu', '#menuConfigStatus'], ['automation', '.action-flow-context-toolbar'], ['workflow', '.workflow-definition-header'], ['workflow', '.workflow-canvas-toolbar'], ['form', '#formDesignDrawer .form-design-toolbar']]) {
+    const anchor = $(selector);
+    if (!anchor) continue;
+    const bar = document.createElement('div');
+    bar.className = 'builder-history-bar'; bar.dataset.builderHistory = name;
+    bar.innerHTML = '<button type="button" class="secondary" data-draft-undo disabled>Undo</button><button type="button" class="secondary" data-draft-redo disabled>Redo</button><span data-draft-status role="status" aria-live="polite">No unsaved changes</span>';
+    if (name === 'form' || name === 'automation' || selector === '.workflow-canvas-toolbar') anchor.append(bar);
+    else anchor.after(bar);
+    bar.addEventListener('click', event => { if (event.target.closest('[data-draft-undo], [data-draft-redo]')) restoreBuilderHistory(name, Boolean(event.target.closest('[data-draft-redo]'))); });
+  }
+  // Observe completed user transactions, not pointermove frames. Native input
+  // undo remains untouched; builder undo is an explicit toolbar action.
+  for (const type of ['click', 'change', 'input', 'pointerup', 'drop', 'keyup']) {
+    document.addEventListener(type, event => {
+      if (event.target.closest?.('[data-builder-history]')) return;
+      setTimeout(() => { if (!builderLeavePending) visibleDirtyBuilders(); }, 0);
+    }, true);
+  }
+  window.addEventListener('beforeunload', event => {
+    if (!visibleDirtyBuilders().length) return;
+    event.preventDefault(); event.returnValue = '';
+  });
+}
+
 function showView(id) {
+  if (id === 'loginView') builderDrafts.clear();
+  if (id !== 'loginView' && deferBuilderLeave(undefined, () => showView(id))) return;
   closeCustomerModal();
   closeImportModal();
   closeConfirmationModal(false);
@@ -3789,6 +4397,7 @@ function showView(id) {
   $$('.nav-button').forEach((button) => {
     button.classList.toggle('is-active', button.dataset.view === id && !button.dataset.moduleView);
   });
+  syncSidebarCurrentState();
   window.clearInterval(state.workflowMonitoringTimer);
   state.workflowMonitoringTimer = id === 'workflowMonitoringView'
     ? window.setInterval(() => runWorkflowUi(loadWorkflowMonitoring), 30000)
@@ -3796,7 +4405,9 @@ function showView(id) {
 }
 
 function showAdminSection(id) {
+  if (id !== state.activeAdminSection && deferBuilderLeave(undefined, () => showAdminSection(id))) return;
   state.activeAdminSection = id;
+  if (id !== 'adminDocumentTemplatesSection') document.body.classList.remove('document-designer-open');
   $$('.admin-section').forEach((section) => {
     section.hidden = section.id !== id;
   });
@@ -3838,6 +4449,38 @@ async function runWorkflowUi(action) {
   } catch (error) {
     toast(titleCaseMessage(error.message), 'error');
   }
+}
+
+function bindAsyncSubmit(form, handler) {
+  if (!form) return;
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (form.dataset.submitting === 'true') return;
+
+    const submitButton = event.submitter instanceof HTMLButtonElement
+      ? event.submitter
+      : form.querySelector('button[type="submit"], input[type="submit"]');
+    const wasDisabled = Boolean(submitButton?.disabled);
+    form.dataset.submitting = 'true';
+    form.setAttribute('aria-busy', 'true');
+    if (submitButton) {
+      submitButton.disabled = true;
+      submitButton.classList.add('is-busy');
+      submitButton.setAttribute('aria-busy', 'true');
+    }
+
+    try {
+      await handler(event);
+    } finally {
+      delete form.dataset.submitting;
+      form.removeAttribute('aria-busy');
+      if (submitButton?.isConnected) {
+        submitButton.disabled = wasDisabled;
+        submitButton.classList.remove('is-busy');
+        submitButton.removeAttribute('aria-busy');
+      }
+    }
+  });
 }
 
 function openWorkflowModal(id, focusSelector = 'input, select, textarea, button') {
@@ -4161,7 +4804,133 @@ function workflowEdgePath(from, to) {
   return `M ${start.x} ${start.y} C ${start.x + bend} ${start.y}, ${end.x - bend} ${end.y}, ${end.x} ${end.y}`;
 }
 
-function renderWorkflowCanvas() {
+function workflowRubberBand(value, minimum, maximum, dimension = 160) {
+  if (value >= minimum && value <= maximum) return value;
+  const boundary = value < minimum ? minimum : maximum;
+  const overshoot = value - boundary;
+  return boundary + ((overshoot * dimension * .55) / (dimension + (.55 * Math.abs(overshoot))));
+}
+
+function workflowDragPosition(drag, clientX, clientY) {
+  const canvas = $('#workflowCanvas');
+  const bounds = canvas.getBoundingClientRect();
+  const nodeWidth = drag.width / state.workflowCanvasZoom;
+  const nodeHeight = drag.height / state.workflowCanvasZoom;
+  const rawX = ((clientX - bounds.left) / state.workflowCanvasZoom) - drag.grabOffsetX;
+  const rawY = ((clientY - bounds.top) / state.workflowCanvasZoom) - drag.grabOffsetY;
+  return {
+    x: workflowRubberBand(rawX, 0, 1600 - nodeWidth),
+    y: workflowRubberBand(rawY, 0, 820 - nodeHeight),
+    maxX: 1600 - nodeWidth,
+    maxY: 820 - nodeHeight
+  };
+}
+
+function updateWorkflowConnectedEdges(nodeId, x, y) {
+  const graph = state.workflowBuilderGraph;
+  const draggedNode = graph.nodes.find((node) => node.id === nodeId);
+  if (!draggedNode) return;
+  graph.edges.filter((edge) => edge.from === nodeId || edge.to === nodeId).forEach((edge) => {
+    const group = $(`#workflowCanvas [data-workflow-edge-group="${CSS.escape(edge.id)}"]`);
+    if (!group) return;
+    const from = graph.nodes.find((node) => node.id === edge.from);
+    const to = graph.nodes.find((node) => node.id === edge.to);
+    if (!from || !to) return;
+    const previewFrom = from.id === nodeId ? { ...from, x, y } : from;
+    const previewTo = to.id === nodeId ? { ...to, x, y } : to;
+    const a = workflowNodeCenter(previewFrom);
+    const b = workflowNodeCenter(previewTo);
+    const middleX = (a.x + b.x) / 2;
+    const middleY = (a.y + b.y) / 2;
+    group.querySelector('path')?.setAttribute('d', workflowEdgePath(previewFrom, previewTo));
+    const circle = group.querySelector('circle');
+    const text = group.querySelector('text');
+    const label = group.querySelector('foreignObject');
+    circle?.setAttribute('cx', middleX); circle?.setAttribute('cy', middleY);
+    text?.setAttribute('x', middleX); text?.setAttribute('y', middleY + 3);
+    label?.setAttribute('x', middleX - 46); label?.setAttribute('y', middleY + 16);
+  });
+}
+
+function renderWorkflowDragFrame() {
+  state.workflowCanvasDragFrame = null;
+  const drag = state.workflowCanvasDrag;
+  if (!drag?.dragging) return;
+  const button = $(`#workflowCanvas [data-workflow-node-id="${CSS.escape(drag.nodeId)}"]`);
+  if (!button) return;
+  button.classList.add('is-dragging');
+  button.style.transform = `translate3d(${drag.previewX - drag.x}px, ${drag.previewY - drag.y}px, 0)`;
+  updateWorkflowConnectedEdges(drag.nodeId, drag.previewX, drag.previewY);
+}
+
+function queueWorkflowDragFrame() {
+  if (!state.workflowCanvasDragFrame) state.workflowCanvasDragFrame = requestAnimationFrame(renderWorkflowDragFrame);
+}
+
+function finishWorkflowCanvasInteraction(event) {
+  const drag = state.workflowCanvasDrag;
+  if (drag && (!event || event.pointerId === drag.pointerId)) {
+    if (state.workflowCanvasDragFrame) cancelAnimationFrame(state.workflowCanvasDragFrame);
+    state.workflowCanvasDragFrame = null;
+    if (drag.dragging) {
+      const node = state.workflowBuilderGraph.nodes.find((item) => item.id === drag.nodeId);
+      if (node) {
+        node.x = Math.round(Math.min(drag.maxX, Math.max(0, drag.previewX)));
+        node.y = Math.round(Math.min(drag.maxY, Math.max(0, drag.previewY)));
+      }
+      state.workflowCanvasSuppressClick = true;
+      renderWorkflowCanvas();
+    }
+    state.workflowCanvasDrag = null;
+  }
+  state.workflowCanvasPan = null;
+  $('#workflowCanvasViewport')?.classList.remove('is-panning');
+}
+
+function announceWorkflowCanvas(message) {
+  const status = $('#workflowCanvasAnnouncement');
+  if (!status) return;
+  status.textContent = '';
+  requestAnimationFrame(() => { status.textContent = message; });
+}
+
+function workflowNodeAccessibleLabel(node, label) {
+  const position = `${Math.round(Number(node.x))} pixels from left, ${Math.round(Number(node.y))} pixels from top`;
+  return `${label}, ${titleCaseMessage(node.type)} node, ${position}. Use arrow keys to move, Enter to select${node.type === 'start' ? '' : ', or Delete to remove'}.`;
+}
+
+function moveWorkflowNodeByKeyboard(nodeId, key, accelerated = false) {
+  const node = state.workflowBuilderGraph.nodes.find((item) => item.id === nodeId);
+  if (!node) return;
+  const step = accelerated ? 20 : 5;
+  const delta = { ArrowUp: [0, -step], ArrowDown: [0, step], ArrowLeft: [-step, 0], ArrowRight: [step, 0] }[key];
+  if (!delta) return;
+  node.x = Math.round(Math.min(1600 - 184, Math.max(0, Number(node.x) + delta[0])));
+  node.y = Math.round(Math.min(820 - 88, Math.max(0, Number(node.y) + delta[1])));
+  state.selectedWorkflowNodeId = node.id;
+  state.selectedWorkflowEdgeId = '';
+  const stage = workflowStageForNode(node);
+  const label = stage?.name || node.label || titleCaseMessage(node.type);
+  renderWorkflowCanvas(node.id);
+  announceWorkflowCanvas(`${label} moved to ${node.x} pixels from left and ${node.y} pixels from top.`);
+}
+
+function cancelWorkflowCanvasMode() {
+  const wasConnecting = Boolean(state.workflowConnectFrom);
+  const wasDragging = Boolean(state.workflowCanvasDrag || state.workflowCanvasPan);
+  if (!wasConnecting && !wasDragging) return false;
+  state.workflowConnectFrom = '';
+  if (state.workflowCanvasDragFrame) cancelAnimationFrame(state.workflowCanvasDragFrame);
+  state.workflowCanvasDragFrame = null;
+  state.workflowCanvasDrag = null;
+  state.workflowCanvasPan = null;
+  $('#workflowCanvasViewport')?.classList.remove('is-panning');
+  renderWorkflowCanvas(state.selectedWorkflowNodeId);
+  announceWorkflowCanvas(wasConnecting ? 'Connection cancelled.' : 'Movement cancelled.');
+  return true;
+}
+
+function renderWorkflowCanvas(focusNodeId = '') {
   const canvas = $('#workflowCanvas');
   if (!canvas) return;
   const graph = state.workflowBuilderGraph;
@@ -4173,23 +4942,25 @@ function renderWorkflowCanvas() {
     const b = workflowNodeCenter(to);
     const x = (a.x + b.x) / 2;
     const y = (a.y + b.y) / 2;
-    return `<g class="workflow-canvas-edge ${state.selectedWorkflowEdgeId === edge.id ? 'is-selected' : ''}"><path d="${workflowEdgePath(from, to)}"></path><circle cx="${x}" cy="${y}" r="12"></circle><text x="${x}" y="${y + 3}">›</text><foreignObject x="${x - 46}" y="${y + 16}" width="92" height="26"><button type="button" data-workflow-edge-id="${escapeHtml(edge.id)}">${escapeHtml(edge.label || edge.outcome || 'Continue')}</button></foreignObject></g>`;
+    return `<g class="workflow-canvas-edge ${state.selectedWorkflowEdgeId === edge.id ? 'is-selected' : ''}" data-workflow-edge-group="${escapeHtml(edge.id)}"><path d="${workflowEdgePath(from, to)}"></path><circle cx="${x}" cy="${y}" r="12"></circle><text x="${x}" y="${y + 3}">›</text><foreignObject x="${x - 46}" y="${y + 16}" width="92" height="26"><button type="button" data-workflow-edge-id="${escapeHtml(edge.id)}">${escapeHtml(edge.label || edge.outcome || 'Continue')}</button></foreignObject></g>`;
   }).join('');
   const nodes = graph.nodes.map((node) => {
     const stage = workflowStageForNode(node);
     const label = stage?.name || node.label || titleCaseMessage(node.type);
     const detail = stage ? (stage.condition ? 'Conditional approval' : 'All approvers') : (node.type === 'start' ? 'Request enters here' : 'Route finishes here');
-    return `<button type="button" class="workflow-canvas-node is-${node.type} ${state.selectedWorkflowNodeId === node.id ? 'is-selected' : ''} ${state.workflowConnectFrom === node.id ? 'is-connecting' : ''}" data-workflow-node-id="${escapeHtml(node.id)}" style="left:${Number(node.x)}px;top:${Number(node.y)}px"><span class="workflow-node-glyph">${node.type === 'start' ? 'S' : node.type === 'end' ? 'E' : 'A'}</span><span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(detail)}</small></span><i></i></button>`;
+    return `<button type="button" class="workflow-canvas-node is-${node.type} ${state.selectedWorkflowNodeId === node.id ? 'is-selected' : ''} ${state.workflowConnectFrom === node.id ? 'is-connecting' : ''}" data-workflow-node-id="${escapeHtml(node.id)}" aria-label="${escapeHtml(workflowNodeAccessibleLabel(node, label))}" aria-describedby="workflowKeyboardHelp" style="left:${Number(node.x)}px;top:${Number(node.y)}px"><span class="workflow-node-glyph">${node.type === 'start' ? 'S' : node.type === 'end' ? 'E' : 'A'}</span><span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(detail)}</small></span><i></i></button>`;
   }).join('');
   canvas.style.transform = `scale(${state.workflowCanvasZoom})`;
   canvas.innerHTML = `<svg class="workflow-canvas-edges" width="1600" height="820" viewBox="0 0 1600 820">${edges}</svg>${nodes}`;
   $('#workflowZoomLabel').textContent = `${Math.round(state.workflowCanvasZoom * 100)}%`;
   $('#workflowConnectButton').classList.toggle('is-active', Boolean(state.workflowConnectFrom));
+  $('#workflowConnectButton').setAttribute('aria-pressed', String(Boolean(state.workflowConnectFrom)));
   $('#workflowCanvasSaveState').textContent = state.workflowConnectFrom ? 'Choose a destination node' : `${state.workflowDraftStages.length} approval stage${state.workflowDraftStages.length === 1 ? '' : 's'}`;
   $('#workflowRouteStageCount').textContent = String(state.workflowDraftStages.length);
   $('#workflowRouteConnectionCount').textContent = String(graph.edges.length);
   $('#workflowRouteConditionCount').textContent = String(graph.edges.filter((edge) => edge.condition?.rules?.length).length);
   renderWorkflowCanvasInspector();
+  if (focusNodeId) requestAnimationFrame(() => $(`#workflowCanvas [data-workflow-node-id="${CSS.escape(focusNodeId)}"]`)?.focus());
 }
 
 function setWorkflowInspectorCollapsed(collapsed) {
@@ -4339,16 +5110,48 @@ function renderWorkflowEdgeCondition(edge) {
   return `<div class="workflow-inspector-section workflow-edge-condition-builder"><span>${edge.outcome === 'condition_met' ? 'Continue when' : 'Continue when not'}</span><div class="workflow-condition-match"><small>Match</small><div><button type="button" data-workflow-edge-condition-group="all" class="${condition.group !== 'any' ? 'is-active' : ''}">All rules</button><button type="button" data-workflow-edge-condition-group="any" class="${condition.group === 'any' ? 'is-active' : ''}">Any rule</button></div></div>${rows}<button type="button" class="secondary" data-add-workflow-edge-condition>+ Add rule</button><p class="muted">${edge.outcome === 'condition_met' ? 'This line matches when the configured rules pass.' : 'This line matches when the configured rules do not pass.'}</p></div>`;
 }
 
+const workflowAttachmentFileTypes = [
+  { value: 'application/pdf', label: 'PDF', extension: '.pdf' },
+  { value: 'image/jpeg', label: 'JPG / JPEG image', extension: '.jpg, .jpeg' },
+  { value: 'image/png', label: 'PNG image', extension: '.png' },
+  { value: 'text/plain', label: 'Plain text', extension: '.txt' },
+  { value: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', label: 'Word document', extension: '.docx' },
+  { value: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', label: 'Excel spreadsheet', extension: '.xlsx' }
+];
+
+function workflowAttachmentTypeSummary(count) {
+  return count === 1 ? '1 file type selected' : `${count} file types selected`;
+}
+
+function renderWorkflowAttachmentTypePicker(selectedTypes = []) {
+  const selected = new Set(selectedTypes);
+  const known = new Set(workflowAttachmentFileTypes.map((type) => type.value));
+  const legacyTypes = selectedTypes.filter((type) => !known.has(type));
+  const options = [
+    ...workflowAttachmentFileTypes,
+    ...legacyTypes.map((value) => ({ value, label: 'Previously configured type', extension: value }))
+  ];
+  return `<div class="workflow-file-type-field"><span>Allowed file types</span><details class="workflow-file-type-picker"><summary><span data-workflow-file-type-summary>${workflowAttachmentTypeSummary(selected.size)}</span><i aria-hidden="true">⌄</i></summary><div class="workflow-file-type-options" role="group" aria-label="Allowed file types">${options.map((type) => `<label><input type="checkbox" data-workflow-node-field="attachmentType:${escapeHtml(type.value)}" ${selected.has(type.value) ? 'checked' : ''}><span><strong>${escapeHtml(type.label)}</strong><small>${escapeHtml(type.extension)}</small></span></label>`).join('')}</div></details><small>Choose one or more file types people can upload.</small></div>`;
+}
+
+function syncWorkflowAttachmentTypeSummary(target) {
+  const field = target.closest('.workflow-file-type-field');
+  const summary = field?.querySelector('[data-workflow-file-type-summary]');
+  const count = field?.querySelectorAll('[data-workflow-node-field^="attachmentType:"]:checked').length || 0;
+  if (summary) summary.textContent = workflowAttachmentTypeSummary(count);
+}
+
 function renderWorkflowAttachmentPolicy(policy = {}, nodeType = 'approval') {
   const current = {
     mode: policy.mode || 'disabled',
     allowedTypes: policy.allowedTypes?.length ? policy.allowedTypes : ['application/pdf', 'image/jpeg', 'image/png'],
     maxFileSize: Number(policy.maxFileSize) || 5242880,
     maxFileCount: Number(policy.maxFileCount) || 3,
-    actions: policy.actions?.length ? policy.actions : (nodeType === 'start' ? ['submission'] : ['approval', 'rejection', 'return'])
+    actions: policy.actions?.length ? policy.actions : (nodeType === 'start' ? ['submission'] : ['approval', 'rejection', 'return']),
+    malwareScanRequired: Boolean(policy.malwareScanRequired)
   };
   const actions = nodeType === 'start' ? [['submission', 'Submission']] : [['approval', 'Approval'], ['rejection', 'Rejection'], ['return', 'Return']];
-  return `<div class="workflow-inspector-section"><span>Attachments</span><label>Requirement<select data-workflow-node-field="attachmentMode"><option value="disabled" ${current.mode === 'disabled' ? 'selected' : ''}>Disabled</option><option value="optional" ${current.mode === 'optional' ? 'selected' : ''}>Optional</option><option value="required" ${current.mode === 'required' ? 'selected' : ''}>Required</option></select></label>${workflowInspectorInput('Allowed MIME types', 'attachmentTypes', current.allowedTypes.join(', '))}${workflowInspectorInput('Maximum size (MB)', 'attachmentMaxSizeMb', Math.max(1, Math.round(current.maxFileSize / 1048576)), 'number', 'min="1" max="25"')}${workflowInspectorInput('Maximum files', 'attachmentMaxCount', current.maxFileCount, 'number', 'min="1" max="20"')}<div class="workflow-stage-switches">${actions.map(([value, label]) => `<label class="checkbox-label"><input type="checkbox" data-workflow-node-field="attachmentAction:${value}" ${current.actions.includes(value) ? 'checked' : ''}> ${label}</label>`).join('')}<label class="checkbox-label"><input type="checkbox" data-workflow-node-field="attachmentMalwareScan" ${current.malwareScanRequired ? 'checked' : ''}> Require malware scan before accepting files</label></div><p class="muted">Scanning uses the configured ClamAV service and fails closed. Files are never downloadable unless clean.</p></div>`;
+  return `<div class="workflow-inspector-section"><span>File upload rules</span><p class="muted workflow-upload-rules-intro">These rules apply to Attachment fields in the selected form.</p>${renderWorkflowAttachmentTypePicker(current.allowedTypes)}${workflowInspectorInput('Maximum size per file (MB)', 'attachmentMaxSizeMb', Math.max(1, Math.round(current.maxFileSize / 1048576)), 'number', 'min="1" max="25"')}${workflowInspectorInput('Maximum files per action', 'attachmentMaxCount', current.maxFileCount, 'number', 'min="1" max="20"')}<label>Additional supporting files<select data-workflow-node-field="attachmentMode"><option value="disabled" ${current.mode === 'disabled' ? 'selected' : ''}>Do not allow</option><option value="optional" ${current.mode === 'optional' ? 'selected' : ''}>Allow, optional</option><option value="required" ${current.mode === 'required' ? 'selected' : ''}>Allow, required</option></select><small>Shows a separate upload area for files not requested by the form.</small></label><div class="workflow-stage-switches">${current.mode === 'disabled' ? '' : actions.map(([value, label]) => `<label class="checkbox-label"><input type="checkbox" data-workflow-node-field="attachmentAction:${value}" ${current.actions.includes(value) ? 'checked' : ''}> Allow additional files on ${label.toLowerCase()}</label>`).join('')}<label class="checkbox-label"><input type="checkbox" data-workflow-node-field="attachmentMalwareScan" ${current.malwareScanRequired ? 'checked' : ''}> Require malware scan before accepting files</label></div><p class="muted">Scanning uses the configured ClamAV service and fails closed. Files are never downloadable unless clean.</p></div>`;
 }
 
 function renderWorkflowCanvasInspector() {
@@ -4422,17 +5225,23 @@ function connectWorkflowNodes(fromId, toId) {
   state.selectedWorkflowNodeId = '';
   state.selectedWorkflowEdgeId = edge.id;
   renderWorkflowCanvas();
+  const fromLabel = workflowStageForNode(from)?.name || from?.label || titleCaseMessage(from?.type || 'source');
+  const to = state.workflowBuilderGraph.nodes.find((node) => node.id === toId);
+  const toLabel = workflowStageForNode(to)?.name || to?.label || titleCaseMessage(to?.type || 'destination');
+  announceWorkflowCanvas(`Connected ${fromLabel} to ${toLabel}.`);
 }
 
 function removeSelectedWorkflowNode() {
   const id = state.selectedWorkflowNodeId;
   const node = state.workflowBuilderGraph.nodes.find((item) => item.id === id);
   if (!node || node.type === 'start') return;
+  const label = workflowStageForNode(node)?.name || node.label || titleCaseMessage(node.type);
   if (node.type === 'approval') state.workflowDraftStages = state.workflowDraftStages.filter((stage) => stage.stageKey !== node.stageKey);
   state.workflowBuilderGraph.nodes = state.workflowBuilderGraph.nodes.filter((item) => item.id !== id);
   state.workflowBuilderGraph.edges = state.workflowBuilderGraph.edges.filter((edge) => edge.from !== id && edge.to !== id);
   state.selectedWorkflowNodeId = '';
   renderWorkflowCanvas();
+  announceWorkflowCanvas(`${label} removed from the workflow.`);
 }
 
 function updateWorkflowInspectorField(field, target) {
@@ -4457,7 +5266,14 @@ function updateWorkflowInspectorField(field, target) {
     attachmentOwner.attachmentPolicy ||= { mode: 'disabled', allowedTypes: [], maxFileSize: 5242880, maxFileCount: 3, actions: [] };
     const policy = attachmentOwner.attachmentPolicy;
     if (field === 'attachmentMode') policy.mode = target.value;
-    if (field === 'attachmentTypes') policy.allowedTypes = target.value.split(',').map((value) => value.trim().toLowerCase()).filter(Boolean);
+    if (field.startsWith('attachmentType:')) {
+      const contentType = field.slice('attachmentType:'.length).trim().toLowerCase();
+      const allowedTypes = new Set(policy.allowedTypes || []);
+      target.checked ? allowedTypes.add(contentType) : allowedTypes.delete(contentType);
+      policy.allowedTypes = [...allowedTypes];
+      syncWorkflowAttachmentTypeSummary(target);
+      return;
+    }
     if (field === 'attachmentMaxSizeMb') policy.maxFileSize = Math.min(25, Math.max(1, Number(target.value) || 5)) * 1024 * 1024;
     if (field === 'attachmentMaxCount') policy.maxFileCount = Math.min(20, Math.max(1, Number(target.value) || 3));
     if (field === 'attachmentMalwareScan') policy.malwareScanRequired = target.checked;
@@ -4546,7 +5362,7 @@ function fitWorkflowCanvas() {
   const maxY = Math.max(...nodes.map((node) => Number(node.y) + 88));
   state.workflowCanvasZoom = Math.min(1.2, Math.max(.45, Math.min((viewport.clientWidth - 80) / (maxX - minX), (viewport.clientHeight - 80) / (maxY - minY))));
   renderWorkflowCanvas();
-  requestAnimationFrame(() => viewport.scrollTo({ left: Math.max(0, (minX * state.workflowCanvasZoom) - 40), top: Math.max(0, (minY * state.workflowCanvasZoom) - 40), behavior: 'smooth' }));
+  requestAnimationFrame(() => viewport.scrollTo({ left: Math.max(0, (minX * state.workflowCanvasZoom) - 40), top: Math.max(0, (minY * state.workflowCanvasZoom) - 40), behavior: preferredScrollBehavior() }));
 }
 
 function activeWorkflowDefinition() {
@@ -4596,7 +5412,9 @@ function showWorkflowDefinition(definition) {
   $('#saveWorkflowDefinitionButton').disabled = definition?.status === 'archived';
   renderWorkflowStages();
   renderWorkflowLinkedAutomationFlows(definition);
+  renderWorkflowDocumentOutput(definition);
   renderWorkflowCheck(null);
+  beginBuilderDraft('workflow');
 }
 
 function renderWorkflowLinkedAutomationFlows(definition = activeWorkflowDefinition()) {
@@ -4614,6 +5432,80 @@ function renderWorkflowLinkedAutomationFlows(definition = activeWorkflowDefiniti
   }).join('') || '<div class="empty-state"><p>No Automation Flow is linked yet. In Automation Flow, choose “When an approval workflow event occurs”.</p></div>';
 }
 
+function workflowCheckNodeLabel(node) {
+  if (!node) return 'Workflow item';
+  const stage = workflowStageForNode(node);
+  return stage?.name || node.label || (node.type === 'start' ? 'Start' : node.type === 'end' ? 'End' : 'Approval step');
+}
+
+function workflowCheckFindingContext(finding) {
+  const path = String(finding.path || '');
+  const graph = state.workflowBuilderGraph;
+  const indexedNode = path.match(/builderGraph\.nodes\[(\d+)\]/);
+  const identifiedNode = path.match(/builderGraph\.nodes\.([^\.]+)/);
+  const indexedEdge = path.match(/builderGraph\.edges\[(\d+)\]/);
+  const indexedStage = path.match(/stages\[(\d+)\]/);
+  let node = indexedNode ? graph.nodes[Number(indexedNode[1])] : null;
+  if (!node && identifiedNode) node = graph.nodes.find((item) => item.id === identifiedNode[1]);
+  if (!node && indexedStage) {
+    const stage = state.workflowDraftStages[Number(indexedStage[1])];
+    node = graph.nodes.find((item) => item.stageKey === stage?.stageKey);
+  }
+  const edge = indexedEdge ? graph.edges[Number(indexedEdge[1])] : null;
+  return { node, edge };
+}
+
+function workflowCheckPlainText(value, context) {
+  let text = String(value || '').replace(/_/g, ' ');
+  for (const node of state.workflowBuilderGraph.nodes) text = text.split(node.id).join(workflowCheckNodeLabel(node));
+  if (context.node) text = text.split(context.node.id).join(workflowCheckNodeLabel(context.node));
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function workflowCheckFindingView(finding) {
+  const context = workflowCheckFindingContext(finding);
+  const code = String(finding.code || '');
+  const nodeLabel = workflowCheckNodeLabel(context.node);
+  const edgeLabel = context.edge
+    ? `${workflowCheckNodeLabel(state.workflowBuilderGraph.nodes.find((node) => node.id === context.edge.from))} to ${workflowCheckNodeLabel(state.workflowBuilderGraph.nodes.find((node) => node.id === context.edge.to))}`
+    : 'connection';
+  const views = {
+    WORKFLOW_CONFIG_ATTACHMENT_TYPES_REQUIRED: { title: `Choose allowed file types for ${nodeLabel}`, detail: 'Select at least one file type people can upload.', action: 'Review upload rules' },
+    WORKFLOW_CONFIG_ATTACHMENT_COUNT_INVALID: { title: `Check the file limit for ${nodeLabel}`, detail: 'Choose how many files people may upload at once.', action: 'Review upload rules' },
+    WORKFLOW_CONFIG_ATTACHMENT_SIZE_INVALID: { title: `Check the file-size limit for ${nodeLabel}`, detail: 'Choose a supported maximum size for each uploaded file.', action: 'Review upload rules' },
+    WORKFLOW_CONFIG_ATTACHMENT_ACTION_REQUIRED: { title: `Choose when ${nodeLabel} accepts extra files`, detail: 'Select at least one action where supporting files may be added.', action: 'Review upload rules' },
+    WORKFLOW_CONFIG_ROUTE_START_INCOMING: { title: 'Remove the connection entering Start', detail: `The ${edgeLabel} connection points into Start, which must always be the first step.`, action: 'Show connection' },
+    WORKFLOW_CONFIG_ROUTE_END_OUTGOING: { title: 'Remove the connection leaving End', detail: `The ${edgeLabel} connection continues after End, which must always be the last step.`, action: 'Show connection' },
+    WORKFLOW_CONFIG_ROUTE_BRANCH_AMBIGUOUS: { title: `Fix routes leaving ${nodeLabel}`, detail: 'Use one normal route, or matching “Condition met” and “Condition not met” routes.', action: 'Review routes' },
+    WORKFLOW_CONFIG_ROUTE_BRANCH_INCOMPLETE: { title: `Complete the condition routes for ${nodeLabel}`, detail: 'Add the matching opposite route so every condition has a clear outcome.', action: 'Review routes' },
+    WORKFLOW_CONFIG_ROUTE_NODE_UNREACHABLE: { title: `Connect ${nodeLabel} to the workflow`, detail: `${nodeLabel} cannot currently be reached from Start. Connect it to the route or remove it.`, action: 'Show node' },
+    WORKFLOW_CONFIG_ROUTE_OUTGOING_REQUIRED: { title: `Choose what follows ${nodeLabel}`, detail: `Connect ${nodeLabel} to an Approval or End step.`, action: 'Show node' },
+    WORKFLOW_CONFIG_APPROVER_REQUIRED: { title: `Choose an approver for ${nodeLabel}`, detail: 'Select at least one user, role, department, or reporting manager.', action: 'Choose approver' }
+  };
+  const configured = views[code];
+  const title = configured?.title || workflowCheckPlainText(finding.message, context) || 'Review this workflow setting';
+  const detail = configured?.detail || workflowCheckPlainText(finding.remediation, context) || 'Open the related setting and review its configuration.';
+  const targetType = context.edge ? 'edge' : context.node ? 'node' : '';
+  return { title, detail, action: configured?.action || (targetType ? 'Review setting' : ''), targetType, targetId: context.edge?.id || context.node?.id || '' };
+}
+
+function openWorkflowCheckTarget(button) {
+  const { workflowCheckTargetType: type, workflowCheckTargetId: id } = button.dataset;
+  if (type === 'edge') {
+    state.selectedWorkflowEdgeId = id;
+    state.selectedWorkflowNodeId = '';
+  } else if (type === 'node') {
+    state.selectedWorkflowNodeId = id;
+    state.selectedWorkflowEdgeId = '';
+  } else return;
+  openWorkflowRouteDesigner();
+  renderWorkflowCanvas(type === 'node' ? id : '');
+  requestAnimationFrame(() => {
+    if (type === 'edge') $(`#workflowCanvas [data-workflow-edge-id="${CSS.escape(id)}"]`)?.focus();
+    else $(`#workflowCanvas [data-workflow-node-id="${CSS.escape(id)}"]`)?.focus();
+  });
+}
+
 function renderWorkflowCheck(check) {
   const panel = $('#workflowCheckPanel');
   if (!check) {
@@ -4623,7 +5515,679 @@ function renderWorkflowCheck(check) {
   }
   panel.hidden = false;
   panel.className = `workflow-check-panel ${check.valid ? 'is-valid' : 'is-invalid'}`;
-  panel.innerHTML = `<div class="workflow-check-heading"><div><strong>${check.valid ? 'Ready to publish' : `${check.errors?.length || 0} issue${check.errors?.length === 1 ? '' : 's'} need attention`}</strong><p>${check.valid ? 'The configured route passed all publishing checks.' : 'Resolve every blocking finding, save the draft, then check again.'}</p></div><span>${check.valid ? '✓' : '!'}</span></div>${(check.findings || []).map((finding) => `<article><code>${escapeHtml(finding.path || finding.code)}</code><div><strong>${escapeHtml(finding.message)}</strong><p>${escapeHtml(finding.remediation || '')}</p></div></article>`).join('')}`;
+  const findings = (check.findings || []).map(workflowCheckFindingView);
+  panel.innerHTML = `<div class="workflow-check-heading"><div><span class="workflow-check-eyebrow">Workflow health check</span><strong>${check.valid ? 'Ready to publish' : `${check.errors?.length || 0} item${check.errors?.length === 1 ? '' : 's'} to fix before publishing`}</strong><p>${check.valid ? 'This workflow passed all publishing checks.' : 'Work through each item below, then check the workflow again.'}</p></div><div class="workflow-check-heading-actions"><button type="button" class="secondary" data-check-workflow-again>Check again</button><span class="workflow-check-result-icon" aria-hidden="true">${check.valid ? '✓' : '!'}</span></div></div>${findings.length ? `<div class="workflow-check-list">${findings.map((finding, index) => `<article><span class="workflow-check-number" aria-hidden="true">${index + 1}</span><div><span class="workflow-check-severity">Must fix</span><strong>${escapeHtml(finding.title)}</strong><p>${escapeHtml(finding.detail)}</p></div>${finding.action ? `<button type="button" class="secondary workflow-check-action" data-workflow-check-target-type="${escapeHtml(finding.targetType)}" data-workflow-check-target-id="${escapeHtml(finding.targetId)}">${escapeHtml(finding.action)} <span aria-hidden="true">→</span></button>` : ''}</article>`).join('')}</div>` : ''}`;
+}
+
+const documentTemplateStorageKey = 'crm:document-templates:prototype:v1';
+const workflowDocumentStorageKey = 'crm:workflow-document-output:prototype:v1';
+const documentPageSizesCm = { A4: { portrait: { width: 21, height: 29.7 }, landscape: { width: 29.7, height: 21 } } };
+const documentMinimumContentCm = { horizontal: 3, vertical: 5 };
+const prototypeDocumentContexts = [{ key: 'procurement_requests', name: 'Procurement requests · sample data', fields: [['Company', 'record.company'], ['Contact', 'record.contact'], ['Description', 'record.items.description'], ['Quantity', 'record.items.quantity'], ['Unit price', 'record.items.unit_price'], ['Amount', 'record.items.amount']] }];
+
+function documentId(prefix = 'block') {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function documentText(content, options = {}) {
+  return { id: documentId('text'), type: 'text', content, column: options.column || 1, leftIndent: options.leftIndent || 0, rightIndent: options.rightIndent || 0, alignment: options.alignment || 'left', fontSize: options.fontSize || 11, fontWeight: options.fontWeight || '400', padding: options.padding ?? 4 };
+}
+
+function documentField(label, binding, options = {}) {
+  return { id: documentId('field'), type: 'field', label, binding, column: options.column || 1, leftIndent: options.leftIndent || 0, rightIndent: options.rightIndent || 0, alignment: options.alignment || 'left', fontSize: options.fontSize || 11, fontWeight: options.fontWeight || '600', padding: options.padding ?? 3 };
+}
+
+function documentTable(columns = 3, rows = 3) {
+  const safeColumns = Math.min(12, Math.max(2, Number(columns) || 3));
+  const equalWidth = Number((100 / safeColumns).toFixed(3));
+  return {
+    id: documentId('table'), type: 'table', printableBorders: true, repeatingSource: '',
+    width: 100,
+    columns: Array.from({ length: safeColumns }, (_, index) => ({ id: documentId('col'), width: Number((index === safeColumns - 1 ? 100 - (equalWidth * index) : equalWidth).toFixed(3)), label: `Column ${index + 1}` })),
+    rows: Array.from({ length: rows }, (_, rowIndex) => ({ id: documentId('row'), heightCm: .9, repeat: rowIndex === 1, cells: Array.from({ length: safeColumns }, (_, columnIndex) => ({ id: documentId('cell'), content: rowIndex === 0 ? `Column ${columnIndex + 1}` : '', binding: '', alignment: columnIndex ? 'right' : 'left', padding: 6, colSpan: 1 })) }))
+  };
+}
+
+function sampleDocumentTemplate() {
+  const table = documentTable(4, 3);
+  table.repeatingSource = 'record.items';
+  ['Description', 'Quantity', 'Unit price', 'Amount'].forEach((label, index) => { table.rows[0].cells[index].content = label; });
+  ['record.items.description', 'record.items.quantity', 'record.items.unit_price', 'record.items.amount'].forEach((binding, index) => { table.rows[1].cells[index].binding = binding; table.rows[1].cells[index].content = binding.split('.').pop().replaceAll('_', ' '); });
+  return {
+    templateKey: 'sample_purchase_order', name: 'Purchase Order — sample', status: 'sample', source: 'module:procurement_requests', updatedAt: new Date().toISOString(),
+    page: { size: 'A4', orientation: 'portrait', margins: { top: 2, right: 2, bottom: 2, left: 2 }, headerFromTop: 1.25, footerFromBottom: 1.25, showMarginGuides: true, showGrid: false, headerColumns: 3, footerColumns: 3 },
+    regions: {
+      header: [documentText('NORTHSTAR OPERATIONS', { fontSize: 10, fontWeight: '700', column: 1 }), documentText('PURCHASE ORDER', { fontSize: 18, fontWeight: '700', alignment: 'center', column: 2 }), documentField('Request number', 'workflow.request_number', { alignment: 'right', column: 3 })],
+      body: [documentText('Prepared for', { fontSize: 9, fontWeight: '700' }), documentField('Company', 'record.company', { fontSize: 14 }), documentField('Request number', 'workflow.request_number'), documentField('Submitted date', 'workflow.submitted_date'), table, documentText('Terms and notes may be added here. This sample demonstrates a generic template configured with procurement-related bindings.')],
+      footer: [documentText('Generated by Babyyy', { fontSize: 9, column: 1 }), documentText('Confidential', { fontSize: 9, alignment: 'center', column: 2 }), documentField('Page number', 'system.page_number', { alignment: 'right', fontSize: 9, column: 3 })]
+    }
+  };
+}
+
+function blankDocumentTemplate() {
+  return { templateKey: documentId('template'), name: 'Untitled document', status: 'draft', source: 'module:customers', updatedAt: new Date().toISOString(), page: { size: 'A4', orientation: 'portrait', margins: { top: 2, right: 2, bottom: 2, left: 2 }, headerFromTop: 1.25, footerFromBottom: 1.25, showMarginGuides: true, showGrid: false, headerColumns: 1, footerColumns: 3 }, regions: { header: [documentText('Document header', { fontSize: 10, fontWeight: '600' })], body: [documentText('Start writing your document here.')], footer: [documentText('Generated by Babyyy', { fontSize: 9, column: 1 }), documentText('Confidential', { fontSize: 9, alignment: 'center', column: 2 }), documentField('Page number', 'system.page_number', { alignment: 'right', fontSize: 9, column: 3 })] } };
+}
+
+function duplicateDocumentTemplate(source = state.documentTemplates[0]) {
+  const template = structuredClone(source || blankDocumentTemplate());
+  delete template.serverRevision; delete template.serverSnapshot;
+  template.templateKey = documentId('template'); template.name = `${template.name || 'Document'} — copy`; template.status = 'draft'; template.updatedAt = new Date().toISOString();
+  Object.values(template.regions || {}).flat().forEach((element) => { element.id = documentId(element.type); if (element.type === 'table') { element.columns.forEach((column) => { column.id = documentId('col'); }); element.rows.forEach((row) => { row.id = documentId('row'); row.cells.forEach((cell) => { cell.id = documentId('cell'); }); }); } });
+  return template;
+}
+
+function documentBindingOptions(selected = '') {
+  return Object.entries(documentFieldsForSource()).map(([group, fields]) => `<optgroup label="${group === 'record' ? 'Record / Form Fields' : `${titleCaseMessage(group)} Fields`}">${fields.map(([label, binding]) => `<option value="${escapeHtml(binding)}" ${binding === selected ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('')}</optgroup>`).join('');
+}
+
+function renderDocumentImportSummary(summary) {
+  const imageStatus = summary.images ? `${summary.importedImages || 0} imported${summary.skippedImages ? ` · ${summary.skippedImages} unsupported` : ''}` : 'None detected';
+  const ocrPages = (summary.pages || []).filter((page) => page.extractionMethod === 'ocr');
+  const ocrConfidence = ocrPages.some((page) => page.ocr?.confidence === 'low') ? 'Low' : ocrPages.some((page) => page.ocr?.confidence === 'medium') ? 'Fair' : 'Good';
+  const entries = [[`${summary.pageCount || 1} page${(summary.pageCount || 1) === 1 ? '' : 's'} · ${summary.page.size === 'custom' ? `${summary.page.width} × ${summary.page.height} cm` : summary.page.size} ${titleCaseMessage(summary.page.orientation)}`, 'Detected'], ...(ocrPages.length ? [['Scanned document detected', 'OCR completed'], ['Text recognition', ocrConfidence], ['Layout reconstruction', ocrConfidence === 'Good' ? 'Review recommended' : 'Careful review required']] : []), [`${summary.textBlocks} text blocks`, 'Detected'], [`${summary.images} images`, ocrPages.length ? 'Available in Original view' : imageStatus], [`${summary.lines} lines / borders`, summary.lines ? 'Detected' : 'None detected'], [`${summary.tables} tables`, summary.tables ? 'Review recommended' : 'None detected'], [`${summary.forms || 0} form regions`, summary.forms ? 'Borderless layout' : 'None detected'], ['Possible header', summary.possibleHeader ? 'Review recommended' : 'Not detected'], ['Possible footer', summary.possibleFooter ? 'Review recommended' : 'Not detected'], ['Possible repeating row', summary.possibleRepeatingRow ? 'Review recommended' : 'Not assumed']];
+  $('#documentImportSummary').innerHTML = `<strong>Detected structure</strong>${entries.map(([label, value]) => `<div><span>${escapeHtml(label)}</span><small>${escapeHtml(value)}</small></div>`).join('')}`;
+}
+
+async function analyzeDocumentPdf(event) {
+  event.preventDefault(); const file = $('#documentPdfFile').files[0]; if (!file) return;
+  const button = $('#analyzeDocumentPdf'); button.disabled = true; button.textContent = 'Analyzing PDF…'; $('#importAnalyzedDocument').hidden = true;
+  try {
+    const body = new FormData(); body.append('pdf', file);
+    state.documentImportResult = await api('/api/document-templates/import-pdf', { method: 'POST', body });
+    if (state.documentOriginalPdfUrl) URL.revokeObjectURL(state.documentOriginalPdfUrl);
+    state.documentOriginalPdfUrl = URL.createObjectURL(file); state.documentOriginalPdfFile = file; renderDocumentImportSummary(state.documentImportResult.detectedLayout);
+    $('#importAnalyzedDocument').hidden = false; button.textContent = 'Analyze again';
+  } catch (error) { state.documentImportResult = null; $('#documentImportSummary').innerHTML = `<p class="error-message">${escapeHtml(error.message)}</p>`; button.textContent = 'Analyze PDF'; }
+  finally { button.disabled = false; }
+}
+
+function importAnalyzedDocument() {
+  if (!state.documentImportResult?.template) return;
+  const template = state.documentImportResult.template; state.documentTemplates.unshift(template); state.documentCompareMode = 'generated';
+  $('#documentCreateDialog').close(); openDocumentDesigner(template.templateKey);
+}
+
+function loadDocumentPrototypeState() {
+  const templates = parseStoredJson(localStorage.getItem(documentTemplateStorageKey));
+  state.documentRecoveredTemplateKeys = new Set(Array.isArray(templates) ? templates.map((template) => template.templateKey) : []);
+  state.documentTemplates = Array.isArray(templates) && templates.length ? templates : [sampleDocumentTemplate()];
+  state.documentTemplates.forEach((template) => {
+    template.page ||= {}; template.page.size ||= 'A4'; template.page.orientation ||= 'portrait'; template.page.margins ||= { top: 2, right: 2, bottom: 2, left: 2 };
+    for (const side of ['top', 'right', 'bottom', 'left']) if (Number(template.page.margins[side]) > 5) template.page.margins[side] = Number(template.page.margins[side]) / 10;
+    template.page.headerFromTop = Math.min(3, Math.max(.5, Number(template.page.headerFromTop) || 1.25)); template.page.footerFromBottom = Math.min(3, Math.max(.5, Number(template.page.footerFromBottom) || 1.25));
+    template.page.showMarginGuides ??= true; template.page.showGrid ??= false; template.page.headerColumns ||= 3; template.page.footerColumns ||= 3;
+    for (const region of ['header', 'body', 'footer']) (template.regions?.[region] || []).forEach((element) => { if (element.type === 'table') { element.width = 100; fitDocumentColumnWidths(element, 0, normalizedDocumentColumnWidths(element)[0]); element.rows.forEach((row) => { row.heightCm = Math.min(3.2, Math.max(.65, Number(row.heightCm) || ((Number(element.rowHeight) || 34) / (96 / 2.54)))); }); delete element.rowHeight; } else { element.column ||= 1; element.leftIndent = Math.max(0, Number(element.leftIndent) || 0); element.rightIndent = Math.max(0, Number(element.rightIndent) || 0); } });
+  });
+  state.workflowDocumentOutputs = parseStoredJson(localStorage.getItem(workflowDocumentStorageKey)) || {};
+}
+
+function activeDocumentTemplate() {
+  return state.documentTemplates.find((template) => template.templateKey === state.activeDocumentTemplateKey) || null;
+}
+
+function documentSourceOptions(selected = '') {
+  const moduleOptions = configModules.map((module) => `<option value="module:${escapeHtml(module.key)}" ${selected === `module:${module.key}` ? 'selected' : ''}>Module · ${escapeHtml(module.name)}</option>`);
+  const formOptions = state.standaloneForms.map((form) => `<option value="form:${escapeHtml(form.formKey)}" ${selected === `form:${form.formKey}` ? 'selected' : ''}>Form · ${escapeHtml(form.name)}</option>`);
+  const prototypeOptions = prototypeDocumentContexts.map((context) => `<option value="module:${escapeHtml(context.key)}" ${selected === `module:${context.key}` ? 'selected' : ''}>Module · ${escapeHtml(context.name)}</option>`);
+  return [...moduleOptions, ...formOptions, ...prototypeOptions, `<option value="workflow" ${selected === 'workflow' ? 'selected' : ''}>Workflow context</option>`].join('');
+}
+
+function documentFieldsForSource(source = activeDocumentTemplate()?.source) {
+  const generic = { workflow: [
+    ['Request number', 'workflow.request_number'], ['Submitted by', 'workflow.submitted_by'], ['Submitted date', 'workflow.submitted_date'], ['Approved by', 'workflow.approved_by'], ['Approved date', 'workflow.approved_date'], ['Approval status', 'workflow.status']
+  ], system: [['Generated date', 'system.generated_date'], ['Generated time', 'system.generated_time'], ['Page number', 'system.page_number'], ['Total pages', 'system.total_pages'], ['Organization name', 'system.organization_name'], ['Current user', 'system.current_user']] };
+  const [kind, key] = String(source || '').split(':');
+  let record = [];
+  if (kind === 'module') {
+    const config = moduleConfigByKey(key);
+    record = (config?.fields || config?.module?.fields || []).map((field) => [field.label || field.name || titleCaseMessage(field.fieldKey), `record.${field.fieldKey}`]);
+    if (!record.length) record = prototypeDocumentContexts.find((context) => context.key === key)?.fields || [];
+    if (!record.length && key === 'customers') record = [['Company', 'record.company'], ['Contact', 'record.contact'], ['Email', 'record.email'], ['Phone', 'record.phone']];
+  } else if (kind === 'form') {
+    const form = state.standaloneForms.find((item) => item.formKey === key);
+    record = (form?.fields || []).map((field) => [field.label || titleCaseMessage(field.fieldKey), `record.${field.fieldKey}`]);
+  }
+  return { record, ...generic };
+}
+
+function documentFieldSemanticType(label = '', binding = '') {
+  const value = `${label} ${binding}`.toLowerCase();
+  if (/company|organization|organisation/.test(value)) return 'organization';
+  if (/submitted_by|approved_by|current_user|contact|person|owner|assignee|user/.test(value)) return 'person';
+  if (/date/.test(value) && /time/.test(value)) return 'datetime';
+  if (/date/.test(value)) return 'date';
+  if (/time/.test(value)) return 'time';
+  if (/price|amount|currency|cost|total_value/.test(value)) return 'currency';
+  if (/status|approved|active|enabled|boolean/.test(value)) return 'status';
+  if (/email/.test(value)) return 'email';
+  if (/phone|mobile|telephone/.test(value)) return 'phone';
+  if (/number|quantity|count|total_pages|page_number|_id\b|\bid\b/.test(value)) return 'number';
+  if (/description|notes|comment|address|multiline/.test(value)) return 'multiline';
+  if (/reference|link|url/.test(value)) return 'reference';
+  return 'text';
+}
+
+function documentFieldIcon(type) {
+  const paths = {
+    organization: '<path d="M4 20V6l8-3 8 3v14M8 8h1m3 0h1m3 0h1M8 12h1m3 0h1m3 0h1M9 20v-4h6v4"/>',
+    person: '<circle cx="12" cy="8" r="3"/><path d="M5 20c.6-4 3-6 7-6s6.4 2 7 6"/>',
+    date: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4m10-4v4M3 10h18"/>',
+    datetime: '<rect x="3" y="5" width="14" height="14" rx="2"/><path d="M7 3v4m6-4v4M3 10h14"/><circle cx="17" cy="17" r="4"/><path d="M17 15v2l1.5 1"/>',
+    time: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    currency: '<path d="M16 7.5c-1-1-2.2-1.5-4-1.5-2.2 0-4 1.1-4 3s1.5 2.6 4 3 4 1.1 4 3-1.8 3-4 3c-1.8 0-3.3-.6-4.5-1.8M12 3v18"/>',
+    status: '<circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/>',
+    email: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m4 7 8 6 8-6"/>',
+    phone: '<path d="M7 3h3l1 5-2 1c1 3 3 5 6 6l1-2 5 1v3c0 2-2 4-4 4C9 20 4 15 3 7c0-2 2-4 4-4Z"/>',
+    number: '<path d="M9 3 7 21m10-18-2 18M4 9h16M3 15h16"/>',
+    multiline: '<path d="M4 5h16M4 10h16M4 15h11M4 20h8"/>',
+    reference: '<path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"/>',
+    text: '<path d="M5 5h14M12 5v14M8 19h8"/>'
+  };
+  return `<span class="document-field-icon is-${type}" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false">${paths[type] || paths.text}</svg></span>`;
+}
+
+function documentPreviewValues() {
+  return {
+    'record.company': 'Aster & Pine Manufacturing', 'record.contact': 'Mei Lin Tan', 'record.email': 'meilin@example.test', 'record.phone': '+60 3 5550 0188',
+    'workflow.request_number': 'REQ-2026-00418', 'workflow.submitted_by': 'Nadia Rahman', 'workflow.submitted_date': '8 September 2026', 'workflow.approved_by': 'Daniel Wong', 'workflow.approved_date': '9 September 2026', 'workflow.status': 'Approved',
+    'system.generated_date': '9 September 2026', 'system.generated_time': '10:42 AM', 'system.page_number': 'Page 1', 'system.total_pages': '1', 'system.organization_name': 'Northstar Operations', 'system.current_user': 'System Admin',
+    'record.items.description': 'Workspace materials', 'record.items.quantity': '12', 'record.items.unit_price': 'RM 48.00', 'record.items.amount': 'RM 576.00'
+  };
+}
+
+function renderDocumentTemplateList() {
+  const list = $('#documentTemplateList');
+  if (!list) return;
+  $('#documentTemplateCount').textContent = state.documentTemplates.length;
+  list.innerHTML = state.documentTemplates.map((template) => `<article class="document-template-card"><div class="document-template-card-preview" aria-hidden="true"><span></span><i></i><i></i><b></b></div><div><span class="eyebrow">${escapeHtml(template.page?.size || 'A4')} · ${escapeHtml(titleCaseMessage(template.status || 'draft'))}</span><h3>${escapeHtml(template.name)}</h3><p>${escapeHtml(documentSourceLabel(template.source))}</p>${/— imported$/.test(template.name) ? '<div class="document-import-review">Imported from PDF · Review recommended</div>' : ''}<small>Updated ${escapeHtml(new Date(template.updatedAt).toLocaleString())}</small><div class="form-actions"><button type="button" data-open-document-template="${escapeHtml(template.templateKey)}">Open designer</button><button type="button" class="secondary" data-preview-document-template="${escapeHtml(template.templateKey)}">Preview</button></div></div></article>`).join('');
+}
+
+function documentSourceLabel(source) {
+  const [kind, key] = String(source || 'workflow').split(':');
+  if (kind === 'module') return `Module data · ${configModules.find((item) => item.key === key)?.name || prototypeDocumentContexts.find((item) => item.key === key)?.name || titleCaseMessage(key)}`;
+  if (kind === 'form') return `Form data · ${state.standaloneForms.find((item) => item.formKey === key)?.name || titleCaseMessage(key)}`;
+  return 'Workflow data context';
+}
+
+function documentPhysicalPages(template = activeDocumentTemplate()) {
+  return template?.pages?.length ? template.pages : template ? [{ page: template.page, regions: template.regions }] : [];
+}
+
+function activeDocumentPhysicalPage(template = activeDocumentTemplate()) {
+  const pages = documentPhysicalPages(template);
+  state.documentPageIndex = Math.min(Math.max(0, state.documentPageIndex), Math.max(0, pages.length - 1));
+  return pages[state.documentPageIndex];
+}
+
+async function loadDocumentOriginalPdf(template) {
+  if (state.documentOriginalPdfUrl) { URL.revokeObjectURL(state.documentOriginalPdfUrl); state.documentOriginalPdfUrl = ''; }
+  state.documentOriginalPdfFile = null;
+  if (!template?.hasSourcePdf) return;
+  const response = await fetch(`/api/document-templates/${encodeURIComponent(template.templateKey)}/source-pdf`, { headers: { Authorization: `Bearer ${await currentAuthToken()}` } });
+  if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'Unable to load the original PDF.');
+  state.documentOriginalPdfUrl = URL.createObjectURL(await response.blob());
+  if (state.activeDocumentTemplateKey === template.templateKey) { $('#documentCompareControls').hidden = false; $('#documentOriginalPdf').src = state.documentOriginalPdfUrl; renderDocumentDesigner(); }
+}
+
+function openDocumentDesigner(templateKey, preview = false) {
+  state.activeDocumentTemplateKey = templateKey;
+  const template = activeDocumentTemplate();
+  if (!template) return;
+  state.documentDesignerMode = preview ? 'preview' : 'design';
+  state.documentPageIndex = 0; state.documentSelectedRegion = 'body'; state.documentSelectedElementId = ''; state.documentSelectedCell = null;
+  state.documentHistory = []; state.documentFuture = []; state.documentDirty = false;
+  $('#documentTemplateManagement').hidden = true; $('#documentDesignerWorkspace').hidden = false;
+  document.body.classList.add('document-designer-open');
+  $('#documentTemplateName').value = template.name;
+  $('#documentTemplateSource').innerHTML = documentSourceOptions(template.source);
+  $('#documentZoom').value = 100;
+  $('#documentOutputRecordId').value = '';
+  $('#documentOutputWorkflowId').value = '';
+  const canCompare = /— imported$/.test(template.name) && Boolean(state.documentOriginalPdfUrl);
+  $('#documentCompareControls').hidden = !canCompare; $('#documentOriginalPdf').src = canCompare ? state.documentOriginalPdfUrl : '';
+  renderDocumentDesigner();
+  if (template.hasSourcePdf && !canCompare) void loadDocumentOriginalPdf(template).catch((error) => { $('#documentOutputStatus').textContent = error.message; });
+}
+
+function closeDocumentDesigner() {
+  $('#documentDesignerWorkspace').hidden = true; $('#documentTemplateManagement').hidden = false;
+  document.body.classList.remove('document-designer-open', 'document-print-portrait', 'document-print-landscape');
+  state.activeDocumentTemplateKey = ''; renderDocumentTemplateList();
+}
+
+function captureDocumentHistory() {
+  const template = activeDocumentTemplate();
+  if (!template) return;
+  state.documentHistory.push(structuredClone(template));
+  if (state.documentHistory.length > 40) state.documentHistory.shift();
+  state.documentFuture = []; state.documentDirty = true;
+}
+
+function restoreDocumentHistory(redo = false) {
+  const from = redo ? state.documentFuture : state.documentHistory;
+  const to = redo ? state.documentHistory : state.documentFuture;
+  const previous = from.pop(); const current = activeDocumentTemplate();
+  if (!previous || !current) return;
+  to.push(structuredClone(current));
+  state.documentTemplates[state.documentTemplates.findIndex((item) => item.templateKey === current.templateKey)] = previous;
+  renderDocumentDesigner();
+}
+
+function resolveDocumentValue(binding, fallback = '') {
+  return documentPreviewValues()[binding] || fallback || titleCaseMessage(String(binding || '').split('.').pop());
+}
+
+function renderDocumentElement(element, preview) {
+  if (element.type === 'table') return renderDocumentTable(element, preview);
+  const selected = element.id === state.documentSelectedElementId;
+  const value = element.type === 'field' && preview ? resolveDocumentValue(element.binding, element.label) : element.type === 'field' ? `{ ${element.label} }` : element.content;
+  const placement = `grid-column:${Math.max(1, Number(element.column) || 1)};width:auto;text-align:${element.alignment};padding:${element.padding}px;margin-top:${Math.max(0, Number(element.spacingBefore) || 0)}cm;margin-left:${Math.max(0, Number(element.leftIndent) || 0)}cm;margin-right:${Math.max(0, Number(element.rightIndent) || 0)}cm`;
+  if (element.type === 'image') { const size = element.imageWidthCm ? `width:${element.imageWidthCm}cm;height:${element.imageHeightCm || 'auto'}cm` : ''; return `<button type="button" class="document-block document-image-block ${selected ? 'is-selected' : ''}" data-document-element="${element.id}" style="${placement};${size}">${element.source ? `<img src="${escapeHtml(element.source)}" alt="${escapeHtml(element.content || 'Imported image')}">` : '<span aria-hidden="true">◇</span>'}<strong ${element.source ? 'class="visually-hidden"' : ''}>${escapeHtml(element.content || 'Organization logo')}</strong></button>`; }
+  return `<button type="button" class="document-block document-${element.type}-block ${selected ? 'is-selected' : ''}" data-document-element="${element.id}" style="${placement};font-size:${element.fontSize}pt;font-weight:${element.fontWeight}">${escapeHtml(value)}</button>`;
+}
+
+function renderDocumentTable(table, preview) {
+  const selected = table.id === state.documentSelectedElementId;
+  const widths = normalizedDocumentColumnWidths(table);
+  const rows = table.rows.map((row, rowIndex) => `<tr data-document-row="${table.id}:${rowIndex}" class="${row.repeat && !preview ? 'is-repeating' : ''}" style="height:${Math.min(3.2, Math.max(.65, Number(row.heightCm) || .9))}cm">${row.cells.map((cell, columnIndex) => cell.hidden ? '' : `<td colspan="${cell.colSpan || 1}" style="text-align:${cell.alignment};padding:${cell.padding}px"><button type="button" data-document-cell="${table.id}:${rowIndex}:${columnIndex}" class="document-cell ${state.documentSelectedCell?.tableId === table.id && state.documentSelectedCell.row === rowIndex && state.documentSelectedCell.column === columnIndex ? 'is-selected' : ''}">${escapeHtml(preview && cell.binding ? resolveDocumentValue(cell.binding, cell.content) : cell.binding ? `{ ${cell.content || titleCaseMessage(cell.binding.split('.').pop())} }` : cell.content || (table.layoutRole === 'form' ? '' : 'Empty cell'))}</button>${row.repeat && columnIndex === 0 && !preview ? '<span class="document-repeat-badge">↻ Repeating row</span>' : ''}</td>`).join('')}</tr>`).join('');
+  return `<div class="document-table-block ${selected ? 'is-selected' : ''} ${table.printableBorders ? 'has-print-borders' : ''}" data-document-element="${table.id}" style="margin-top:${Math.max(0, Number(table.spacingBefore) || 0)}cm"><table><colgroup>${widths.map((width) => `<col style="width:${width}%">`).join('')}</colgroup><tbody>${rows}</tbody></table></div>`;
+}
+
+function normalizedDocumentColumnWidths(table) {
+  const raw = table.columns.map((column) => Math.max(8, Number(column.width) || 1));
+  const total = raw.reduce((sum, width) => sum + width, 0) || 1;
+  return raw.map((width) => Number(((width / total) * 100).toFixed(3)));
+}
+
+function fitDocumentColumnWidths(table, selectedIndex, requestedWidth) {
+  const count = table.columns.length; const minimum = Math.min(8, 100 / count); const maximum = 100 - (minimum * (count - 1));
+  const selected = Math.min(maximum, Math.max(minimum, Number(requestedWidth) || minimum)); const remaining = 100 - selected;
+  const others = table.columns.map((column, index) => ({ index, weight: index === selectedIndex ? 0 : Math.max(minimum, Number(column.width) || minimum) })).filter((column) => column.index !== selectedIndex);
+  let available = remaining; let active = [...others]; const widths = Array(count).fill(minimum); widths[selectedIndex] = selected;
+  while (active.length) {
+    const weightTotal = active.reduce((sum, column) => sum + column.weight, 0) || active.length; const belowMinimum = active.filter((column) => available * (column.weight / weightTotal) < minimum);
+    if (!belowMinimum.length) { active.forEach((column) => { widths[column.index] = available * (column.weight / weightTotal); }); break; }
+    belowMinimum.forEach((column) => { widths[column.index] = minimum; available -= minimum; }); active = active.filter((column) => !belowMinimum.includes(column));
+  }
+  table.columns.forEach((column, index) => { column.width = Number(widths[index].toFixed(3)); });
+}
+
+function documentPageGeometry(page = activeDocumentTemplate()?.page) {
+  return DocumentOutput.geometry(page || {});
+}
+
+function clampDocumentMargin(page, side, requested) {
+  const { width, height } = documentPageGeometry(page);
+  const opposite = side === 'left' ? 'right' : side === 'right' ? 'left' : side === 'top' ? 'bottom' : 'top';
+  const axisSize = ['left', 'right'].includes(side) ? width : height;
+  const minimumContent = ['left', 'right'].includes(side) ? documentMinimumContentCm.horizontal : documentMinimumContentCm.vertical;
+  const oppositeBoundary = side === 'top' ? Math.max(Number(page.margins.bottom) || 0, Number(page.footerFromBottom) + 2.1) : side === 'bottom' ? Math.max(Number(page.margins.top) || 0, Number(page.headerFromTop) + 2.1) : Number(page.margins[opposite] || 0);
+  return Math.min(Math.max(.5, axisSize - oppositeBoundary - minimumContent), Math.max(.5, Number(requested) || .5));
+}
+
+function documentMarginHandles(page, widthCm, heightCm) {
+  const horizontal = [['left', page.margins.left / widthCm], ['right', (widthCm - page.margins.right) / widthCm]];
+  const vertical = [['top', page.margins.top / heightCm], ['bottom', (heightCm - page.margins.bottom) / heightCm]];
+  $('#documentRulerTicks').insertAdjacentHTML('beforeend', horizontal.map(([side, ratio]) => `<button type="button" class="document-margin-handle is-${side}" data-document-margin-handle="${side}" style="--handle-position:${ratio * 100}%" aria-label="Adjust ${side} margin" title="${titleCaseMessage(side)} margin: ${page.margins[side]} cm"></button>`).join(''));
+  $('#documentVerticalRulerTicks').insertAdjacentHTML('beforeend', vertical.map(([side, ratio]) => `<button type="button" class="document-margin-handle is-${side}" data-document-margin-handle="${side}" style="--handle-position:${ratio * 100}%" aria-label="Adjust ${side} margin" title="${titleCaseMessage(side)} margin: ${page.margins[side]} cm"></button>`).join(''));
+  $('#documentVerticalRulerTicks').insertAdjacentHTML('beforeend', `<span class="document-region-ruler-marker is-header" style="--handle-position:${(page.headerFromTop / heightCm) * 100}%" title="Header from top: ${page.headerFromTop} cm"></span><span class="document-region-ruler-marker is-footer" style="--handle-position:${((heightCm - page.footerFromBottom) / heightCm) * 100}%" title="Footer from bottom: ${page.footerFromBottom} cm"></span>`);
+}
+
+function documentContextualRulerMarkers(page, widthCm) {
+  const { element, table } = selectedDocumentTarget(); if (!element) return '';
+  const contentWidth = widthCm - page.margins.left - page.margins.right;
+  if (element.type !== 'table') {
+    const left = page.margins.left + (Number(element.leftIndent) || 0); const right = widthCm - page.margins.right - (Number(element.rightIndent) || 0);
+    return `<span class="document-ruler-context-label">Paragraph</span><button type="button" class="document-context-marker is-indent is-left" data-document-indent-handle="left" style="--handle-position:${(left / widthCm) * 100}%" aria-label="Adjust paragraph left indent" title="Left indent: ${element.leftIndent || 0} cm"></button><button type="button" class="document-context-marker is-indent is-right" data-document-indent-handle="right" style="--handle-position:${(right / widthCm) * 100}%" aria-label="Adjust paragraph right indent" title="Right indent: ${element.rightIndent || 0} cm"></button>`;
+  }
+  const widths = normalizedDocumentColumnWidths(table); let cumulative = page.margins.left;
+  const markers = [`<span class="document-ruler-context-label">Table</span><span class="document-context-marker is-table-edge" style="--handle-position:${(page.margins.left / widthCm) * 100}%"></span>`];
+  widths.slice(0, -1).forEach((columnWidth, index) => { cumulative += contentWidth * columnWidth / 100; markers.push(`<button type="button" class="document-context-marker is-column" data-document-column-marker="${index}" data-document-table-id="${table.id}" style="--handle-position:${(cumulative / widthCm) * 100}%" aria-label="Resize table column ${index + 1}" title="Column ${index + 1} boundary"></button>`); });
+  markers.push(`<span class="document-context-marker is-table-edge" style="--handle-position:${((widthCm - page.margins.right) / widthCm) * 100}%"></span>`); return markers.join('');
+}
+
+function documentVerticalContextualRulerMarkers(page, heightCm) {
+  if (state.documentPropertiesTab === 'page') return '';
+  const { element, table } = selectedDocumentTarget();
+  let target = element ? $(`[data-document-element="${element.id}"]`) : null;
+  let kind = element?.type === 'table' ? 'table' : element ? 'paragraph' : '';
+  let rowIndex = null;
+  if (table && state.documentSelectedCell) { rowIndex = state.documentSelectedCell.row; target = $(`[data-document-row="${table.id}:${rowIndex}"]`); kind = 'row'; }
+  if (!target && ['header', 'footer'].includes(state.documentSelectedRegion)) { target = $(`.document-${state.documentSelectedRegion}`); kind = state.documentSelectedRegion; }
+  if (!target) return '';
+  const pageElement = $('#documentPage'); const pageBounds = pageElement.getBoundingClientRect(); const bounds = target.getBoundingClientRect();
+  const topCm = Math.min(heightCm, Math.max(0, ((bounds.top - pageBounds.top) / Math.max(1, pageBounds.height)) * heightCm));
+  const bottomCm = Math.min(heightCm, Math.max(topCm, ((bounds.bottom - pageBounds.top) / Math.max(1, pageBounds.height)) * heightCm));
+  if (kind === 'paragraph') return `<span class="document-vertical-context-label" style="--handle-position:${(topCm / heightCm) * 100}%">Selected</span><span class="document-vertical-context-marker is-position" style="--handle-position:${(topCm / heightCm) * 100}%" title="Selected block at ${topCm.toFixed(1)} cm"></span>`;
+  const label = kind === 'row' ? 'Row' : titleCaseMessage(kind);
+  const bottom = kind === 'row' ? `<button type="button" class="document-vertical-context-marker is-boundary is-bottom" data-document-row-height-handle="${rowIndex}" data-document-row-top-cm="${topCm}" style="--handle-position:${(bottomCm / heightCm) * 100}%" aria-label="Adjust selected row height" title="Row height: ${(bottomCm - topCm).toFixed(2)} cm"></button>` : `<span class="document-vertical-context-marker is-boundary is-bottom" style="--handle-position:${(bottomCm / heightCm) * 100}%"></span>`;
+  return `<span class="document-vertical-context-label" style="--handle-position:${(topCm / heightCm) * 100}%">${label}</span><span class="document-vertical-context-range" style="--range-top:${(topCm / heightCm) * 100}%;--range-height:${((bottomCm - topCm) / heightCm) * 100}%"></span><span class="document-vertical-context-marker is-boundary is-top" style="--handle-position:${(topCm / heightCm) * 100}%"></span>${bottom}`;
+}
+
+function renderDocumentDesigner() {
+  const template = activeDocumentTemplate(); if (!template) return;
+  const physicalPages = documentPhysicalPages(template); const physical = activeDocumentPhysicalPage(template);
+  const preview = state.documentDesignerMode === 'preview';
+  $('#documentPageViewport').hidden = preview;
+  $('#documentOutputPreview').hidden = !preview;
+  if (preview) void updateDocumentOutputPreview().catch((error) => { $('#documentOutputStatus').textContent = error.message; });
+  $('#documentDesignMode').setAttribute('aria-pressed', String(!preview)); $('#documentPreviewMode').setAttribute('aria-pressed', String(preview));
+  $('#documentDesignMode').classList.toggle('is-active', !preview); $('#documentPreviewMode').classList.toggle('is-active', preview);
+  $('.document-designer-workspace').classList.toggle('is-preview', preview);
+  const zoom = Number($('#documentZoom').value || 100); $('#documentZoomLabel').value = `${zoom}%`;
+  const page = physical.page; const { width: widthCm, height: heightCm } = documentPageGeometry(page);
+  document.body.classList.toggle('document-print-portrait', page.orientation === 'portrait'); document.body.classList.toggle('document-print-landscape', page.orientation === 'landscape');
+  const geometry = $('#documentCoordinateSystem');
+  const compareMode = $('#documentCompareControls').hidden ? 'generated' : state.documentCompareMode;
+  geometry.classList.toggle('is-original', compareMode === 'original'); geometry.classList.toggle('is-overlay', compareMode === 'overlay');
+  $('#documentOriginalPdf').hidden = compareMode === 'generated'; $('#documentOriginalOpacityLabel').hidden = compareMode !== 'overlay';
+  if (state.documentOriginalPdfUrl) $('#documentOriginalPdf').src = `${state.documentOriginalPdfUrl}#page=${state.documentPageIndex + 1}&view=Fit`;
+  $('#documentPageNavigation').hidden = physicalPages.length < 2;
+  $('#documentPagePosition').textContent = `Page ${state.documentPageIndex + 1} of ${physicalPages.length}`;
+  $('#documentPreviousPage').disabled = state.documentPageIndex === 0; $('#documentNextPage').disabled = state.documentPageIndex === physicalPages.length - 1;
+  geometry.style.setProperty('--original-opacity', `${Number($('#documentOriginalOpacity').value || 40) / 100}`);
+  const scale = zoom / 100;
+  for (const [property, value] of Object.entries({ '--document-zoom': scale, '--page-width': `${widthCm}cm`, '--page-height': `${heightCm}cm`, '--display-page-width': `${widthCm * scale}cm`, '--display-page-height': `${heightCm * scale}cm`, '--margin-top': `${page.margins.top}cm`, '--margin-right': `${page.margins.right}cm`, '--margin-bottom': `${page.margins.bottom}cm`, '--margin-left': `${page.margins.left}cm`, '--header-from-top': `${page.headerFromTop}cm`, '--footer-from-bottom': `${page.footerFromBottom}cm`, '--print-page-width': `${widthCm}cm`, '--print-page-height': `${heightCm}cm`, '--print-margin-top': `${page.margins.top}cm`, '--print-margin-right': `${page.margins.right}cm`, '--print-margin-bottom': `${page.margins.bottom}cm`, '--print-margin-left': `${page.margins.left}cm`, '--header-columns': page.headerColumns, '--footer-columns': page.footerColumns })) geometry.style.setProperty(property, value);
+  $('#documentRulerTicks').innerHTML = Array.from({ length: Math.ceil(widthCm) + 1 }, (_, index) => `<i><span>${index}</span></i>`).join('');
+  $('#documentVerticalRulerTicks').innerHTML = Array.from({ length: Math.ceil(heightCm) + 1 }, (_, index) => `<i><span>${index}</span></i>`).join('');
+  if (!preview && state.documentPropertiesTab === 'page') documentMarginHandles(page, widthCm, heightCm);
+  if (!preview && state.documentPropertiesTab !== 'page') $('#documentRulerTicks').insertAdjacentHTML('beforeend', documentContextualRulerMarkers(page, widthCm));
+  $('#documentPage').className = `document-page ${preview ? 'is-preview' : 'is-design'} is-${page.orientation}`;
+  $('#documentPage').classList.toggle('show-margin-guides', !preview && page.showMarginGuides); $('#documentPage').classList.toggle('show-layout-grid', !preview && page.showGrid);
+  $('#documentPage').innerHTML = `<div class="document-margin-guide" aria-hidden="true"></div>${['header', 'body', 'footer'].map((region) => `<section class="document-region document-${region} ${state.documentSelectedRegion === region ? 'is-selected' : ''}" style="--region-columns:${region === 'header' ? page.headerColumns : region === 'footer' ? page.footerColumns : 1}" data-document-region="${region}" aria-label="${titleCaseMessage(region)} region"><span class="document-region-label">${titleCaseMessage(region)}</span>${physical.regions[region].map((element) => renderDocumentElement(element, preview)).join('') || `<button type="button" class="document-empty-region">Add content to ${region}</button>`}</section>`).join('')}<span class="document-body-overflow-warning" role="status">Body content exceeds this page. Reduce content or add another page.</span>`;
+  if (!preview && state.documentPropertiesTab !== 'page') $('#documentVerticalRulerTicks').insertAdjacentHTML('beforeend', documentVerticalContextualRulerMarkers(page, heightCm));
+  const body = $('#documentPage .document-body'); $('#documentPage').classList.toggle('has-body-overflow', body.scrollHeight > body.clientHeight + 1);
+  renderDocumentFieldPalette(); renderDocumentProperties();
+  $('#documentUndo').disabled = !state.documentHistory.length; $('#documentRedo').disabled = !state.documentFuture.length;
+}
+
+function renderDocumentFieldPalette() {
+  const fields = documentFieldsForSource();
+  const fieldsTab = state.documentPaletteTab === 'fields'; const query = state.documentFieldQuery.trim().toLowerCase();
+  $('#documentFieldsTab').setAttribute('aria-selected', String(fieldsTab)); $('#documentElementsTab').setAttribute('aria-selected', String(!fieldsTab));
+  $('#documentFieldSearch').hidden = !fieldsTab; $('#documentFieldSearch').value = state.documentFieldQuery;
+  if (!fieldsTab) { $('#documentFieldPalette').innerHTML = '<section class="document-element-list"><button type="button" data-add-document-element="text"><span aria-hidden="true">T</span><strong>Text</strong><small>Add editable copy</small></button><button type="button" data-add-document-element="image"><span aria-hidden="true">◇</span><strong>Image</strong><small>Add an image placeholder</small></button><button type="button" data-add-document-element="table"><span aria-hidden="true">▦</span><strong>Table</strong><small>Fit a table to the content width</small></button></section>'; return; }
+  $('#documentFieldPalette').innerHTML = Object.entries(fields).map(([group, items]) => { const matches = items.filter(([label, binding]) => `${label} ${binding}`.toLowerCase().includes(query)); return `<section class="document-field-group"><h4>${group === 'record' ? 'Form / record fields' : `${titleCaseMessage(group)} fields`}</h4>${matches.length ? matches.map(([label, binding]) => { const type = documentFieldSemanticType(label, binding); return `<button type="button" draggable="true" data-insert-document-field="${escapeHtml(binding)}" data-document-field-label="${escapeHtml(label)}">${documentFieldIcon(type)}<strong>${escapeHtml(label)}</strong></button>`; }).join('') : '<p>No matching fields.</p>'}</section>`; }).join('');
+}
+
+function selectedDocumentTarget() {
+  const template = activeDocumentTemplate();
+  const regions = activeDocumentPhysicalPage(template)?.regions || {};
+  const element = Object.values(regions).flat().find((item) => item.id === state.documentSelectedElementId);
+  const table = element?.type === 'table' ? element : Object.values(regions).flat().find((item) => item.type === 'table' && item.id === state.documentSelectedCell?.tableId);
+  const cell = table && state.documentSelectedCell ? table.rows[state.documentSelectedCell.row]?.cells[state.documentSelectedCell.column] : null;
+  return { template, element, table, cell };
+}
+
+function documentSuggestionFields() {
+  const source = activeDocumentTemplate()?.source || ''; const [kind, key] = source.split(':');
+  const metadata = kind === 'module' ? (moduleConfigByKey(key)?.fields || moduleConfigByKey(key)?.module?.fields || []) : kind === 'form' ? (state.standaloneForms.find((form) => form.formKey === key)?.fields || []) : [];
+  const types = new Map(metadata.map((field) => [`record.${field.fieldKey}`, String(field.type || '').toLowerCase()]));
+  return Object.values(documentFieldsForSource()).flat().map(([label, binding]) => { const declared = types.get(binding) || ''; const type = /date/.test(declared) ? 'date' : /currency|money/.test(declared) ? 'currency' : /number|integer|decimal/.test(declared) ? 'number' : documentFieldSemanticType(label, binding); return { label, binding, type }; });
+}
+
+function documentSuggestionTarget(element, table, cell) {
+  const raw = cell || element; if (!raw) return null;
+  let label = '';
+  if (cell && state.documentSelectedCell?.row > 0) label = table.rows[0]?.cells[state.documentSelectedCell.column]?.content || '';
+  if (element) { const regions = activeDocumentPhysicalPage().regions; const region = Object.values(regions).find((items) => items.includes(element)); const index = region?.indexOf(element) ?? -1; const previous = index > 0 ? region[index - 1] : null; if (previous?.type === 'text' && /:\s*$/.test(previous.content || '') && !/:/.test(element.content || '')) label = previous.content.replace(/:\s*$/, ''); }
+  return { id: `${activeDocumentTemplate().templateKey}:${state.documentPageIndex}:${raw.id}`, text: cell ? cell.content : element.content, label, binding: cell ? cell.binding : element.binding, tableHeader: Boolean(cell && state.documentSelectedCell?.row === 0), tableId: table?.id };
+}
+
+function documentSuggestionMarkup(element, table, cell) {
+  if (!/— imported$/.test(activeDocumentTemplate()?.name || '') || (element && !cell && element.type !== 'text') || (!element && !cell)) return '';
+  const match = DocumentBindingSuggestions.suggest(documentSuggestionTarget(element, table, cell), documentSuggestionFields(), state.documentRejectedSuggestions)[0];
+  if (!match || match.confidence === 'low') return '';
+  return `<section class="document-binding-suggestion"><span class="eyebrow">Suggested field</span><strong>${escapeHtml(match.label)}</strong><small>${titleCaseMessage(match.confidence)} confidence · ${escapeHtml(match.reasons.join(' and '))}</small><button type="button" data-document-suggestion-bind="${escapeHtml(match.binding)}">Bind to ${escapeHtml(match.label)}</button><button type="button" class="secondary" data-document-suggestion-reject="${escapeHtml(match.binding)}">Keep static</button></section>`;
+}
+
+function renderDocumentProperties() {
+  const { element, table, cell } = selectedDocumentTarget();
+  const panel = $('#documentProperties');
+  const pageTab = state.documentPropertiesTab === 'page';
+  $('#documentPropertiesTab').setAttribute('aria-selected', String(!pageTab)); $('#documentPageTab').setAttribute('aria-selected', String(pageTab));
+  $('#documentPropertiesTitle').textContent = pageTab ? 'Page setup' : 'Properties';
+  if (pageTab) {
+    const page = activeDocumentPhysicalPage().page;
+    $('#documentSelectionHelp').textContent = 'Page geometry controls Design, Preview, and Print.';
+    panel.innerHTML = `<section class="document-page-properties"><label>Page size<select data-document-page-property="size"><option value="A4">A4 — 210 × 297 mm</option></select></label><fieldset><legend>Orientation</legend><div class="document-orientation-options"><label><input type="radio" name="documentOrientation" value="portrait" data-document-page-property="orientation" ${page.orientation === 'portrait' ? 'checked' : ''}> Portrait</label><label><input type="radio" name="documentOrientation" value="landscape" data-document-page-property="orientation" ${page.orientation === 'landscape' ? 'checked' : ''}> Landscape</label></div></fieldset><fieldset><legend>Margins (cm)</legend><div class="document-margin-inputs">${['top', 'bottom', 'left', 'right'].map((side) => `<label>${titleCaseMessage(side)}<input type="number" min="0.5" max="5" step="0.1" value="${page.margins[side]}" data-document-page-property="margin" data-document-margin-side="${side}"></label>`).join('')}</div></fieldset><label class="checkbox-label"><input type="checkbox" data-document-page-property="showMarginGuides" ${page.showMarginGuides ? 'checked' : ''}> Show margin guides</label><label class="checkbox-label"><input type="checkbox" data-document-page-property="showGrid" ${page.showGrid ? 'checked' : ''}> Show layout grid</label><fieldset><legend>Header &amp; footer</legend><label>Header from top (cm)<input type="number" min="0.5" max="3" step="0.1" value="${page.headerFromTop}" data-document-page-property="headerFromTop"></label><label>Footer from bottom (cm)<input type="number" min="0.5" max="3" step="0.1" value="${page.footerFromBottom}" data-document-page-property="footerFromBottom"></label><label>Header layout<select data-document-page-property="headerColumns"><option value="1">1 column</option><option value="2">2 columns</option><option value="3">3 columns</option></select></label><label>Footer layout<select data-document-page-property="footerColumns"><option value="1">1 column</option><option value="2">2 columns</option><option value="3">3 columns</option></select></label></fieldset></section>`;
+    panel.querySelector('[data-document-page-property="headerColumns"]').value = String(page.headerColumns); panel.querySelector('[data-document-page-property="footerColumns"]').value = String(page.footerColumns);
+    return;
+  }
+  if (!element && !cell) { const anchored = ['header', 'footer'].includes(state.documentSelectedRegion); $('#documentSelectionHelp').textContent = `Editing the ${state.documentSelectedRegion} region.`; panel.innerHTML = anchored ? `<div class="document-property-empty"><strong>${titleCaseMessage(state.documentSelectedRegion)} region active</strong><p>This region is anchored to the physical page and supports independent column content.</p><button type="button" class="secondary" data-open-document-page-settings>Adjust ${state.documentSelectedRegion} position</button></div>` : '<div class="document-property-empty"><strong>Select content to format</strong><p>Choose a block or table cell on the page. New content is inserted in the active region.</p></div>'; return; }
+  $('#documentSelectionHelp').textContent = cell ? 'Table cell selected.' : `${titleCaseMessage(element.type)} selected.`;
+  if (cell) {
+    const maximumColumnWidth = 100 - (Math.min(8, 100 / table.columns.length) * (table.columns.length - 1));
+    const row = table.rows[state.documentSelectedCell.row];
+    panel.innerHTML = `<label>Cell content<input data-document-property="cellContent" value="${escapeHtml(cell.content)}"></label><label>Bind to field<select data-document-property="cellBinding"><option value="">Keep as static text</option>${documentBindingOptions(cell.binding)}</select></label><label>Alignment<select data-document-property="cellAlignment"><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option></select></label><label>Padding<input type="number" min="0" max="24" data-document-property="cellPadding" value="${cell.padding}"></label><label>Row height (cm)<input type="number" min="0.65" max="3.2" step="0.05" data-document-property="rowHeightCm" value="${Number(row.heightCm || .9).toFixed(2)}"></label><label>Column width (%)<input type="number" min="${Math.min(8, 100 / table.columns.length)}" max="${maximumColumnWidth}" data-document-property="columnWidth" value="${table.columns[state.documentSelectedCell.column]?.width || 25}"></label><div class="document-property-actions"><button type="button" class="secondary" data-document-table-action="toggle-repeat">${row.repeat ? 'Keep as static row' : 'Set as repeating row'}</button><button type="button" class="secondary" data-document-table-action="add-row">Add row</button><button type="button" class="secondary" data-document-table-action="add-column" ${table.columns.length >= 12 ? 'disabled title="Maximum 12 columns"' : ''}>Add column</button><button type="button" class="secondary" data-document-table-action="merge-right">Merge right</button></div>`;
+    panel.insertAdjacentHTML('afterbegin', documentSuggestionMarkup(element, table, cell));
+    panel.querySelector('[data-document-property="cellAlignment"]').value = cell.alignment;
+    return;
+  }
+  if (element.type === 'table') { panel.innerHTML = `<label class="checkbox-label"><input type="checkbox" data-document-property="printableBorders" ${element.printableBorders ? 'checked' : ''}> Printable borders</label><label>Repeating source<input data-document-property="repeatingSource" value="${escapeHtml(element.repeatingSource || '')}" placeholder="record.collection"></label><p class="muted">Editing guides are always visible in Design mode. Only printable borders appear in Preview and print.</p>`; return; }
+  const currentPage = activeDocumentPhysicalPage(); const regionColumns = state.documentSelectedRegion === 'header' ? currentPage.page.headerColumns : state.documentSelectedRegion === 'footer' ? currentPage.page.footerColumns : 1;
+  const columnControl = regionColumns > 1 ? `<label>Region column<select data-document-property="column">${Array.from({ length: regionColumns }, (_, index) => `<option value="${index + 1}">Column ${index + 1}</option>`).join('')}</select></label>` : '';
+  panel.innerHTML = `${element.type === 'field' ? `<label>Field binding<select data-document-property="binding">${documentBindingOptions(element.binding)}</select></label><button type="button" class="secondary" data-document-static-text>Keep as static text</button>` : `<label>${element.type === 'image' ? 'Image label' : 'Text'}<textarea rows="4" data-document-property="content">${escapeHtml(element.content || '')}</textarea></label>${element.type === 'text' ? `<label>Bind to field<select data-document-property="bindText"><option value="">Keep as static text</option>${documentBindingOptions('')}</select></label>` : ''}`}${columnControl}<fieldset><legend>Paragraph</legend><div class="document-indent-inputs"><label>Left indent (cm)<input type="number" min="0" max="12" step="0.1" data-document-property="leftIndent" value="${element.leftIndent || 0}"></label><label>Right indent (cm)<input type="number" min="0" max="12" step="0.1" data-document-property="rightIndent" value="${element.rightIndent || 0}"></label></div></fieldset><label>Alignment<select data-document-property="alignment"><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option></select></label>${element.type !== 'image' ? `<label>Font size<input type="number" min="7" max="48" data-document-property="fontSize" value="${element.fontSize}"></label><label>Weight<select data-document-property="fontWeight"><option value="400">Regular</option><option value="600">Semibold</option><option value="700">Bold</option></select></label>` : ''}<label>Padding<input type="number" min="0" max="40" data-document-property="padding" value="${element.padding}"></label><button type="button" class="danger-button" data-remove-document-element>Remove element</button>`;
+  panel.insertAdjacentHTML('afterbegin', documentSuggestionMarkup(element, table, cell));
+  panel.querySelector('[data-document-property="alignment"]').value = element.alignment;
+  panel.querySelector('[data-document-property="column"]') && (panel.querySelector('[data-document-property="column"]').value = String(element.column || 1));
+  panel.querySelector('[data-document-property="fontWeight"]') && (panel.querySelector('[data-document-property="fontWeight"]').value = element.fontWeight);
+}
+
+function insertDocumentElement(type) {
+  const template = activeDocumentTemplate(); if (!template) return;
+  captureDocumentHistory();
+  const element = type === 'table' ? documentTable() : type === 'image' ? { id: documentId('image'), type: 'image', content: 'Organization logo', column: state.documentSelectedColumn, alignment: 'left', padding: 6, source: '' } : documentText('New text block', { column: state.documentSelectedColumn });
+  activeDocumentPhysicalPage(template).regions[state.documentSelectedRegion].push(element); state.documentSelectedElementId = element.id; state.documentSelectedCell = null; renderDocumentDesigner();
+}
+
+function prepareDocumentPrint() {
+  if (!activeDocumentTemplate() || $('#documentDesignerWorkspace')?.hidden) return;
+  if (state.documentModeBeforePrint === null) state.documentModeBeforePrint = state.documentDesignerMode;
+  state.documentDesignerMode = 'preview'; renderDocumentDesigner();
+}
+
+function restoreDocumentAfterPrint() {
+  if (state.documentModeBeforePrint === null) return;
+  state.documentDesignerMode = state.documentModeBeforePrint; state.documentModeBeforePrint = null; renderDocumentDesigner();
+}
+
+function insertDocumentField(binding, label) {
+  const { template, cell } = selectedDocumentTarget(); if (!template) return;
+  captureDocumentHistory();
+  if (cell) { cell.binding = binding; cell.content = label; } else { const element = documentField(label, binding, { column: state.documentSelectedColumn }); activeDocumentPhysicalPage(template).regions[state.documentSelectedRegion].push(element); state.documentSelectedElementId = element.id; }
+  renderDocumentDesigner(); $('#documentDesignerAnnouncement').textContent = `${label} inserted.`;
+}
+
+function updateDocumentProperty(target) {
+  const { element, table, cell } = selectedDocumentTarget(); const property = target.dataset.documentProperty; if (!property) return;
+  captureDocumentHistory(); const value = target.type === 'checkbox' ? target.checked : target.value;
+  if (cell) {
+    if (property === 'cellContent') { cell.content = value; cell.binding = ''; }
+    if (property === 'cellBinding') cell.binding = value;
+    if (property === 'cellAlignment') cell.alignment = value;
+    if (property === 'cellPadding') cell.padding = Number(value);
+    if (property === 'rowHeightCm') table.rows[state.documentSelectedCell.row].heightCm = Math.min(3.2, Math.max(.65, Number(value) || .9));
+    if (property === 'columnWidth') {
+      fitDocumentColumnWidths(table, state.documentSelectedCell.column, value);
+    }
+  } else if (element) {
+    if (property === 'bindText' && value) { element.type = 'field'; element.binding = value; element.label = target.selectedOptions[0]?.textContent || element.content; }
+    else if (property === 'binding') { element.binding = value; element.label = target.selectedOptions[0]?.textContent || element.label; }
+    else if (['leftIndent', 'rightIndent'].includes(property)) { const page = activeDocumentPhysicalPage().page; const width = documentPageGeometry(page).width - page.margins.left - page.margins.right; const opposite = property === 'leftIndent' ? 'rightIndent' : 'leftIndent'; element[property] = Math.min(Math.max(0, width - Number(element[opposite] || 0) - 1), Math.max(0, Number(value) || 0)); }
+    else element[property] = ['fontSize', 'padding', 'column'].includes(property) ? Number(value) : value;
+  }
+  renderDocumentDesigner();
+}
+
+function updateDocumentPageProperty(target) {
+  const property = target.dataset.documentPageProperty; const template = activeDocumentTemplate(); if (!property || !template) return;
+  captureDocumentHistory(); const page = activeDocumentPhysicalPage(template).page;
+  if (property === 'margin') page.margins[target.dataset.documentMarginSide] = clampDocumentMargin(page, target.dataset.documentMarginSide, target.value);
+  else if (['headerColumns', 'footerColumns'].includes(property)) page[property] = Number(target.value);
+  else if (['headerFromTop', 'footerFromBottom'].includes(property)) page[property] = Math.min(3, Math.max(.5, Number(target.value) || 1.25));
+  else page[property] = target.type === 'checkbox' ? target.checked : target.value;
+  renderDocumentDesigner();
+}
+
+function updateDocumentMarginDrag(event) {
+  const drag = state.documentMarginDrag; if (!drag) return;
+  const page = activeDocumentTemplate()?.page; if (!page) return;
+  const ruler = $(['left', 'right'].includes(drag.side) ? '.document-horizontal-ruler' : '.document-vertical-ruler'); const bounds = ruler.getBoundingClientRect(); const geometry = documentPageGeometry(page);
+  const pointer = ['left', 'right'].includes(drag.side) ? event.clientX - bounds.left : event.clientY - bounds.top; const ratio = Math.min(1, Math.max(0, pointer / (['left', 'right'].includes(drag.side) ? bounds.width : bounds.height)));
+  const raw = drag.side === 'left' ? ratio * geometry.width : drag.side === 'right' ? (1 - ratio) * geometry.width : drag.side === 'top' ? ratio * geometry.height : (1 - ratio) * geometry.height;
+  page.margins[drag.side] = Number(clampDocumentMargin(page, drag.side, raw).toFixed(1));
+  const coordinateSystem = $('#documentCoordinateSystem'); coordinateSystem.style.setProperty(`--margin-${drag.side}`, `${page.margins[drag.side]}cm`); coordinateSystem.style.setProperty(`--print-margin-${drag.side}`, `${page.margins[drag.side]}cm`);
+  const handle = $(`[data-document-margin-handle="${drag.side}"]`); const axisSize = ['left', 'right'].includes(drag.side) ? geometry.width : geometry.height; const handleRatio = ['left', 'top'].includes(drag.side) ? page.margins[drag.side] / axisSize : (axisSize - page.margins[drag.side]) / axisSize;
+  if (handle) { handle.style.setProperty('--handle-position', `${handleRatio * 100}%`); handle.title = `${titleCaseMessage(drag.side)} margin: ${page.margins[drag.side]} cm`; }
+  const input = $(`[data-document-margin-side="${drag.side}"]`); if (input) input.value = page.margins[drag.side];
+}
+
+function updateDocumentRulerDrag(event) {
+  const drag = state.documentRulerDrag; if (!drag) return; const { template, element, table } = selectedDocumentTarget(); if (!template || !element) return;
+  if (drag.kind === 'row-height' && table && state.documentSelectedCell) {
+    const ruler = $('.document-vertical-ruler'); const bounds = ruler.getBoundingClientRect(); const height = documentPageGeometry(activeDocumentPhysicalPage(template).page).height; const pointerCm = Math.min(height, Math.max(0, ((event.clientY - bounds.top) / Math.max(1, bounds.height)) * height));
+    const row = table.rows[state.documentSelectedCell.row]; row.heightCm = Number(Math.min(3.2, Math.max(.65, pointerCm - drag.rowTopCm)).toFixed(2));
+    const rowElement = $(`[data-document-row="${table.id}:${state.documentSelectedCell.row}"]`); if (rowElement) rowElement.style.height = `${row.heightCm}cm`;
+    const handle = $('[data-document-row-height-handle]'); if (handle) { handle.style.setProperty('--handle-position', `${(Math.min(height, drag.rowTopCm + row.heightCm) / height) * 100}%`); handle.title = `Row height: ${row.heightCm.toFixed(2)} cm`; }
+    const input = $('[data-document-property="rowHeightCm"]'); if (input) input.value = row.heightCm.toFixed(2);
+    return;
+  }
+  const ruler = $('.document-horizontal-ruler'); const bounds = ruler.getBoundingClientRect(); const page = activeDocumentPhysicalPage(template).page; const width = documentPageGeometry(page).width; const pointerCm = Math.min(width, Math.max(0, ((event.clientX - bounds.left) / Math.max(1, bounds.width)) * width)); const contentWidth = width - page.margins.left - page.margins.right;
+  if (drag.kind === 'indent') { const opposite = drag.side === 'left' ? Number(element.rightIndent) || 0 : Number(element.leftIndent) || 0; element[`${drag.side}Indent`] = Number(Math.min(contentWidth - opposite - 1, Math.max(0, drag.side === 'left' ? pointerCm - page.margins.left : width - page.margins.right - pointerCm)).toFixed(1)); const block = $(`[data-document-element="${element.id}"]`); if (block) block.style[`margin${titleCaseMessage(drag.side)}`] = `${element[`${drag.side}Indent`]}cm`; const input = $(`[data-document-property="${drag.side}Indent"]`); if (input) input.value = element[`${drag.side}Indent`]; }
+  if (drag.kind === 'column' && table) { const widths = normalizedDocumentColumnWidths(table); const before = widths.slice(0, drag.index).reduce((sum, value) => sum + value, 0); const pair = widths[drag.index] + widths[drag.index + 1]; const desired = ((pointerCm - page.margins.left) / contentWidth) * 100 - before; const left = Math.min(pair - 8, Math.max(8, desired)); table.columns[drag.index].width = Number(left.toFixed(3)); table.columns[drag.index + 1].width = Number((pair - left).toFixed(3)); }
+  const handle = drag.kind === 'indent' ? $(`[data-document-indent-handle="${drag.side}"]`) : $(`[data-document-column-marker="${drag.index}"]`); if (handle) handle.style.setProperty('--handle-position', `${(pointerCm / width) * 100}%`);
+  if (drag.kind === 'column' && table) { const columns = $$(`[data-document-element="${table.id}"] col`); normalizedDocumentColumnWidths(table).forEach((value, index) => { if (columns[index]) columns[index].style.width = `${value}%`; }); const input = $('[data-document-property="columnWidth"]'); if (input && state.documentSelectedCell?.column === drag.index) input.value = table.columns[drag.index].width; }
+}
+
+function documentTableAction(action) {
+  const { table, cell } = selectedDocumentTarget(); if (!table || !cell) return;
+  captureDocumentHistory();
+  if (action === 'add-row') table.rows.push({ id: documentId('row'), heightCm: .9, repeat: false, cells: table.columns.map(() => ({ id: documentId('cell'), content: '', binding: '', alignment: 'left', padding: 6, colSpan: 1 })) });
+  if (action === 'toggle-repeat') table.rows[state.documentSelectedCell.row].repeat = !table.rows[state.documentSelectedCell.row].repeat;
+  if (action === 'add-column' && table.columns.length < 12) { table.columns.push({ id: documentId('col'), width: 8, label: `Column ${table.columns.length + 1}` }); table.rows.forEach((row) => row.cells.push({ id: documentId('cell'), content: '', binding: '', alignment: 'left', padding: 6, colSpan: 1 })); fitDocumentColumnWidths(table, table.columns.length - 1, 8); }
+  if (action === 'merge-right') { const next = table.rows[state.documentSelectedCell.row].cells[state.documentSelectedCell.column + 1]; if (next && !next.hidden) { cell.colSpan = (cell.colSpan || 1) + (next.colSpan || 1); next.hidden = true; } }
+  renderDocumentDesigner();
+}
+
+async function saveDocumentTemplate() {
+  const template = activeDocumentTemplate(); if (!template) return;
+  const button = $('#saveDocumentTemplate'); if (button.disabled) return;
+  template.name = $('#documentTemplateName').value.trim() || 'Untitled document'; template.source = $('#documentTemplateSource').value; template.updatedAt = new Date().toISOString(); template.status = template.status === 'sample' ? 'draft' : template.status;
+  if (template.pages?.length) { template.page = structuredClone(template.pages[0].page); template.regions = structuredClone(template.pages[0].regions); }
+  localStorage.setItem(documentTemplateStorageKey, JSON.stringify(state.documentTemplates));
+  button.disabled = true; button.textContent = 'Saving…';
+  const snapshot = structuredClone(template);
+  try {
+    const saved = await api(`/api/document-templates/${encodeURIComponent(template.templateKey)}`, { method: 'PUT', body: JSON.stringify({ template: snapshot, revision: snapshot.serverRevision }) });
+    if (state.documentOriginalPdfFile) {
+      const sourceBody = new FormData(); sourceBody.append('pdf', state.documentOriginalPdfFile);
+      await api(`/api/document-templates/${encodeURIComponent(template.templateKey)}/source-pdf`, { method: 'PUT', body: sourceBody });
+      template.hasSourcePdf = true; state.documentOriginalPdfFile = null;
+    }
+    // Keep edits made while the request was in flight; they remain unsaved.
+    const currentDefinition = structuredClone(template); delete currentDefinition.serverRevision; delete currentDefinition.serverSnapshot; delete currentDefinition.hasSourcePdf;
+    const savedDefinition = structuredClone(snapshot); delete savedDefinition.serverRevision; delete savedDefinition.serverSnapshot; delete savedDefinition.hasSourcePdf;
+    const unchanged = JSON.stringify(currentDefinition) === JSON.stringify(savedDefinition);
+    template.serverRevision = saved.revision;
+    template.serverSnapshot = JSON.stringify(savedDefinition);
+    state.documentDirty = !unchanged;
+    localStorage.setItem(documentTemplateStorageKey, JSON.stringify(state.documentTemplates));
+    toast(unchanged ? 'Document template saved to server.' : 'Saved. Newer edits remain unsaved.');
+    renderDocumentDesigner();
+  } catch (error) { $('#documentOutputStatus').textContent = `Server save failed: ${error.message}. Local draft retained.`; }
+  finally { button.disabled = false; button.textContent = 'Save'; }
+}
+
+async function loadServerDocumentTemplates() {
+  const payload = await api('/api/document-templates');
+  for (const entry of payload.templates) {
+    const index = state.documentTemplates.findIndex((item) => item.templateKey === entry.template.templateKey);
+    const serverCopy = { ...entry.template, hasSourcePdf: entry.hasSourcePdf, serverRevision: entry.revision, serverSnapshot: JSON.stringify(entry.template) };
+    if (index < 0) state.documentTemplates.push(serverCopy);
+    else {
+      if (state.activeDocumentTemplateKey === entry.template.templateKey) continue;
+      const local = structuredClone(state.documentTemplates[index]); const baseline = local.serverSnapshot;
+      delete local.serverRevision; delete local.serverSnapshot; delete local.hasSourcePdf;
+      // Refresh unchanged server copies; never overwrite a local draft.
+      if (JSON.stringify(local) === baseline || (local.status === 'sample' && !state.documentRecoveredTemplateKeys.has(local.templateKey))) state.documentTemplates[index] = serverCopy;
+    }
+  }
+  renderDocumentTemplateList();
+}
+
+function documentOutputContext() {
+  const record = $('#documentOutputRecordId').value;
+  const workflow = $('#documentOutputWorkflowId').value.trim();
+  return { ...(record ? { recordId: Number(record) } : {}), ...(workflow ? { workflowRequestId: workflow } : {}) };
+}
+
+let documentPreviewSequence = 0;
+async function mountDocumentOutputFrame(frame, template, context, zoom = 100) {
+  frame.hidden = false;
+  await new Promise((resolve) => { frame.onload = resolve; frame.srcdoc = '<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\'"></head><body><main></main></body></html>'; });
+  const host = frame.contentDocument.querySelector('main');
+  const count = await DocumentOutput.mount(host, template, context);
+  const geometry = DocumentOutput.geometry(template.page);
+  host.style.transformOrigin = 'top left'; host.style.transform = `scale(${zoom / 100})`;
+  frame.style.width = `${geometry.width * zoom / 100}cm`; frame.style.height = `${geometry.height * count * zoom / 100}cm`;
+  const printStyle = frame.contentDocument.createElement('style'); printStyle.textContent = '@media screen{html,body{overflow:hidden}}@media print{main{transform:none!important}}'; host.append(printStyle);
+  return count;
+}
+
+async function updateDocumentOutputPreview() {
+  const sequence = ++documentPreviewSequence;
+  $('#documentOutputPreview').hidden = true;
+  $('#documentOutputStatus').textContent = 'Preparing preview…';
+  const template = structuredClone(activeDocumentTemplate()); if (!template) return;
+  const input = documentOutputContext();
+  let context = { system: { current_user: state.user?.name || '' } };
+  if (template.serverRevision) {
+    if ((input.recordId || input.workflowRequestId) && JSON.parse(template.serverSnapshot || '{}').source !== template.source) throw new Error('Save the changed data context before previewing record data.');
+    const resolved = await api(`/api/document-templates/${encodeURIComponent(template.templateKey)}/preview`, { method: 'POST', body: JSON.stringify({ ...input, revision: template.serverRevision }) });
+    context = resolved.context;
+  } else if (input.recordId || input.workflowRequestId) throw new Error('Save this template to the server before previewing record data.');
+  if (sequence !== documentPreviewSequence || state.documentDesignerMode !== 'preview') return;
+  const count = await mountDocumentOutputFrame($('#documentOutputPreview'), template, context, Number($('#documentZoom').value));
+  $('#documentOutputStatus').textContent = `${count} page${count === 1 ? '' : 's'} · ${input.recordId || input.workflowRequestId ? 'Authorized data' : 'Template-only preview; unbound fields are blank'} · Download PDF is the formal output.`;
+}
+
+async function downloadSavedDocumentPdf(templateKey, input, button) {
+  if (button.disabled) return;
+  const label = button.textContent; button.disabled = true; button.textContent = 'Generating PDF…'; button.setAttribute('aria-busy', 'true');
+  try {
+    const response = await fetch(`/api/document-templates/${encodeURIComponent(templateKey)}/render-pdf`, { method: 'POST', headers: { Authorization: `Bearer ${await currentAuthToken()}`, 'Content-Type': 'application/json' }, body: JSON.stringify(input) });
+    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'PDF generation failed');
+    if (!response.headers.get('content-type')?.includes('application/pdf')) throw new Error('Server did not return a PDF.');
+    const url = URL.createObjectURL(await response.blob()); const link = document.createElement('a');
+    link.href = url; link.download = response.headers.get('content-disposition')?.match(/filename="([^"]+)"/)?.[1] || 'document.pdf';
+    link.click(); setTimeout(() => URL.revokeObjectURL(url), 30000);
+  } finally { button.disabled = false; button.textContent = label; button.removeAttribute('aria-busy'); }
+}
+
+let recordDocumentContext = {};
+async function openRecordDocumentOutput(input) {
+  recordDocumentContext = input;
+  const dialog = $('#recordDocumentDialog'); if (!dialog.open) dialog.showModal();
+  $('#recordDocumentFrame').hidden = true; $('#recordDocumentStatus').textContent = 'Loading available templates…';
+  $('#recordDocumentTemplate').replaceChildren();
+  try {
+    const payload = await api('/api/document-templates/available', { method: 'POST', body: JSON.stringify(input) });
+    $('#recordDocumentTemplate').innerHTML = payload.templates.map((template) => `<option value="${escapeHtml(template.templateKey)}">${escapeHtml(template.name)}</option>`).join('');
+    $('#recordDocumentStatus').textContent = payload.templates.length ? 'Preview or download the selected document.' : 'No saved templates are available for this context.';
+  } catch (error) { $('#recordDocumentStatus').textContent = error.message; }
+}
+
+function renderWorkflowDocumentOutput(definition = activeWorkflowDefinition()) {
+  const key = definition?.workflowKey || $('#workflowDefinitionForm')?.elements.workflowKey?.value || 'new'; const output = state.workflowDocumentOutputs[key] || { enabled: false, templateKey: '', trigger: 'final_approval', format: 'pdf' };
+  $('#workflowDocumentEnabled').checked = output.enabled; $('#workflowDocumentTemplate').innerHTML = `<option value="">Select document template</option>${state.documentTemplates.map((template) => `<option value="${escapeHtml(template.templateKey)}">${escapeHtml(template.name)}</option>`).join('')}`; $('#workflowDocumentTemplate').value = output.templateKey || '';
+  $('#workflowDocumentTrigger').value = output.trigger; $('#workflowDocumentFormat').value = output.format; $('#workflowDocumentTemplate').disabled = !output.enabled; $('#workflowDocumentTrigger').disabled = !output.enabled; $('#workflowDocumentFormat').disabled = !output.enabled; $('#openWorkflowDocumentDesigner').disabled = !output.templateKey; $('#previewWorkflowDocument').disabled = !output.templateKey;
+}
+
+function saveWorkflowDocumentOutput() {
+  const key = activeWorkflowDefinition()?.workflowKey || $('#workflowDefinitionForm').elements.workflowKey.value || 'new';
+  state.workflowDocumentOutputs[key] = { enabled: $('#workflowDocumentEnabled').checked, templateKey: $('#workflowDocumentTemplate').value, trigger: $('#workflowDocumentTrigger').value, format: $('#workflowDocumentFormat').value };
+  localStorage.setItem(workflowDocumentStorageKey, JSON.stringify(state.workflowDocumentOutputs)); renderWorkflowDocumentOutput(activeWorkflowDefinition());
 }
 
 async function loadWorkflowDefinitions(selectKey = state.activeWorkflowKey) {
@@ -4777,7 +6341,7 @@ function renderWorkflowRequestDetail(payload) {
   if (state.user?.role === 'admin' && request.status === 'pending') actions.push('<button type="button" class="secondary danger-link" data-workflow-lifecycle="cancel">Cancel request</button>');
   const snapshot = payload.snapshot?.snapshot || {};
   const attachmentSection = `<section class="workflow-detail-section"><div class="workflow-detail-section-heading"><h3>Attachments</h3><span>${payload.attachments?.length || 0} files</span></div><div class="workflow-attachment-list">${(payload.attachments || []).map((attachment) => `<button type="button" class="secondary" data-workflow-attachment-download="${attachment.id}"><strong>${escapeHtml(attachment.fileName)}</strong><small>${escapeHtml(titleCaseMessage(attachment.purpose))} · ${Math.max(1, Math.ceil(attachment.fileSize / 1024))} KB</small></button>`).join('') || '<p class="muted">No attachments were added to this request.</p>'}</div></section>`;
-  $('#workflowRequestDetail').innerHTML = `<header class="workflow-request-detail-header"><div><span class="eyebrow">${escapeHtml(request.workflowName || request.workflowKey)}</span><h2>${escapeHtml(request.requestKey)}</h2><p>${escapeHtml(titleCaseMessage(payload.relationship))} view · ${escapeHtml(request.sourceModuleKey)} record #${escapeHtml(String(request.sourceRecordId))}</p></div><span class="status-pill ${workflowStatusClass(request.status)}">${escapeHtml(titleCaseMessage(request.status))}</span></header>
+  $('#workflowRequestDetail').innerHTML = `<header class="workflow-request-detail-header"><div><span class="eyebrow">${escapeHtml(request.workflowName || request.workflowKey)}</span><h2>${escapeHtml(request.requestKey)}</h2><p>${escapeHtml(titleCaseMessage(payload.relationship))} view · ${escapeHtml(request.sourceModuleKey)} record #${escapeHtml(String(request.sourceRecordId))}</p><button type="button" class="secondary" data-workflow-document-output>Document PDF</button></div><span class="status-pill ${workflowStatusClass(request.status)}">${escapeHtml(titleCaseMessage(request.status))}</span></header>
     <div class="workflow-request-actionbar">${actions.join('')}</div>${attachmentSection}
     <section class="workflow-detail-section"><div class="workflow-detail-section-heading"><h3>Approval rail</h3><span>Version ${request.workflowVersion}</span></div><div class="workflow-approval-rail">${payload.stages.map((stage, index) => `<article class="${workflowStageTone(stage)}"><span class="workflow-rail-marker">${['approved', 'auto-approved'].includes(stage.status) ? '✓' : index + 1}</span><div><strong>${escapeHtml(stage.name || stage.stageKey)}</strong><small>${escapeHtml(titleCaseMessage(stage.status))}${stage.dueAt ? ` · Due ${escapeHtml(new Date(stage.dueAt).toLocaleString())}` : ''}</small>${stage.reasonMessage ? `<p>${escapeHtml(stage.reasonMessage)}</p>` : ''}</div></article>`).join('')}</div></section>
     <section class="workflow-detail-section"><div class="workflow-detail-section-heading"><h3>Protected snapshot</h3><span>${escapeHtml(payload.presentation?.formName || 'Permitted fields')} · Revision ${payload.snapshot?.revisionNumber || 1}</span></div><dl class="workflow-snapshot-grid">${Object.entries(snapshot).map(([key, value]) => `<div><dt>${escapeHtml(titleCaseMessage(key))}</dt><dd>${escapeHtml(typeof value === 'object' ? JSON.stringify(value) : String(value ?? '—'))}</dd></div>`).join('') || '<div><dt>Visible fields</dt><dd>No fields are available in this node form under your field permissions.</dd></div>'}</dl></section>
@@ -4996,14 +6560,18 @@ async function reassignWorkflowAssignment(event) {
   closeWorkflowModal('workflowReassignModal'); await loadWorkflowMonitoring(); toast(`Approval ${values.requestKey} Reassigned.`);
 }
 
-function openWorkflowSubmitModal() {
+async function openWorkflowSubmitModal(context = {}) {
   const published = state.workflowDefinitions.filter((definition) => definition.status === 'published');
   const form = $('#workflowSubmitForm');
   form.reset();
   form.elements.workflowKey.innerHTML = published.map((definition) => `<option value="${escapeHtml(definition.workflowKey)}">${escapeHtml(definition.name)} · ${escapeHtml(definition.sourceModuleKey)}</option>`).join('');
   if (!published.length) return toast('No Published Workflow Is Available. Contact An Administrator.', 'error');
+  const matched = context.moduleKey ? published.find((definition) => definition.sourceModuleKey === context.moduleKey) : null;
+  if (matched) form.elements.workflowKey.value = matched.workflowKey;
+  form.dataset.preferredRecordId = context.recordId ? String(context.recordId) : '';
   syncWorkflowSubmitBinding();
   openWorkflowModal('workflowSubmitModal', 'select');
+  await loadWorkflowSourceRecords(context.recordId || '');
 }
 
 function configureWorkflowAttachmentInput(container, policy = {}, purpose) {
@@ -5017,15 +6585,51 @@ function configureWorkflowAttachmentInput(container, policy = {}, purpose) {
   container.querySelector('small').textContent = enabled ? `${titleCaseMessage(policy.mode)} · up to ${policy.maxFileCount || 1} file(s), ${Math.max(1, Math.round((policy.maxFileSize || 5242880) / 1048576))} MB each.` : '';
 }
 
+function workflowAttachmentFieldRules(policy = {}) {
+  return {
+    accept: (policy.allowedTypes || []).join(','),
+    helper: `Allowed formats apply · up to ${Math.max(1, Math.round((policy.maxFileSize || 5242880) / 1048576))} MB.`
+  };
+}
+
 function syncWorkflowSubmitBinding() {
   const definition = state.workflowDefinitions.find((item) => item.workflowKey === $('#workflowSubmitForm').elements.workflowKey.value);
   $('#workflowSubmitBinding').innerHTML = definition ? `<strong>${escapeHtml(definition.sourceModuleKey)}</strong><span>New request ID will begin with ${escapeHtml(definition.requestPrefix)}.</span>` : 'Choose a workflow.';
   configureWorkflowAttachmentInput($('#workflowSubmitAttachments'), definition?.submissionAttachmentPolicy, 'submission');
 }
 
+function selectWorkflowSourceRecord(recordId) {
+  const form = $('#workflowSubmitForm');
+  form.elements.sourceRecordId.value = String(recordId || '');
+  $$('[data-workflow-source-record]').forEach((button) => {
+    const selected = button.dataset.workflowSourceRecord === String(recordId);
+    button.classList.toggle('is-selected', selected);
+    button.setAttribute('aria-selected', String(selected));
+  });
+}
+
+async function loadWorkflowSourceRecords(preferredRecordId = '') {
+  const form = $('#workflowSubmitForm');
+  const workflowKey = form.elements.workflowKey.value;
+  const search = $('#workflowSourceRecordSearch').value.trim();
+  const status = $('#workflowSourceRecordStatus');
+  const options = $('#workflowSourceRecordOptions');
+  form.elements.sourceRecordId.value = '';
+  status.textContent = 'Loading available records...';
+  options.innerHTML = '';
+  const payload = await api(`/api/workflows/source-records?workflowKey=${encodeURIComponent(workflowKey)}&search=${encodeURIComponent(search)}`);
+  const records = payload.records || [];
+  status.textContent = records.length ? `${records.length} record${records.length === 1 ? '' : 's'} available` : 'No matching records are available.';
+  options.innerHTML = records.map((record) => `<button type="button" data-workflow-source-record="${escapeHtml(record.id)}" role="option" aria-selected="false"><span><strong>${escapeHtml(record.label)}</strong>${record.secondary ? `<small>${escapeHtml(record.secondary)}</small>` : ''}</span><i aria-hidden="true">✓</i></button>`).join('');
+  const preferred = records.find((record) => String(record.id) === String(preferredRecordId || form.dataset.preferredRecordId));
+  if (preferred) selectWorkflowSourceRecord(preferred.id);
+  else if (records.length === 1) selectWorkflowSourceRecord(records[0].id);
+}
+
 async function submitWorkflowRequest(event) {
   event.preventDefault();
   const form = event.currentTarget;
+  if (!form.elements.sourceRecordId.value) return toast('Choose the record that needs approval.', 'error');
   const definition = state.workflowDefinitions.find((item) => item.workflowKey === form.elements.workflowKey.value);
   const body = new FormData(form);
   body.set('sourceModuleKey', definition.sourceModuleKey);
@@ -5052,10 +6656,11 @@ function openWorkflowDecision(action) {
   form.elements.remark.required = action !== 'approve';
   configureWorkflowAttachmentInput($('#workflowDecisionAttachments'), state.activeWorkflowRequest?.attachmentPolicy, action === 'approve' ? 'approval' : action);
   const responseForm = state.activeWorkflowRequest?.responseForm;
+  const attachmentRules = workflowAttachmentFieldRules(state.activeWorkflowRequest?.attachmentPolicy);
   const responsePanel = $('#workflowDecisionResponseFields');
   responsePanel.innerHTML = responseForm?.fields?.length ? `<div class="workflow-command-note"><strong>${escapeHtml(responseForm.formName || 'Approval response')}</strong><span>These answers are saved with your decision.</span></div>${responseForm.fields.map((field) => {
     const type = ['number', 'int', 'decimals'].includes(field.type) ? 'number' : field.type === 'date' ? 'date' : field.type === 'checkbox' ? 'checkbox' : field.type === 'attachment' ? 'file' : 'text';
-    if (type === 'file') return `<label>${escapeHtml(field.label)}<input type="file" name="responseAttachment:${escapeHtml(field.fieldKey)}" data-workflow-response-input="${escapeHtml(field.fieldKey)}" ${action === 'approve' && field.required ? 'required' : ''}></label>`;
+    if (type === 'file') return `<label>${escapeHtml(field.label)}<input type="file" name="responseAttachment:${escapeHtml(field.fieldKey)}" data-workflow-response-input="${escapeHtml(field.fieldKey)}" accept="${escapeHtml(attachmentRules.accept)}" ${action === 'approve' && field.required ? 'required' : ''}><small>${escapeHtml(attachmentRules.helper)}</small></label>`;
     if (type === 'checkbox') return `<label class="checkbox-label"><input type="checkbox" data-workflow-response-input="${escapeHtml(field.fieldKey)}"> ${escapeHtml(field.label)}${field.required ? ' *' : ''}</label>`;
     if (['dropdownbox', 'select'].includes(field.type)) return `<label>${escapeHtml(field.label)}<select data-workflow-response-input="${escapeHtml(field.fieldKey)}" ${action === 'approve' && field.required ? 'required' : ''}><option value="">Choose an option</option>${(field.options || []).map((option) => { const value = typeof option === 'object' ? (option.value ?? option.label) : option; const label = typeof option === 'object' ? (option.label ?? option.value) : option; return `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`; }).join('')}</select></label>`;
     if (field.type === 'textarea') return `<label>${escapeHtml(field.label)}<textarea rows="3" data-workflow-response-input="${escapeHtml(field.fieldKey)}" ${action === 'approve' && field.required ? 'required' : ''}></textarea></label>`;
@@ -5167,6 +6772,7 @@ async function loadDashboards() {
 }
 
 function showDashboardManagement() {
+  if (deferBuilderLeave(['dashboard'], showDashboardManagement)) return;
   state.dashboardManagementMode = 'list';
   $('#dashboardManagement').hidden = false;
   $('#dashboardBuilderStudio').hidden = true;
@@ -5346,6 +6952,7 @@ function renderPublishedDashboardList() {
 }
 
 async function loadPublishedDashboardWidget(widget, force = false) {
+  if (isDashboardWorkspaceWidget(widget)) return loadDashboardWorkspaceWidget(widget, force, true);
   const parameters = dashboardWidgetParameters(widget);
   const signature = JSON.stringify({ source: widget.dataSourceKey, config: widget.config, parameters, published: state.activePublishedDashboardKey });
   if (!force && state.dashboardWidgetResults[widget.widgetKey]?.signature === signature && ['loading', 'ready', 'error'].includes(state.dashboardWidgetResults[widget.widgetKey].status)) return;
@@ -5362,9 +6969,12 @@ async function loadPublishedDashboardWidget(widget, force = false) {
 function renderPublishedDashboardCanvas() {
   const canvas = $('#publishedDashboardCanvas');
   const widgets = state.dashboardConfiguration?.widgets || [];
-  canvas.innerHTML = widgets.map((widget) => { const layout = dashboardLayout(widget, 'desktop'); const result = state.dashboardWidgetResults[widget.widgetKey]; const refreshed = result?.cache?.refreshedAt ? new Date(result.cache.refreshedAt).toLocaleTimeString() : ''; const stale = result?.cache?.staleAt && Date.now() >= new Date(result.cache.staleAt).getTime(); const drillDown = widget.config?.drillDown?.targetKey ? `<button type="button" class="link-button" data-dashboard-drill-down="${escapeHtml(widget.widgetKey)}">Open details</button>` : ''; return `<article class="dashboard-widget-frame" style="grid-column:${layout.x + 1} / span ${layout.width};grid-row:${layout.y + 1} / span ${layout.height}"><header class="dashboard-widget-frame-header"><strong>${escapeHtml(widget.title)}</strong><span><small aria-live="polite">${refreshed ? `${stale ? 'Stale' : 'Updated'} ${escapeHtml(refreshed)}${result.cache.status === 'hit' ? ' (cached)' : ''}` : ''}</small>${drillDown}<button type="button" class="link-button" data-refresh-published-widget="${escapeHtml(widget.widgetKey)}">Refresh</button></span></header><div class="dashboard-widget-frame-body" aria-busy="${result?.status === 'loading'}">${renderDashboardWidgetResult(widget)}</div></article>`; }).join('');
-  const deepest = widgets.reduce((max, widget) => Math.max(max, dashboardLayout(widget, 'desktop').y + dashboardLayout(widget, 'desktop').height), 0);
+  const viewport = window.innerWidth <= 720 ? 'mobile' : 'desktop';
+  canvas.dataset.viewport = viewport;
+  canvas.innerHTML = widgets.map((widget) => { const layout = dashboardLayout(widget, viewport); const result = state.dashboardWidgetResults[widget.widgetKey]; const refreshed = result?.cache?.refreshedAt ? new Date(result.cache.refreshedAt).toLocaleTimeString() : ''; const stale = result?.cache?.staleAt && Date.now() >= new Date(result.cache.staleAt).getTime(); const drillDown = widget.config?.drillDown?.targetKey ? `<button type="button" class="link-button" data-dashboard-drill-down="${escapeHtml(widget.widgetKey)}">Open details</button>` : ''; return `<article class="dashboard-widget-frame" data-dashboard-widget-key="${escapeHtml(widget.widgetKey)}" style="grid-column:${layout.x + 1} / span ${layout.width};grid-row:${layout.y + 1} / span ${layout.height}"><header class="dashboard-widget-frame-header"><strong>${escapeHtml(widget.title)}</strong><span><small aria-live="polite">${refreshed ? `${stale ? 'Stale' : 'Updated'} ${escapeHtml(refreshed)}${result.cache?.status === 'hit' ? ' (cached)' : ''}` : ''}</small>${drillDown}<button type="button" class="link-button" data-refresh-published-widget="${escapeHtml(widget.widgetKey)}">Refresh</button></span></header><div class="dashboard-widget-frame-body" aria-busy="${result?.status === 'loading'}">${renderDashboardWidgetResult(widget)}</div></article>`; }).join('');
+  const deepest = widgets.reduce((max, widget) => Math.max(max, dashboardLayout(widget, viewport).y + dashboardLayout(widget, viewport).height), 0);
   canvas.style.height = `${Math.max(180, deepest * 88)}px`;
+  activateDashboardCalendarPopover();
   widgets.forEach((widget) => loadPublishedDashboardWidget(widget).catch(() => {}));
 }
 
@@ -5408,6 +7018,54 @@ async function openPublishedDashboard(dashboardKey) {
 }
 
 const dashboardLayoutColumns = { desktop: 12, mobile: 4 };
+const dashboardWorkspaceWidgetTypes = new Set(['approval_inbox', 'todo_list', 'calendar', 'quick_actions', 'recent_records', 'notifications']);
+
+function isDashboardWorkspaceWidget(widget) { return dashboardWorkspaceWidgetTypes.has(widget?.type); }
+function dashboardWidgetTypeLabel(type) { return ({ approval_inbox: 'Approval inbox', todo_list: 'To-do list', quick_actions: 'Quick actions', recent_records: 'Recent records' }[type] || titleCaseMessage(type)); }
+
+function dashboardLocalDateKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function dashboardCalendarMonth(widgetKey) {
+  const stored = state.dashboardCalendarMonths[widgetKey];
+  const month = stored ? new Date(`${stored}T12:00:00`) : new Date();
+  month.setDate(1); month.setHours(12, 0, 0, 0);
+  return month;
+}
+
+function dashboardCalendarRange(widgetKey) {
+  const month = dashboardCalendarMonth(widgetKey);
+  const start = new Date(month);
+  start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+  const end = new Date(start); end.setDate(end.getDate() + 42);
+  return { start: dashboardLocalDateKey(start), end: dashboardLocalDateKey(end) };
+}
+
+function dashboardCalendarEventDateKey(item) {
+  const date = new Date(item?.date);
+  return Number.isNaN(date.getTime()) ? String(item?.date || '').slice(0, 10) : dashboardLocalDateKey(date);
+}
+
+async function loadDashboardWorkspaceWidget(widget, force = false, published = false) {
+  const config = dashboardWidgetConfig(widget);
+  const calendarMonth = widget.type === 'calendar' ? dashboardLocalDateKey(dashboardCalendarMonth(widget.widgetKey)) : '';
+  const signature = JSON.stringify({ type: widget.type, config, published, user: state.user?.id, calendarMonth });
+  if (!force && state.dashboardWidgetResults[widget.widgetKey]?.signature === signature && ['loading', 'ready', 'error'].includes(state.dashboardWidgetResults[widget.widgetKey].status)) return;
+  state.dashboardWidgetResults[widget.widgetKey] = { status: 'loading', signature };
+  published ? renderPublishedDashboardCanvas() : renderDashboardCanvas();
+  try {
+    let data;
+    if (widget.type === 'approval_inbox') data = await api(`/api/workflows/inbox?status=${encodeURIComponent(config.status || 'pending')}&limit=${config.topN}`);
+    else if (widget.type === 'todo_list') data = await api(`/api/dashboard-workspace/tasks?status=${encodeURIComponent(config.status || 'open')}&limit=${config.topN}`);
+    else if (widget.type === 'calendar') { const range = dashboardCalendarRange(widget.widgetKey); data = await api(`/api/dashboard-workspace/calendar?start=${range.start}&end=${range.end}`); }
+    else if (widget.type === 'notifications') data = await api(`/api/notifications?limit=${config.topN}${config.unreadOnly ? '&unread=true' : ''}`);
+    else if (widget.type === 'recent_records') data = await api('/api/customers');
+    else data = { actions: config.actions || ['customersView', 'workflowRequestsView', 'publishedDashboardsView'] };
+    state.dashboardWidgetResults[widget.widgetKey] = { status: 'ready', signature, data, refreshedAt: new Date().toISOString() };
+  } catch (error) { state.dashboardWidgetResults[widget.widgetKey] = { status: 'error', signature, message: titleCaseMessage(error.message) }; }
+  published ? renderPublishedDashboardCanvas() : renderDashboardCanvas();
+}
 
 function dashboardLayout(widget, viewport = state.dashboardLayoutViewport) {
   const columns = dashboardLayoutColumns[viewport];
@@ -5629,8 +7287,99 @@ function renderDashboardPivot(widget, rows) {
   return `<div class="dashboard-widget-table dashboard-pivot-table"><table><thead><tr><th>${escapeHtml(rowFields.join(' / '))}</th>${headers.map(({ column, field }) => `<th>${escapeHtml(column)}<small>${escapeHtml(field)} - ${escapeHtml(config.aggregation)}</small></th>`).join('')}${config.showGrandTotals ? '<th>Row total</th>' : ''}</tr></thead><tbody>${body.join('')}</tbody>${grand}</table></div>`;
 }
 
+function renderDashboardWorkspaceWidget(widget, result) {
+  if (!result || result.status === 'loading') return '<div class="dashboard-widget-message is-loading"><strong>Loading...</strong><span>Refreshing your workspace.</span></div>';
+  if (result.status === 'error') return `<div class="dashboard-widget-message is-error"><strong>Unable to load</strong><span>${escapeHtml(result.message)}</span></div>`;
+  const data = result.data || {};
+  const config = dashboardWidgetConfig(widget);
+  if (widget.type === 'approval_inbox') {
+    const items = data.assignments || data.inbox || [];
+    return `<div class="dashboard-work-list"><div class="dashboard-widget-tabs"><span class="is-active">${escapeHtml(titleCaseMessage(config.status || 'pending'))}</span><em>${items.length}</em></div>${items.slice(0, config.topN).map((item) => `<button type="button" data-dashboard-request="${escapeHtml(item.requestKey)}"><span><strong>${escapeHtml(item.requestKey)}</strong><small>${escapeHtml(item.stageName || item.stageKey || 'Approval')}</small></span><time>${item.dueAt ? `Due ${escapeHtml(new Date(item.dueAt).toLocaleDateString())}` : 'No due date'}</time></button>`).join('') || '<p class="dashboard-work-empty">No approval requests in this tab.</p>'}</div>`;
+  }
+  if (widget.type === 'todo_list') {
+    const items = data.tasks || [];
+    return `<div class="dashboard-work-list"><form class="dashboard-task-add" data-dashboard-task-form><input name="title" maxlength="190" placeholder="Add a task..." required><button type="submit">Add</button></form>${items.slice(0, config.topN).map((item) => `<label class="dashboard-task-row"><input type="checkbox" data-dashboard-task-id="${item.id}" ${item.status === 'completed' ? 'checked' : ''}><span><strong>${escapeHtml(item.title)}</strong><small>${item.dueAt ? escapeHtml(new Date(item.dueAt).toLocaleDateString()) : 'No due date'} · ${escapeHtml(titleCaseMessage(item.priority))}</small></span></label>`).join('') || '<p class="dashboard-work-empty">No tasks yet. Add your first one above.</p>'}</div>`;
+  }
+  if (widget.type === 'calendar') {
+    const events = data.events || [];
+    const month = dashboardCalendarMonth(widget.widgetKey);
+    const range = dashboardCalendarRange(widget.widgetKey);
+    const firstDate = new Date(`${range.start}T12:00:00`);
+    const todayKey = dashboardLocalDateKey(new Date());
+    const monthLabel = new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(month);
+    const eventsByDate = events.reduce((groups, item) => {
+      const key = dashboardCalendarEventDateKey(item);
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(item);
+      return groups;
+    }, {});
+    const cells = Array.from({ length: 42 }, (_, index) => {
+      const date = new Date(firstDate); date.setDate(firstDate.getDate() + index);
+      const dateKey = dashboardLocalDateKey(date);
+      const items = eventsByDate[dateKey] || [];
+      const currentMonth = date.getMonth() === month.getMonth();
+      const accessibleLabel = `${date.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}${items.length ? `, ${items.length} scheduled item${items.length === 1 ? '' : 's'}` : ''}`;
+      const preview = items.length ? `<span class="dashboard-calendar-tooltip" role="tooltip"><strong>${escapeHtml(date.toLocaleDateString(undefined, { day: 'numeric', month: 'long' }))} · ${items.length} item${items.length === 1 ? '' : 's'}</strong>${items.slice(0, 3).map((item) => `<span><i class="is-${escapeHtml(item.type)}"></i>${escapeHtml(item.title)}</span>`).join('')}${items.length > 3 ? `<small>+${items.length - 3} more</small>` : ''}</span>` : '';
+      const dots = [...new Set(items.map((item) => dateKey < todayKey ? 'overdue' : item.type))].slice(0, 3).map((type) => `<i class="is-${escapeHtml(type)}"></i>`).join('');
+      return `<button type="button" class="dashboard-calendar-day${currentMonth ? '' : ' is-adjacent'}${dateKey === todayKey ? ' is-today' : ''}${items.length ? ' has-events' : ''}" data-dashboard-calendar-date="${dateKey}" aria-label="${escapeHtml(accessibleLabel)}" aria-haspopup="${items.length ? 'dialog' : 'false'}"><span>${date.getDate()}</span>${dots ? `<em>${dots}</em>` : ''}${preview}</button>`;
+    }).join('');
+    const open = state.dashboardCalendarOpen?.widgetKey === widget.widgetKey ? state.dashboardCalendarOpen : null;
+    const selectedItems = open ? (eventsByDate[open.date] || []) : [];
+    const popover = open && selectedItems.length ? `<section class="dashboard-calendar-popover" role="dialog" aria-modal="false" aria-label="Scheduled items for ${escapeHtml(open.date)}"><header><span><strong>${escapeHtml(new Date(`${open.date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' }))}</strong><small>${selectedItems.length} scheduled item${selectedItems.length === 1 ? '' : 's'}</small></span><button type="button" class="dashboard-calendar-close" data-dashboard-calendar-close aria-label="Close calendar details">×</button></header><div>${selectedItems.map((item) => item.requestKey ? `<button type="button" class="dashboard-calendar-event is-approval" data-dashboard-request="${escapeHtml(item.requestKey)}"><span><i></i><strong>${escapeHtml(item.title)}</strong><small>Approval · ${escapeHtml(item.requestKey)}</small></span><b>Open</b></button>` : `<label class="dashboard-calendar-event is-task"><input type="checkbox" data-dashboard-task-id="${escapeHtml(String(item.id).replace(/^task-/, ''))}" ${item.status === 'completed' ? 'checked' : ''}><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(titleCaseMessage(item.priority || 'normal'))} priority</small></span></label>`).join('')}</div></section>` : '';
+    return `<div class="dashboard-calendar"><header class="dashboard-calendar-toolbar"><strong>${escapeHtml(monthLabel)}</strong><span><button type="button" class="secondary" data-dashboard-calendar-today>Today</button><button type="button" class="secondary" data-dashboard-calendar-shift="-1" aria-label="Previous month">‹</button><button type="button" class="secondary" data-dashboard-calendar-shift="1" aria-label="Next month">›</button></span></header><div class="dashboard-calendar-weekdays" aria-hidden="true">${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day) => `<span>${day}</span>`).join('')}</div><div class="dashboard-calendar-grid">${cells}</div><footer><span><i class="is-approval"></i>Approval</span><span><i class="is-task"></i>Task</span><span><i class="is-overdue"></i>Overdue</span></footer>${popover}</div>`;
+  }
+  if (widget.type === 'quick_actions') {
+    const labels = { customersView: 'Customers', workflowRequestsView: 'Approval requests', publishedDashboardsView: 'Dashboards', adminView: 'Admin Portal' };
+    return `<div class="dashboard-quick-actions">${(data.actions || []).filter((key) => key !== 'adminView' || state.user?.role === 'admin').map((key) => `<button type="button" class="secondary" data-dashboard-view="${escapeHtml(key)}"><span>+</span>${escapeHtml(labels[key] || titleCaseMessage(key.replace(/View$/, '')))}</button>`).join('')}</div>`;
+  }
+  if (widget.type === 'recent_records') {
+    const items = data.customers || [];
+    return `<div class="dashboard-work-list">${items.slice(0, config.topN).map((item) => `<button type="button" data-dashboard-view="customersView"><span><strong>${escapeHtml(item.companyName || item.name || `Customer ${item.id}`)}</strong><small>${escapeHtml(item.contactPerson || item.email || '')}</small></span><em class="status-pill">${escapeHtml(titleCaseMessage(item.status || 'active'))}</em></button>`).join('') || '<p class="dashboard-work-empty">No recent records available.</p>'}</div>`;
+  }
+  const items = data.notifications || [];
+  return `<div class="dashboard-work-list">${items.slice(0, config.topN).map((item) => `<button type="button" ${item.requestKey ? `data-dashboard-request="${escapeHtml(item.requestKey)}"` : ''}><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.message)}</small></span>${item.read ? '' : '<i class="dashboard-unread-dot"></i>'}</button>`).join('') || '<p class="dashboard-work-empty">You are all caught up.</p>'}</div>`;
+}
+
+function activateDashboardCalendarPopover() {
+  const open = state.dashboardCalendarOpen;
+  if (!open) return;
+  requestAnimationFrame(() => {
+    const popover = $('.dashboard-calendar-popover');
+    const widget = $(`[data-dashboard-widget-key="${CSS.escape(open.widgetKey)}"]`);
+    const trigger = widget?.querySelector(`[data-dashboard-calendar-date="${CSS.escape(open.date)}"]`);
+    const calendar = popover?.closest('.dashboard-calendar');
+    if (!popover || !trigger || !calendar) return;
+    popover.classList.add('anchored-popover');
+    popover.dataset.surfaceKind = 'parallel';
+    popover.dataset.floatingState = 'closed';
+    const triggerBounds = trigger.getBoundingClientRect();
+    const calendarBounds = calendar.getBoundingClientRect();
+    const width = Math.min(310, Math.max(220, calendarBounds.width - 8));
+    const desiredLeft = triggerBounds.left - calendarBounds.left + (triggerBounds.width / 2) - (width / 2);
+    const left = Math.max(4, Math.min(desiredLeft, calendarBounds.width - width - 4));
+    popover.style.setProperty('--popover-left', `${Math.round(left)}px`);
+    popover.style.setProperty('--popover-top', `${Math.round(triggerBounds.bottom - calendarBounds.top + 8)}px`);
+    positionAnchoredSurface(popover, trigger, calendar);
+    requestAnimationFrame(() => { popover.dataset.floatingState = 'open'; });
+  });
+}
+
+function closeDashboardCalendarPopover(render) {
+  const popover = $('.dashboard-calendar-popover');
+  if (!popover || prefersReducedMotion()) {
+    state.dashboardCalendarOpen = null;
+    render();
+    return;
+  }
+  setFloatingSurfaceOpen(popover, null, false, { onClosed: () => {
+    state.dashboardCalendarOpen = null;
+    render();
+  } });
+}
+
 function renderDashboardWidgetResult(widget) {
   const result = state.dashboardWidgetResults[widget.widgetKey];
+  if (isDashboardWorkspaceWidget(widget)) return renderDashboardWorkspaceWidget(widget, result);
   if (!widget.dataSourceKey) return '<div class="dashboard-widget-message"><strong>Choose Dashboard Data</strong><span>Connect this widget in the settings panel.</span></div>';
   if (!result || result.status === 'loading') return '<div class="dashboard-widget-message is-loading"><strong>Loading dataâ€¦</strong><span>Running the bounded saved source.</span></div>';
   if (result.status === 'error') return `<div class="dashboard-widget-message is-error"><strong>Query failed</strong><span>${escapeHtml(result.message)}</span></div>`;
@@ -5670,6 +7419,7 @@ function renderDashboardWidgetResult(widget) {
 
 async function loadDashboardWidgetPreview(widgetKey, force = false) {
   const widget = state.dashboardConfiguration?.widgets.find((item) => item.widgetKey === widgetKey);
+  if (isDashboardWorkspaceWidget(widget)) return loadDashboardWorkspaceWidget(widget, force, false);
   if (!widget?.dataSourceKey) return;
   const parameters = dashboardWidgetParameters(widget);
   const source = state.dashboardDataSources.find((item) => item.dataSourceKey === widget.dataSourceKey);
@@ -5760,8 +7510,9 @@ function renderDashboardCanvas() {
   canvas.dataset.viewport = state.dashboardLayoutViewport;
   canvas.innerHTML = widgets.map((widget) => {
     const layout = dashboardLayout(widget);
-    return `<article class="dashboard-widget-frame ${widget.widgetKey === state.selectedDashboardWidgetKey ? 'is-selected' : ''}" data-dashboard-widget-key="${escapeHtml(widget.widgetKey)}" tabindex="0" style="grid-column:${layout.x + 1} / span ${layout.width};grid-row:${layout.y + 1} / span ${layout.height}"><header class="dashboard-widget-frame-header"><span class="dashboard-widget-grip" aria-hidden="true">&#8942;&#8942;</span><strong>${escapeHtml(widget.title)}</strong><code>${escapeHtml(titleCaseMessage(widget.type))} &middot; ${layout.width} &times; ${layout.height}</code></header><div class="dashboard-widget-frame-body">${renderDashboardWidgetResult(widget)}</div><button type="button" class="dashboard-widget-resize-handle" aria-label="Resize ${escapeHtml(widget.title)}"></button></article>`;
+    return `<article class="dashboard-widget-frame ${widget.widgetKey === state.selectedDashboardWidgetKey ? 'is-selected' : ''}" data-dashboard-widget-key="${escapeHtml(widget.widgetKey)}" tabindex="0" style="grid-column:${layout.x + 1} / span ${layout.width};grid-row:${layout.y + 1} / span ${layout.height}"><header class="dashboard-widget-frame-header"><span class="dashboard-widget-grip" aria-hidden="true">&#8942;&#8942;</span><strong>${escapeHtml(widget.title)}</strong><code>${escapeHtml(dashboardWidgetTypeLabel(widget.type))} &middot; ${layout.width} &times; ${layout.height}</code></header><div class="dashboard-widget-frame-body">${renderDashboardWidgetResult(widget)}</div><button type="button" class="dashboard-widget-resize-handle" aria-label="Resize ${escapeHtml(widget.title)}"></button></article>`;
   }).join('');
+  activateDashboardCalendarPopover();
   syncDashboardCanvasExtent();
   $('#dashboardCanvasEmpty').hidden = widgets.length > 0;
   $('#dashboardStudioSaveState').textContent = state.dashboardLayoutDirty ? 'Unsaved changes' : 'Saved';
@@ -5781,7 +7532,7 @@ function renderDashboardCanvas() {
     $('#dashboardWidgetHeight').value = layout.height;
     renderDashboardWidgetInspector(selected);
   }
-  widgets.filter((widget) => widget.dataSourceKey).forEach((widget) => loadDashboardWidgetPreview(widget.widgetKey).catch(() => {}));
+  widgets.filter((widget) => widget.dataSourceKey || isDashboardWorkspaceWidget(widget)).forEach((widget) => loadDashboardWidgetPreview(widget.widgetKey).catch(() => {}));
 }
 
 function dashboardColumnOptions(columns, selected = '', allowEmpty = true) {
@@ -5793,10 +7544,12 @@ function renderDashboardWidgetInspector(widget) {
   const columns = dashboardSourceColumns(source);
   const config = dashboardWidgetConfig(widget);
   const mappings = config.mappings;
-  $('#dashboardWidgetType').value = ['number', 'donut', 'bar', 'line', 'table', 'pivot'].includes(widget.type) ? widget.type : 'number';
+  $('#dashboardWidgetType').value = ['number', 'donut', 'bar', 'line', 'table', 'pivot', ...dashboardWorkspaceWidgetTypes].includes(widget.type) ? widget.type : 'number';
   $('#dashboardWidgetDataSource').innerHTML = `<option value="">Choose a data source</option>${state.dashboardDataSources.filter((item) => !item.archived).map((item) => `<option value="${escapeHtml(item.dataSourceKey)}" ${item.dataSourceKey === widget.dataSourceKey ? 'selected' : ''}>${escapeHtml(item.name)} - ${escapeHtml(item.dataSourceKey)}</option>`).join('')}`;
+  $('#dashboardWidgetDataSourceField').hidden = isDashboardWorkspaceWidget(widget);
   const field = (label, key) => `<label>${label}<select data-dashboard-mapping="${key}">${dashboardColumnOptions(columns, mappings[key] || '')}</select></label>`;
   const multiField = (label, key, help) => `<label>${label}<select multiple size="${Math.min(6, Math.max(3, columns.length))}" data-dashboard-mapping="${key}">${columns.map((column) => `<option value="${escapeHtml(column)}" ${(mappings[key] || []).includes(column) ? 'selected' : ''}>${escapeHtml(column)}</option>`).join('')}</select>${help ? `<small>${help}</small>` : ''}</label>`;
+  $('#dashboardWidgetMappingFields').hidden = isDashboardWorkspaceWidget(widget);
   $('#dashboardWidgetMappingFields').innerHTML = !widget.dataSourceKey ? '<p class="muted">Choose Dashboard Data to map its columns.</p>'
     : widget.type === 'number' ? field('Value column', 'value')
       : widget.type === 'line' ? `${field('Date / X-axis column', 'date')}${field('Value / Y-axis column', 'value')}`
@@ -5804,6 +7557,11 @@ function renderDashboardWidgetInspector(widget) {
           : widget.type === 'pivot' ? `${multiField('Row fields', 'pivotRows', 'Select in hierarchy order.')}${multiField('Column fields', 'pivotColumns', 'Optional. Leave empty for one Value column.')}${multiField('Value fields', 'pivotValues', 'Select one or more numeric fields.')}`
           : `${field('Label column', 'label')}${field('Value column', 'value')}`;
   $('#dashboardWidgetDisplayFields').innerHTML = `<label>Aggregation<select data-dashboard-config="aggregation"><option value="sum">Sum</option><option value="count">Count</option><option value="average">Average</option><option value="minimum">Minimum</option><option value="maximum">Maximum</option></select></label><label>Top rows<input type="number" min="1" max="100" value="${config.topN}" data-dashboard-config="topN"></label><label>Number format<select data-dashboard-config="numberFormat"><option value="number">Number</option><option value="currency">Currency (MYR)</option><option value="percentage">Percentage</option></select></label>${widget.type === 'pivot' ? `<label>Date labels<select data-dashboard-config="dateFormat"><option value="medium">Medium date</option><option value="long">Long date</option><option value="month">Month</option><option value="year">Year</option></select></label><label>Sort totals<select data-dashboard-config="sortDirection"><option value="desc">Largest first</option><option value="asc">Smallest first</option></select></label><label>Empty values<input maxlength="40" value="${escapeHtml(config.emptyLabel)}" data-dashboard-config="emptyLabel"></label><label class="checkbox-label"><input type="checkbox" ${config.showSubtotals ? 'checked' : ''} data-dashboard-config="showSubtotals"> Show subtotals</label><label class="checkbox-label"><input type="checkbox" ${config.showGrandTotals ? 'checked' : ''} data-dashboard-config="showGrandTotals"> Show grand totals</label>` : `<label>Colour<input type="color" value="${escapeHtml(config.color)}" data-dashboard-config="color"></label><label class="checkbox-label"><input type="checkbox" ${config.showLegend ? 'checked' : ''} data-dashboard-config="showLegend"> Show legend</label>`}<label>Drill-down type<select data-dashboard-config="drillDownType"><option value="">None</option><option value="module">CRM module page</option><option value="dashboard">Published dashboard</option></select></label><label>Drill-down stable key<input value="${escapeHtml(config.drillDown?.targetKey || '')}" data-dashboard-config="drillDownTarget" placeholder="customers"></label><label>Allowed filter keys<input value="${escapeHtml((config.drillDown?.allowedParameters || []).join(', '))}" data-dashboard-config="drillDownParameters" placeholder="status, owner"></label>`;
+  if (isDashboardWorkspaceWidget(widget)) {
+    const statusOptions = widget.type === 'approval_inbox' ? [['pending', 'Pending'], ['approved', 'Approved']]
+      : widget.type === 'todo_list' ? [['open', 'To do'], ['in_progress', 'In progress'], ['completed', 'Completed']] : [];
+    $('#dashboardWidgetDisplayFields').innerHTML = `${statusOptions.length ? `<label>Default tab<select data-dashboard-config="status">${statusOptions.map(([value, label]) => `<option value="${value}" ${config.status === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>` : ''}<label>Items shown<input type="number" min="1" max="30" value="${Math.min(30, config.topN)}" data-dashboard-config="topN"></label>${widget.type === 'notifications' ? `<label class="checkbox-label"><input type="checkbox" ${config.unreadOnly ? 'checked' : ''} data-dashboard-config="unreadOnly"> Unread only</label>` : ''}${widget.type === 'quick_actions' ? '<p class="muted">Shows Customers, Approval requests and Dashboards. Admin Portal is added for administrators.</p>' : ''}`;
+  }
   const aggregation = $('[data-dashboard-config="aggregation"]'); if (aggregation) aggregation.value = config.aggregation;
   const numberFormat = $('[data-dashboard-config="numberFormat"]'); if (numberFormat) numberFormat.value = config.numberFormat;
   const sortDirection = $('[data-dashboard-config="sortDirection"]'); if (sortDirection) sortDirection.value = config.sortDirection;
@@ -5811,7 +7569,7 @@ function renderDashboardWidgetInspector(widget) {
   const drillDownType = $('[data-dashboard-config="drillDownType"]'); if (drillDownType) drillDownType.value = config.drillDown?.type || '';
   const result = state.dashboardWidgetResults[widget.widgetKey];
   const stale = result?.cache?.staleAt && Date.now() >= new Date(result.cache.staleAt).getTime();
-  $('#dashboardWidgetPreviewStatus').textContent = result?.status === 'ready' ? `${result.page.returned} rows - ${result.durationMs} ms - ${stale ? 'Stale' : result.cache?.status === 'hit' ? 'Cached' : 'Updated'} ${result.cache?.refreshedAt ? new Date(result.cache.refreshedAt).toLocaleTimeString() : ''}` : result?.status === 'error' ? 'Preview failed' : widget.dataSourceKey ? 'Loading...' : 'Not connected';
+  $('#dashboardWidgetPreviewStatus').textContent = result?.status === 'ready' ? (isDashboardWorkspaceWidget(widget) ? `Updated ${new Date(result.refreshedAt).toLocaleTimeString()}` : `${result.page.returned} rows - ${result.durationMs} ms - ${stale ? 'Stale' : result.cache?.status === 'hit' ? 'Cached' : 'Updated'} ${result.cache?.refreshedAt ? new Date(result.cache.refreshedAt).toLocaleTimeString() : ''}`) : result?.status === 'error' ? 'Preview failed' : (widget.dataSourceKey || isDashboardWorkspaceWidget(widget)) ? 'Loading...' : 'Not connected';
   $('#exportDashboardWidgetButton').hidden = !['table', 'pivot'].includes(widget.type) || result?.status !== 'ready';
   $('#exportDashboardWidgetExcelButton').hidden = widget.type !== 'pivot' || result?.status !== 'ready';
 }
@@ -5884,6 +7642,61 @@ function addDashboardWidget() {
   state.dashboardConfiguration.widgets.push({ widgetKey, type: 'number', title: `Widget ${index}`, config: { mappings: {}, aggregation: 'sum', topN: 10, numberFormat: 'number', color: '#6d50df', showLegend: true }, layout: { desktop: { x: 0, y: bottom('desktop'), width: 4, height: 3 }, mobile: { x: 0, y: bottom('mobile'), width: 4, height: 3 } } });
   state.selectedDashboardWidgetKey = widgetKey;
   markDashboardLayoutChanged(previous);
+}
+
+function dashboardWidgetFromEvent(event) {
+  const key = event.target.closest('[data-dashboard-widget-key]')?.dataset.dashboardWidgetKey;
+  return state.dashboardConfiguration?.widgets.find((item) => item.widgetKey === key);
+}
+
+async function handleDashboardWorkspaceClick(event) {
+  const widget = dashboardWidgetFromEvent(event);
+  const published = Boolean(event.target.closest('#publishedDashboardCanvas'));
+  const render = () => published ? renderPublishedDashboardCanvas() : renderDashboardCanvas();
+  const closeCalendar = event.target.closest('[data-dashboard-calendar-close]');
+  if (closeCalendar) { closeDashboardCalendarPopover(render); return; }
+  const today = event.target.closest('[data-dashboard-calendar-today]');
+  const shift = event.target.closest('[data-dashboard-calendar-shift]');
+  if ((today || shift) && widget?.type === 'calendar') {
+    const month = today ? new Date() : dashboardCalendarMonth(widget.widgetKey);
+    if (shift) month.setMonth(month.getMonth() + Number(shift.dataset.dashboardCalendarShift));
+    month.setDate(1);
+    state.dashboardCalendarMonths[widget.widgetKey] = dashboardLocalDateKey(month);
+    state.dashboardCalendarOpen = null;
+    await loadDashboardWorkspaceWidget(widget, true, published);
+    return;
+  }
+  const date = event.target.closest('[data-dashboard-calendar-date]');
+  if (date && widget?.type === 'calendar') {
+    const items = state.dashboardWidgetResults[widget.widgetKey]?.data?.events?.filter((item) => dashboardCalendarEventDateKey(item) === date.dataset.dashboardCalendarDate) || [];
+    state.dashboardCalendarOpen = items.length ? { widgetKey: widget.widgetKey, date: date.dataset.dashboardCalendarDate, published } : null;
+    render();
+    return;
+  }
+  const request = event.target.closest('[data-dashboard-request]');
+  if (request) { state.dashboardCalendarOpen = null; showView('workflowRequestsView'); await openWorkflowRequest(request.dataset.dashboardRequest); return; }
+  const destination = event.target.closest('[data-dashboard-view]');
+  if (destination) showView(destination.dataset.dashboardView);
+}
+
+async function handleDashboardTaskSubmit(event) {
+  const form = event.target.closest('[data-dashboard-task-form]');
+  if (!form) return;
+  event.preventDefault();
+  const title = new FormData(form).get('title')?.trim();
+  if (!title) return;
+  await api('/api/dashboard-workspace/tasks', { method: 'POST', body: JSON.stringify({ title, priority: 'normal' }) });
+  const widget = dashboardWidgetFromEvent(event);
+  if (widget) await loadDashboardWorkspaceWidget(widget, true, Boolean(event.target.closest('#publishedDashboardCanvas')));
+  toast('Task added', 'success');
+}
+
+async function handleDashboardTaskChange(event) {
+  const input = event.target.closest('[data-dashboard-task-id]');
+  if (!input) return;
+  await api(`/api/dashboard-workspace/tasks/${input.dataset.dashboardTaskId}`, { method: 'PATCH', body: JSON.stringify({ status: input.checked ? 'completed' : 'open' }) });
+  const widget = dashboardWidgetFromEvent(event);
+  if (widget) await loadDashboardWorkspaceWidget(widget, true, Boolean(event.target.closest('#publishedDashboardCanvas')));
 }
 
 function undoDashboardLayout() {
@@ -5981,6 +7794,7 @@ async function saveDashboardLayout() {
     state.dashboardLayoutDirty = false;
     state.dashboardLayoutHistory = [];
     state.dashboardLayoutFuture = [];
+    beginBuilderDraft('dashboard');
     renderDashboardCanvas();
     await loadDashboards();
     toast('Dashboard Layout Saved.');
@@ -6020,6 +7834,7 @@ async function openDashboardBuilderStudio(dashboardKey) {
   $('#dashboardBuilderStudioTitle').textContent = dashboard.name;
   $('#dashboardBuilderStudioKey').textContent = `${dashboard.dashboardKey} · ${titleCaseMessage(dashboard.status)}`;
   renderDashboardCanvas();
+  beginBuilderDraft('dashboard');
 }
 
 function dashboardFilterParameterOptions(sourceKey, selected = '') {
@@ -6164,7 +7979,7 @@ async function changeDashboardArchiveState(dashboardKey, reopen = false) {
   const dashboard = state.dashboards.find((item) => item.dashboardKey === dashboardKey);
   if (!dashboard) return;
   if (!reopen) {
-    const confirmed = await showConfirmationModal({ title: 'Archive dashboard', message: `Archive ${dashboard.name}? It will leave the active dashboard list but can be reopened later.`, confirmLabel: 'Archive dashboard' });
+    const confirmed = await showConfirmationModal({ title: 'Archive dashboard', message: `Archive ${dashboard.name}? It will leave the active dashboard list. Reopening creates a draft; it does not automatically republish the dashboard.`, confirmLabel: 'Archive dashboard' });
     if (!confirmed) return;
   }
   await api(`/api/dashboards/${encodeURIComponent(dashboardKey)}/${reopen ? 'reopen' : 'archive'}`, { method: 'POST' });
@@ -6355,8 +8170,12 @@ async function archiveDashboardSource() {
 function toggleAdminMenu() {
   state.adminMenuCollapsed = !state.adminMenuCollapsed;
   document.body.classList.toggle('admin-nav-collapsed', state.adminMenuCollapsed);
-  $('#toggleAdminMenu').textContent = state.adminMenuCollapsed ? '›' : '‹';
-  $('#toggleAdminMenu').setAttribute('aria-label', state.adminMenuCollapsed ? 'Expand admin menu' : 'Collapse admin menu');
+  const button = $('#toggleAdminMenu');
+  const label = state.adminMenuCollapsed ? 'Expand admin menu' : 'Collapse admin menu';
+  button.textContent = state.adminMenuCollapsed ? '›' : '‹';
+  button.setAttribute('aria-label', label);
+  button.setAttribute('aria-expanded', String(!state.adminMenuCollapsed));
+  button.title = label;
 }
 
 function clearStoredSession() {
@@ -7097,6 +8916,7 @@ function renderModuleRuntimeView() {
   $$('.nav-button').forEach((button) => {
     button.classList.toggle('is-active', button.dataset.moduleView === module.moduleKey);
   });
+  syncSidebarCurrentState();
 }
 
 async function loadPublishedModules() {
@@ -7458,14 +9278,32 @@ function permissionUserItems() {
 function renderPermissionPicker(kind, action, items, selectedValues = []) {
   const selected = new Set((selectedValues || []).map(String));
   const selectedCount = items.filter((item) => selected.has(String(item.value))).length;
+  const departmentTree = kind === 'departments' ? (() => {
+    const childrenByParent = hierarchyChildrenIndex(items, (item) => item.parentValue);
+    const selectedPath = hierarchyPathKeys(items, selected, (item) => item.value, (item) => item.parentValue);
+    const renderNodes = (nodes, depth = 0) => nodes.map((item, index) => {
+      const children = childrenByParent.get(String(item.value)) || [];
+      const pathClasses = hierarchyNodePathClasses(nodes, index, selectedPath, (node) => node.value);
+      return `<div class="hierarchy-node permission-department-entry ${pathClasses}" data-hierarchy-key="${escapeHtml(item.value)}" style="--hierarchy-depth:${depth}">
+        <label class="permission-check permission-department-node" data-permission-option data-search="${escapeHtml(item.search || item.label)}" title="${escapeHtml(item.meta || item.label)}">
+          <input type="checkbox" value="${escapeHtml(item.value)}" ${selected.has(String(item.value)) ? 'checked' : ''}>
+          <span>
+            <strong>${escapeHtml(item.label)}</strong><small class="permission-unit-badge">${escapeHtml(item.type === 'organization' ? 'ORG' : item.type === 'department' ? 'DEPT' : 'GROUP')}</small>
+          </span>
+        </label>
+        ${children.length ? `<div class="hierarchy-branch">${renderNodes(children, depth + 1)}</div>` : ''}
+      </div>`;
+    }).join('');
+    return renderNodes(childrenByParent.get('') || []);
+  })() : '';
   return `
     <div class="permission-picker" data-permission-picker="${escapeHtml(kind)}" data-permission-action="${escapeHtml(action)}">
       <div class="permission-picker-toolbar">
         <input type="search" data-permission-search placeholder="Search ${kind}" aria-label="Search ${kind} for ${escapeHtml(permissionActionLabel(action))}">
         <span>${selectedCount}/${items.length}</span>
       </div>
-      <div class="permission-check-list ${kind === 'departments' ? 'permission-department-tree' : ''}">
-        ${items.map((item) => `
+      <div class="permission-check-list ${kind === 'departments' ? 'hierarchy permission-department-tree' : ''}">
+        ${kind === 'departments' ? departmentTree : items.map((item) => `
           <label class="permission-check ${kind === 'departments' ? 'permission-department-node' : ''}" data-permission-option data-search="${escapeHtml(item.search || item.label)}" ${kind === 'departments' ? `style="--permission-tree-depth:${Number(item.depth || 0)}"` : ''}>
             ${kind === 'departments' ? `<span class="permission-tree-branch" aria-hidden="true">${item.hasChildren ? '▾' : ''}</span>` : ''}
             <input type="checkbox" value="${escapeHtml(item.value)}" ${selected.has(String(item.value)) ? 'checked' : ''}>
@@ -7583,8 +9421,44 @@ function updatePermissionPickerCount(picker) {
 
 function filterPermissionPicker(picker) {
   const query = picker.querySelector('[data-permission-search]')?.value.trim().toLowerCase() || '';
+  if (picker.dataset.permissionPicker === 'departments') {
+    const entries = Array.from(picker.querySelectorAll('.permission-department-entry'));
+    entries.forEach((entry) => { entry.hidden = Boolean(query); });
+    picker.querySelectorAll('[data-permission-option]').forEach((option) => {
+      if (query && !String(option.dataset.search || '').toLowerCase().includes(query)) return;
+      let entry = option.closest('.permission-department-entry');
+      while (entry) {
+        entry.hidden = false;
+        entry = entry.parentElement?.closest('.permission-department-entry');
+      }
+    });
+    syncPermissionHierarchyState(picker);
+    return;
+  }
   picker.querySelectorAll('[data-permission-option]').forEach((option) => {
     option.hidden = Boolean(query) && !String(option.dataset.search || '').toLowerCase().includes(query);
+  });
+}
+
+function syncPermissionHierarchyState(picker) {
+  if (!picker || picker.dataset.permissionPicker !== 'departments') return;
+  const entries = Array.from(picker.querySelectorAll('.permission-department-entry'));
+  entries.forEach((entry) => entry.classList.remove('is-hierarchy-path', 'is-hierarchy-rail-through', 'is-hierarchy-rail-entry', 'is-hierarchy-visible-last'));
+  picker.querySelectorAll('.permission-department-entry:not([hidden]) > .permission-department-node input:checked').forEach((checkbox) => {
+    let entry = checkbox.closest('.permission-department-entry');
+    while (entry && !entry.hidden) {
+      entry.classList.add('is-hierarchy-path');
+      entry = entry.parentElement?.closest('.permission-department-entry');
+    }
+  });
+  picker.querySelectorAll('.hierarchy-branch').forEach((branch) => {
+    const visibleEntries = Array.from(branch.children).filter((entry) => !entry.hidden);
+    visibleEntries.at(-1)?.classList.add('is-hierarchy-visible-last');
+    visibleEntries.forEach((entry, index) => {
+      const hasLaterPath = visibleEntries.slice(index + 1).some((candidate) => candidate.classList.contains('is-hierarchy-path'));
+      if (entry.classList.contains('is-hierarchy-path')) entry.classList.add('is-hierarchy-rail-entry');
+      if (hasLaterPath) entry.classList.add('is-hierarchy-rail-through');
+    });
   });
 }
 
@@ -7780,6 +9654,7 @@ function permissionDepartmentItems() {
       label: node.name,
       meta: node.type === 'organization' ? 'All organization units' : nodePath,
       search: `${node.name} ${node.type} ${nodePath}`,
+      parentValue: node.parentId ? String(node.parentId) : '',
       depth,
       type: node.type,
       hasChildren: departmentChildren(node.id).length > 0
@@ -7875,6 +9750,7 @@ function renderPageViewPermissionModal() {
       }).join('')}
     </div>
   `;
+  $$('#pageModulePermissionRows [data-permission-picker="departments"]').forEach(syncPermissionHierarchyState);
 }
 
 async function openPageViewPermissionModal(moduleKey) {
@@ -8354,6 +10230,7 @@ function categoryName(categoryKey) {
 function renderApiCategoryNavigation() {
   const container = $('#apiHierarchyNav');
   if (!container) return;
+  container.classList.add('hierarchy');
   const query = state.apiCategorySearch.trim().toLowerCase();
   const categories = [...state.apiConnectorCategories, { categoryKey: '', name: 'Uncategorized', description: '' }]
     .filter((category) => !query || category.name.toLowerCase().includes(query) || category.description?.toLowerCase().includes(query));
@@ -8361,14 +10238,18 @@ function renderApiCategoryNavigation() {
     const connectors = scope === 'connectors' ? state.apiConnectors : state.apiConnectors.filter((connector) => connectorEndpoints(connector).length);
     const total = scope === 'connectors' ? connectors.length : connectors.reduce((count, connector) => count + connectorEndpoints(connector).length, 0);
     const expanded = state.apiTreeExpanded[scope] || Boolean(query);
-    const children = categories.map((category) => {
+    const selectedCategory = state.activeApiTab === scope && state.activeApiCategory !== 'all' ? String(state.activeApiCategory) : null;
+    const selectedPath = new Set(selectedCategory === null ? [] : [selectedCategory]);
+    const children = categories.map((category, index) => {
       const categoryConnectors = state.apiConnectors.filter((connector) => (connector.categoryKey || '') === category.categoryKey);
       const count = scope === 'connectors' ? categoryConnectors.length : categoryConnectors.reduce((sum, connector) => sum + connectorEndpoints(connector).length, 0);
-      return `<button type="button" class="api-tree-node api-tree-child ${state.activeApiTab === scope && state.activeApiCategory === category.categoryKey ? 'is-selected' : ''}" data-api-category="${escapeHtml(category.categoryKey)}" data-api-category-scope="${scope}" title="${escapeHtml(category.description || category.name)}"><span class="api-tree-label">${escapeHtml(category.name)}</span><small class="api-tree-count">${count}</small></button>`;
+      const pathClasses = hierarchyNodePathClasses(categories, index, selectedPath, (item) => item.categoryKey);
+      return `<div class="hierarchy-node api-tree-child-node ${pathClasses}" style="--hierarchy-depth:1"><button type="button" class="api-tree-node api-tree-child ${state.activeApiTab === scope && state.activeApiCategory === category.categoryKey ? 'is-selected' : ''}" data-api-category="${escapeHtml(category.categoryKey)}" data-api-category-scope="${scope}" title="${escapeHtml(category.description || category.name)}"><span class="api-tree-label">${escapeHtml(category.name)}</span><small class="api-tree-count">${count}</small></button></div>`;
     }).join('');
-    return `<section class="api-tree-group ${expanded ? 'is-expanded' : ''}">
-      <div class="api-tree-root-row"><button type="button" class="api-tree-toggle" data-api-tree-toggle="${scope}" aria-expanded="${expanded}" aria-label="${expanded ? 'Collapse' : 'Expand'} ${label}">${expanded ? '⌄' : '›'}</button><button type="button" class="api-tree-node api-tree-root ${state.activeApiTab === scope && state.activeApiCategory === 'all' ? 'is-selected' : ''}" data-api-tab="${scope}" data-api-category="all"><span class="api-tree-label">${label}</span><small class="api-tree-count">${total}</small></button></div>
-      <div class="api-tree-children" ${expanded ? '' : 'hidden'}>${children || '<p class="api-tree-empty">No matching categories</p>'}</div>
+    const regionId = `api-tree-${scope}-categories`;
+    return `<section class="api-tree-group ${expanded ? 'is-expanded' : ''} ${selectedPath.size ? 'has-selected-descendant' : ''}">
+      <div class="api-tree-root-row"><button type="button" class="api-tree-toggle" data-api-tree-toggle="${scope}" aria-expanded="${expanded}" aria-controls="${regionId}" aria-label="${expanded ? 'Collapse' : 'Expand'} ${label}">${expanded ? '⌄' : '›'}</button><button type="button" class="api-tree-node api-tree-root ${state.activeApiTab === scope && state.activeApiCategory === 'all' ? 'is-selected' : ''}" data-api-tab="${scope}" data-api-category="all"><span class="api-tree-label">${label}</span><small class="api-tree-count">${total}</small></button></div>
+      <div class="hierarchy-branch api-tree-children" id="${regionId}" ${expanded ? '' : 'hidden'}>${children || '<p class="api-tree-empty">No matching categories</p>'}</div>
     </section>`;
   };
   container.innerHTML = `${groupHtml('connectors', 'Connectors')}${groupHtml('interfaces', 'Interfaces')}`;
@@ -8685,17 +10566,21 @@ function renderDepartmentWorkspace() {
   if (!tree || !rows) return;
   const organization = state.departmentNodes.find((node) => node.type === 'organization');
   if (!state.activeDepartmentNodeId && organization) state.activeDepartmentNodeId = organization.id;
-  const treeRows = [];
-  function appendTree(node, depth = 0) {
-    treeRows.push({ node, depth });
-    departmentChildren(node.id).forEach((child) => appendTree(child, depth + 1));
-  }
-  if (organization) appendTree(organization);
-  tree.innerHTML = treeRows.map(({ node, depth }) => `
-    <button type="button" class="department-tree-item ${node.id === state.activeDepartmentNodeId ? 'is-active' : ''}" data-department-node="${node.id}" style="--tree-depth:${depth}">
-      <span>${departmentChildren(node.id).length ? '▾ ' : ''}${escapeHtml(node.name)}</span>
-      <small>${departmentChildren(node.id).length}</small>
-    </button>`).join('') || '<p class="muted">Loading organization...</p>';
+  const childrenByParent = hierarchyChildrenIndex(state.departmentNodes, (node) => node.parentId);
+  const selectedPath = hierarchyPathKeys(state.departmentNodes, [state.activeDepartmentNodeId], (node) => node.id, (node) => node.parentId);
+  const renderNodes = (nodes, depth = 0) => nodes.map((node, index) => {
+    const children = childrenByParent.get(String(node.id)) || [];
+    const pathClasses = hierarchyNodePathClasses(nodes, index, selectedPath, (item) => item.id);
+    return `<div class="hierarchy-node department-tree-node ${pathClasses}" data-hierarchy-key="${node.id}" style="--hierarchy-depth:${depth}">
+      <button type="button" class="department-tree-item ${node.id === state.activeDepartmentNodeId ? 'is-active' : ''}" data-department-node="${node.id}" title="${escapeHtml(node.name)}">
+        <span>${escapeHtml(node.name)}</span>
+        <small aria-label="${children.length} child items">${children.length}</small>
+      </button>
+      ${children.length ? `<div class="hierarchy-branch">${renderNodes(children, depth + 1)}</div>` : ''}
+    </div>`;
+  }).join('');
+  tree.classList.add('hierarchy');
+  tree.innerHTML = organization ? renderNodes([organization]) : '<p class="muted">Loading organization...</p>';
   const active = departmentNode(state.activeDepartmentNodeId) || organization;
   const visible = departmentChildren(active?.id);
   rows.innerHTML = visible.map((node) => `
@@ -9193,7 +11078,8 @@ function renderFormDesignDrawer() {
   const selectedField = selectedFormDesignField();
   const selectedSection = selectedField ? formDesignSectionForField(selectedField.fieldKey) : null;
   const selectedSpan = selectedField ? Number(activeFormDesignLayout().fieldSpans?.[selectedField.fieldKey] || 1) : 1;
-  const selectedIndex = fields.findIndex((field) => field.fieldKey === state.selectedFormDesignFieldKey);
+  const reorderPeers = formDesignReorderPeers(selectedField);
+  const selectedIndex = reorderPeers.findIndex((field) => field.fieldKey === state.selectedFormDesignFieldKey);
   const hiddenFields = fields.filter((field) => !isFormDesignFieldVisible(field));
   const visibleFields = fields.filter((field) => isFormDesignFieldVisible(field));
   const mainFields = visibleFields.filter((field) => field.tableType !== 'detail');
@@ -9218,12 +11104,15 @@ function renderFormDesignDrawer() {
         <span id="formDesignSelectedHelp">${escapeHtml(formDesignSelectedHelpText(selectedField))}</span>
       </div>
       <div class="form-design-actions">
+        <button type="button" class="secondary small-button" data-design-action="move-up" ${selectedField && selectedIndex > 0 ? '' : 'disabled'}>Move up</button>
+        <button type="button" class="secondary small-button" data-design-action="move-down" ${selectedField && selectedIndex >= 0 && selectedIndex < reorderPeers.length - 1 ? '' : 'disabled'}>Move down</button>
         <button type="button" class="secondary small-button" data-design-action="add-field">Add Field</button>
         <button type="button" class="secondary small-button" data-design-action="edit-field" ${selectedField ? '' : 'disabled'}>Edit Field</button>
         <button type="button" class="secondary small-button" data-design-action="formula" ${selectedField ? '' : 'disabled'}>Formula</button>
         <button type="button" class="secondary small-button" data-design-action="field-linkage" ${selectedField ? '' : 'disabled'}>Field Linkage</button>
       </div>
     </div>
+    <p id="formDesignAnnouncement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
     <div class="form-layout-toolbar">
       <button type="button" class="secondary small-button" data-add-form-section>Add Section</button>
       <label>
@@ -9268,6 +11157,10 @@ function renderFormDesignDrawer() {
       </aside>
     </div>
   `;
+  canvas.querySelectorAll('[data-design-field]').forEach((card) => {
+    card.tabIndex = 0;
+    card.setAttribute('aria-label', `${findConfigField(card.dataset.designField)?.label || 'Field'}. Press Enter for arrangement controls.`);
+  });
 }
 
 function fieldLinkageConfig(field) {
@@ -9461,10 +11354,12 @@ function openFormDesignDrawer() {
   renderFieldConfig();
   renderFormDesignDrawer();
   $('#formDesignDrawer').hidden = false;
+  beginBuilderDraft('form');
   document.body.classList.add('modal-open');
 }
 
 function closeFormDesignDrawer() {
+  if (deferBuilderLeave(['form'], closeFormDesignDrawer)) return;
   const drawer = $('#formDesignDrawer');
   if (!drawer) return;
   resetModalFullscreen(drawer);
@@ -9819,23 +11714,114 @@ function menuIcon(icon) {
 function renderSidebarMenu() {
   const nav = $('#mainSidebarNav');
   if (!nav || !state.sidebarMenu.length) return;
-  const roots = state.sidebarMenu.filter((item) => !item.parentKey).sort((a, b) => a.order - b.order);
+  nav.classList.add('hierarchy');
+  const itemsByKey = new Map(state.sidebarMenu.map((item) => [item.key, item]));
+  const childrenByParent = new Map();
+  state.sidebarMenu.forEach((item) => {
+    const parentKey = item.parentKey || '';
+    if (!childrenByParent.has(parentKey)) childrenByParent.set(parentKey, []);
+    childrenByParent.get(parentKey).push(item);
+  });
+  childrenByParent.forEach((items) => items.sort((a, b) => a.order - b.order));
+  const activeView = Array.from(document.querySelectorAll('.view')).find((view) => !view.hidden)?.id || '';
+  const activeEntry = state.sidebarMenu.find((item) => item.type !== 'group' && (item.destination?.type === 'module'
+    ? activeView === 'moduleRuntimeView' && item.destination.key === state.activeRuntimeModuleKey
+    : item.destination?.key === activeView));
+  const currentPath = new Set();
+  let current = activeEntry;
+  while (current) {
+    currentPath.add(current.key);
+    current = current.parentKey ? itemsByKey.get(current.parentKey) : null;
+  }
+  const storageKey = (groupKey) => `crm:navigation-group:${state.user?.id || 'user'}:${groupKey}`;
+  const groupOpen = (groupKey) => localStorage.getItem(storageKey(groupKey)) !== 'closed';
   const itemHtml = (item) => {
     const icon = menuIcon(item.icon);
-    if (item.destination?.type === 'external') return `<a class="nav-button nav-link" href="${escapeHtml(item.destination.url)}" target="_blank" rel="noopener noreferrer">${icon ? `<span class="nav-menu-icon">${escapeHtml(icon)}</span>` : ''}<span>${escapeHtml(item.label)}</span><span class="external-link-mark" aria-label="External link">↗</span></a>`;
+    const visibleIcon = icon || String(item.label || '?').trim().slice(0, 1).toUpperCase();
+    if (item.destination?.type === 'external') return `<a class="nav-button nav-link" href="${escapeHtml(item.destination.url)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(item.label)}"><span class="nav-menu-icon" aria-hidden="true">${escapeHtml(visibleIcon)}</span><span class="nav-button-label">${escapeHtml(item.label)}</span><span class="external-link-mark" aria-label="External link">↗</span></a>`;
     const displayLabel = item.destination?.type === 'view' && item.destination?.key === 'dashboardPagesView' ? 'Homepage' : item.label;
     const attribute = item.destination?.type === 'module' ? `data-module-view="${escapeHtml(item.destination.key)}"` : `data-view="${escapeHtml(item.destination?.key)}"`;
-    return `<button class="nav-button" ${attribute}>${icon ? `<span class="nav-menu-icon">${escapeHtml(icon)}</span>` : ''}<span>${escapeHtml(displayLabel)}</span></button>`;
+    return `<button class="nav-button" ${attribute} title="${escapeHtml(displayLabel)}"><span class="nav-menu-icon" aria-hidden="true">${escapeHtml(visibleIcon)}</span><span class="nav-button-label">${escapeHtml(displayLabel)}</span></button>`;
   };
-  const renderEntry = (entry) => entry.type === 'group'
-    ? `<details class="nav-group" open><summary>${menuIcon(entry.icon) ? `<span class="nav-menu-icon">${escapeHtml(menuIcon(entry.icon))}</span>` : ''}${escapeHtml(entry.label)}</summary><div>${state.sidebarMenu.filter((item) => item.parentKey === entry.key).sort((a,b) => a.order-b.order).map(renderEntry).join('')}</div></details>`
-    : itemHtml(entry);
-  nav.innerHTML = roots.map(renderEntry).join('');
+  const renderEntry = (entry, depth = 0) => {
+    const children = childrenByParent.get(entry.key) || [];
+    const pathClass = currentPath.has(entry.key) ? ' is-current-path' : '';
+    if (entry.type !== 'group') {
+      return `<div class="hierarchy-node nav-node nav-leaf${pathClass}" data-nav-depth="${depth}" style="--nav-depth:${depth}">${itemHtml(entry)}</div>`;
+    }
+    const expanded = currentPath.has(entry.key) || groupOpen(entry.key);
+    const regionId = `nav-children-${entry.key}`;
+    const childHtml = children.map((child) => renderEntry(child, depth + 1)).join('');
+    return `<div class="hierarchy-node nav-node nav-group${pathClass}${expanded ? ' is-expanded' : ''}" data-nav-group-key="${escapeHtml(entry.key)}" data-nav-depth="${depth}" style="--nav-depth:${depth}"><button type="button" class="nav-group-trigger" aria-expanded="${expanded}" aria-controls="${escapeHtml(regionId)}" title="${escapeHtml(entry.label)}"><span class="nav-menu-icon" aria-hidden="true">${escapeHtml(menuIcon(entry.icon) || String(entry.label || '?').trim().slice(0, 1).toUpperCase())}</span><span class="nav-group-label">${escapeHtml(entry.label)}</span><span class="nav-disclosure" aria-hidden="true"></span></button><div class="nav-children" id="${escapeHtml(regionId)}" aria-hidden="${!expanded}"><div class="hierarchy-branch nav-branch">${childHtml}</div></div></div>`;
+  };
+  nav.innerHTML = (childrenByParent.get('') || []).map((entry) => renderEntry(entry)).join('');
+  nav.querySelectorAll('.nav-children[aria-hidden="true"]').forEach((region) => { region.inert = true; });
+  syncSidebarCurrentState();
+}
+
+function setSidebarGroupExpanded(group, expanded, persist = true) {
+  if (!group) return;
+  const open = Boolean(expanded);
+  group.classList.toggle('is-expanded', open);
+  group.querySelector(':scope > .nav-group-trigger')?.setAttribute('aria-expanded', String(open));
+  const region = group.querySelector(':scope > .nav-children');
+  if (region) {
+    region.setAttribute('aria-hidden', String(!open));
+    region.inert = !open;
+  }
+  if (persist) localStorage.setItem(`crm:navigation-group:${state.user?.id || 'user'}:${group.dataset.navGroupKey}`, open ? 'open' : 'closed');
+}
+
+function syncSidebarCurrentState() {
+  const nav = $('#mainSidebarNav');
+  if (!nav) return;
+  const activeView = Array.from(document.querySelectorAll('.view')).find((view) => !view.hidden)?.id || '';
+  nav.querySelectorAll('.nav-node').forEach((node) => node.classList.remove('is-current-path', 'is-current-rail-through', 'is-current-rail-entry'));
+  nav.querySelectorAll('.nav-button').forEach((button) => {
+    const active = button.dataset.moduleView
+      ? activeView === 'moduleRuntimeView' && button.dataset.moduleView === state.activeRuntimeModuleKey
+      : button.dataset.view === activeView;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-current', button.classList.contains('is-active') ? 'page' : 'false');
+  });
+  let pathNode = nav.querySelector('.nav-button.is-active')?.closest('.nav-node');
+  while (pathNode) {
+    pathNode.classList.add('is-current-path');
+    const branch = pathNode.parentElement;
+    if (!branch?.classList.contains('nav-branch')) break;
+    for (const sibling of branch.children) {
+      if (sibling === pathNode) {
+        sibling.classList.add('is-current-rail-entry');
+        break;
+      }
+      sibling.classList.add('is-current-rail-through');
+    }
+    pathNode = branch.closest('.nav-node');
+  }
+  nav.querySelectorAll('.nav-group').forEach((group) => {
+    const active = Boolean(group.querySelector('.nav-button.is-active'));
+    group.classList.toggle('has-current-page', active);
+    if (active) setSidebarGroupExpanded(group, true, false);
+  });
+}
+
+function setMainSidebarCompact(compact, persist = true) {
+  state.sidebarCompact = Boolean(compact);
+  document.body.classList.toggle('main-sidebar-compact', state.sidebarCompact);
+  const button = $('#toggleMainSidebar');
+  if (button) {
+    button.setAttribute('aria-pressed', String(state.sidebarCompact));
+    button.setAttribute('aria-label', state.sidebarCompact ? 'Use expanded navigation' : 'Use compact navigation');
+    button.title = state.sidebarCompact ? 'Use expanded navigation' : 'Use compact navigation';
+    button.querySelector('span').textContent = state.sidebarCompact ? '»' : '«';
+  }
+  if (persist) localStorage.setItem(`crm:navigation-compact:${state.user?.id || 'user'}`, String(state.sidebarCompact));
 }
 
 async function loadSidebarMenu() {
   const payload = await api('/api/menu/sidebar').catch(() => ({ items: [] }));
   state.sidebarMenu = payload.items || [];
+  setMainSidebarCompact(localStorage.getItem(`crm:navigation-compact:${state.user?.id || 'user'}`) === 'true', false);
   renderSidebarMenu();
 }
 
@@ -9849,23 +11835,149 @@ function renderMenuConfigInspector() {
   const item = state.menuConfigDraft?.items?.find((entry) => entry.key === state.selectedMenuItemKey);
   if (!item) { inspector.innerHTML = '<div class="empty-state"><h3>Select an entry</h3><p>Choose a group or menu item to configure it.</p></div>'; return; }
   const destinationValue = item.destination?.type === 'external' ? 'external' : `${item.destination?.type || 'view'}:${item.destination?.key || ''}`;
+  const groups = state.menuConfigDraft.items.filter((group) => {
+    if (group.type !== 'group' || group.key === item.key || group.key === item.parentKey) return false;
+    let ancestor = group;
+    const seen = new Set();
+    while (ancestor?.parentKey && !seen.has(ancestor.key)) {
+      seen.add(ancestor.key);
+      if (ancestor.parentKey === item.key) return false;
+      ancestor = state.menuConfigDraft.items.find((entry) => entry.key === ancestor.parentKey);
+    }
+    return true;
+  });
   inspector.innerHTML = `<div class="menu-inspector-title"><span class="menu-tree-symbol">${item.type === 'group' ? 'G' : 'I'}</span><div><h3>${escapeHtml(item.label)}</h3><small>${escapeHtml(item.key)} · automatic</small></div></div>
     <label>Label<input data-menu-field="label" value="${escapeHtml(item.label)}"></label>
     <label>Stable key (automatic)<input value="${escapeHtml(item.key)}" disabled></label>
     <label>Icon<select data-menu-field="icon">${['none','users','dashboard','approval','module','settings','link'].map((icon) => `<option value="${icon}" ${item.icon === icon ? 'selected' : ''}>${icon === 'none' ? 'No icon' : icon[0].toUpperCase() + icon.slice(1)}</option>`).join('')}</select></label>
     <label class="checkbox-label"><input type="checkbox" data-menu-field="enabled" ${item.enabled ? 'checked' : ''} ${item.systemKey === 'admin_portal' ? 'disabled' : ''}><span><strong>Show this entry</strong><small>Visibility never grants backend permission.</small></span></label>
     ${item.type === 'item' ? `<label>Destination<select data-menu-field="destination" ${item.systemKey === 'admin_portal' ? 'disabled' : ''}>${state.menuConfigCatalog.destinations.map((destination) => `<option value="${destination.type}:${destination.key}" ${destinationValue === `${destination.type}:${destination.key}` ? 'selected' : ''}>${escapeHtml(destination.label)}</option>`).join('')}<option value="external" ${destinationValue === 'external' ? 'selected' : ''}>External HTTPS link</option></select></label>${destinationValue === 'external' ? `<label>HTTPS URL<input type="url" data-menu-field="externalUrl" value="${escapeHtml(item.destination?.url || '')}" placeholder="https://example.com"></label>` : ''}` : ''}
+    <label>Move to group<select id="menuMoveGroup" ${!groups.length || item.systemKey === 'admin_portal' ? 'disabled' : ''}><option value="">Choose a group</option>${groups.map((group) => `<option value="${escapeHtml(group.key)}">${escapeHtml(group.label)}</option>`).join('')}</select></label>
+    <div class="menu-move-controls" aria-label="Move ${escapeHtml(item.label)}"><button type="button" class="secondary" data-move-menu="up" ${item.systemKey === 'admin_portal' || menuSiblings(item.parentKey)[0]?.key === item.key ? 'disabled' : ''}>Move up</button><button type="button" class="secondary" data-move-menu="down" ${item.systemKey === 'admin_portal' || menuSiblings(item.parentKey).at(-1)?.key === item.key ? 'disabled' : ''}>Move down</button><button type="button" class="secondary" data-move-menu="into" disabled>Move into group</button><button type="button" class="secondary" data-move-menu="out" ${!item.parentKey || item.systemKey === 'admin_portal' ? 'disabled' : ''}>Move out of group</button></div>
     ${item.systemKey === 'admin_portal' ? '<div class="menu-config-notice">Admin Portal is protected so administrators cannot be locked out.</div>' : `<details open><summary>Visibility rules</summary><p class="muted">Leave all choices empty to show this entry to everyone with permission.</p><h4>Roles</h4><div class="menu-visibility-grid">${menuVisibilityChecks('roles', [{value:'admin',label:'Admin'},{value:'manager',label:'Manager'},{value:'user',label:'User'}], item.visibility?.roles)}</div><h4>Users</h4><div class="menu-visibility-scroll">${menuVisibilityChecks('userIds', state.menuConfigCatalog.users, item.visibility?.userIds)}</div><h4>Departments</h4><div class="menu-visibility-scroll">${menuVisibilityChecks('departmentIds', state.menuConfigCatalog.departments, item.visibility?.departmentIds)}</div></details><button type="button" class="danger-button full-width" data-remove-menu-item>Remove entry</button>`}`;
+}
+
+function menuSiblings(parentKey, excludeKey = '') {
+  return (state.menuConfigDraft?.items || []).filter((item) => (item.parentKey || null) === (parentKey || null) && item.key !== excludeKey).sort((a, b) => a.order - b.order);
+}
+
+function menuDescendantKeys(parentKey) {
+  const descendants = new Set();
+  const visit = (key) => {
+    (state.menuConfigDraft?.items || []).filter((item) => item.parentKey === key).forEach((item) => {
+      if (descendants.has(item.key)) return;
+      descendants.add(item.key);
+      visit(item.key);
+    });
+  };
+  visit(parentKey);
+  return descendants;
+}
+
+function announceMenuMove(message) {
+  const output = $('#menuConfigAnnouncement');
+  if (output) output.textContent = message;
+}
+
+function normalizeMenuSiblingOrders(parentKey) {
+  menuSiblings(parentKey).forEach((item, index) => { item.order = index + 1; });
+}
+
+function moveMenuItem(sourceKey, targetKey, placement = 'before') {
+  const items = state.menuConfigDraft?.items || [];
+  const source = items.find((item) => item.key === sourceKey);
+  const target = items.find((item) => item.key === targetKey);
+  if (!source || !target || source === target || source.systemKey === 'admin_portal') return false;
+  let ancestor = target;
+  while (ancestor?.parentKey) {
+    if (ancestor.parentKey === source.key) return false;
+    ancestor = items.find((item) => item.key === ancestor.parentKey);
+  }
+  const oldParent = source.parentKey || null;
+  const nextParent = placement === 'inside' && target.type === 'group' ? target.key : (target.parentKey || null);
+  source.parentKey = nextParent;
+  const siblings = menuSiblings(nextParent, source.key);
+  const targetIndex = siblings.findIndex((item) => item.key === target.key);
+  const insertionIndex = placement === 'inside' ? siblings.length : Math.max(0, targetIndex + (placement === 'after' ? 1 : 0));
+  siblings.splice(insertionIndex, 0, source);
+  siblings.forEach((item, index) => { item.order = index + 1; });
+  normalizeMenuSiblingOrders(oldParent);
+  state.selectedMenuItemKey = source.key;
+  announceMenuMove(`${source.label} moved ${placement === 'inside' ? `into ${target.label}` : `${placement} ${target.label}`}.`);
+  renderMenuConfig();
+  return true;
+}
+
+function menuDropPlacement(row, clientY) {
+  const target = state.menuConfigDraft?.items?.find((item) => item.key === row?.dataset.menuItemKey);
+  if (!row || !target) return 'after';
+  const bounds = row.getBoundingClientRect();
+  const ratio = (clientY - bounds.top) / Math.max(1, bounds.height);
+  if (target.type === 'group' && ratio >= .3 && ratio <= .7) return 'inside';
+  return ratio < .5 ? 'before' : 'after';
+}
+
+function showMenuDropTarget(row, placement) {
+  $$('#menuConfigTree [data-menu-item-key]').forEach((item) => item.classList.remove('is-drop-before', 'is-drop-inside', 'is-drop-after'));
+  row?.classList.add(`is-drop-${placement}`);
+  state.menuDropTarget = row ? { key: row.dataset.menuItemKey, placement } : null;
+}
+
+let reorderScrollFrame = null;
+function stopReorderAutoScroll() {
+  cancelAnimationFrame(reorderScrollFrame);
+  reorderScrollFrame = null;
+}
+
+function autoScrollReorderSurface(surface, clientY, clientX) {
+  stopReorderAutoScroll();
+  if (!surface) return;
+  while (surface && surface.scrollHeight <= surface.clientHeight) surface = surface.parentElement;
+  if (!surface) return;
+  const bounds = surface.getBoundingClientRect();
+  const edge = Math.min(56, bounds.height * .18);
+  const delta = clientY < bounds.top + edge ? -Math.min(16, Math.ceil((bounds.top + edge - clientY) / 4)) : clientY > bounds.bottom - edge ? Math.min(16, Math.ceil((clientY - (bounds.bottom - edge)) / 4)) : 0;
+  if (!delta) return;
+  const scroll = () => {
+    const previous = surface.scrollTop;
+    surface.scrollTop += delta;
+    if (surface.scrollTop === previous) { reorderScrollFrame = null; return; }
+    if (Number.isFinite(clientX)) {
+      const hit = document.elementFromPoint(clientX, clientY);
+      if (state.draggingMenuItemKey) {
+        const row = hit?.closest('#menuConfigTree [data-menu-item-key]');
+        showMenuDropTarget(row, menuDropPlacement(row, clientY));
+      } else if (state.draggingFormDesignFieldKey) {
+        const card = hit?.closest('#formDesignCanvas [data-design-field]');
+        state.dragOverFormDesignFieldKey = card?.dataset.designField || '';
+        state.formDesignDropPlacement = formDesignDropPlacement(card, clientY);
+        $$('#formDesignCanvas [data-design-field]').forEach((item) => {
+          item.classList.toggle('is-drop-before', item === card && state.formDesignDropPlacement === 'before');
+          item.classList.toggle('is-drop-after', item === card && state.formDesignDropPlacement === 'after');
+        });
+      }
+    }
+    reorderScrollFrame = requestAnimationFrame(scroll);
+  };
+  reorderScrollFrame = requestAnimationFrame(scroll);
 }
 
 function renderMenuConfig() {
   const tree = $('#menuConfigTree');
   if (!tree || !state.menuConfigDraft) return;
   const items = state.menuConfigDraft.items || [];
-  const row = (item, depth = 0) => `<button type="button" role="treeitem" draggable="true" class="menu-tree-item ${depth ? 'is-nested' : ''} ${item.key === state.selectedMenuItemKey ? 'is-selected' : ''} ${!menuItemVisibleForPreview(item) ? 'is-preview-hidden' : ''}" style="--menu-depth:${depth}" data-menu-item-key="${escapeHtml(item.key)}"><span class="menu-tree-grip" aria-hidden="true">⋮⋮</span><span class="menu-tree-symbol">${item.type === 'group' ? 'G' : menuIcon(item.icon) || 'I'}</span><span><strong>${escapeHtml(item.label)}</strong><small>${item.type === 'group' ? 'Group' : item.destination?.type === 'external' ? 'External link' : item.destination?.key || 'Choose destination'}</small></span><span class="menu-tree-state">${item.enabled ? '' : 'Hidden'}</span></button>`;
+  const row = (item, depth = 0) => `<button type="button" role="treeitem" draggable="true" class="menu-tree-item ${depth ? 'is-nested' : ''} ${item.key === state.selectedMenuItemKey ? 'is-selected' : ''} ${!menuItemVisibleForPreview(item) ? 'is-preview-hidden' : ''}" data-menu-item-key="${escapeHtml(item.key)}" aria-grabbed="${item.key === state.draggingMenuItemKey}"><span class="menu-tree-grip" aria-hidden="true">⋮⋮</span><span class="menu-tree-symbol">${item.type === 'group' ? 'G' : menuIcon(item.icon) || 'I'}</span><span><strong>${escapeHtml(item.label)}</strong><small>${item.type === 'group' ? 'Group · drop here to add inside' : item.destination?.type === 'external' ? 'External link' : item.destination?.key || 'Choose destination'}</small></span><span class="menu-tree-state">${item.enabled ? '' : 'Hidden'}</span></button>`;
   const roots = items.filter((item) => !item.parentKey).sort((a,b) => a.order-b.order);
-  const renderTreeEntry = (item, depth = 0) => `${row(item, depth)}${item.type === 'group' ? items.filter((child) => child.parentKey === item.key).sort((a,b) => a.order-b.order).map((child) => renderTreeEntry(child, depth + 1)).join('') : ''}`;
-  tree.innerHTML = roots.map((item) => renderTreeEntry(item)).join('') || '<div class="empty-state"><h3>No menu entries</h3><p>Add a group or item to begin.</p></div>';
+  const childrenByParent = hierarchyChildrenIndex(items, (item) => item.parentKey);
+  childrenByParent.forEach((children) => children.sort((a, b) => a.order - b.order));
+  const selectedPath = hierarchyPathKeys(items, [state.selectedMenuItemKey], (item) => item.key, (item) => item.parentKey);
+  const renderTreeEntries = (siblings, depth = 0) => siblings.map((item, index) => {
+    const children = item.type === 'group' ? childrenByParent.get(String(item.key)) || [] : [];
+    const pathClasses = hierarchyNodePathClasses(siblings, index, selectedPath, (entry) => entry.key);
+    return `<div class="hierarchy-node menu-tree-node ${pathClasses}" style="--hierarchy-depth:${depth}">${row(item, depth)}${children.length ? `<div class="hierarchy-branch">${renderTreeEntries(children, depth + 1)}</div>` : ''}</div>`;
+  }).join('');
+  tree.classList.add('hierarchy');
+  tree.innerHTML = renderTreeEntries(roots) || '<div class="empty-state"><h3>No menu entries</h3><p>Add a group or item to begin.</p></div>';
   const groupSelect = $('#menuDefaultGroup');
   if (groupSelect) { groupSelect.innerHTML = `<option value="">Top level</option>${items.filter((item) => item.type === 'group').map((group) => `<option value="${escapeHtml(group.key)}" ${state.menuConfigDraft.defaultModuleGroupKey === group.key ? 'selected' : ''}>${escapeHtml(group.label)}</option>`).join('')}`; }
   renderMenuConfigInspector();
@@ -9873,7 +11985,7 @@ function renderMenuConfig() {
 
 function renderMenuVersions() {
   const target = $('#menuConfigVersions'); if (!target) return;
-  target.innerHTML = state.menuConfigVersions.map((version) => `<div class="menu-version-row"><span><strong>Version ${version.version_number}</strong><small>${escapeHtml(version.created_by_name || 'System')} · ${formatDateTime(version.created_at)}</small></span><button type="button" class="secondary" data-restore-menu-version="${version.id}">Restore to draft</button></div>`).join('') || '<p class="muted">No menu has been published yet.</p>';
+  target.innerHTML = state.menuConfigVersions.map((version) => `<div class="menu-version-row"><span><strong>Version ${version.version_number}</strong><small>${escapeHtml(version.created_by_name || 'System')} · ${escapeHtml(versionHistoryDate(version.created_at))}</small></span><button type="button" class="secondary" data-restore-menu-version="${version.id}">Restore to draft</button></div>`).join('') || '<p class="muted">No menu has been published yet.</p>';
 }
 
 async function loadMenuConfiguration() {
@@ -9884,12 +11996,14 @@ async function loadMenuConfiguration() {
   state.selectedMenuItemKey = state.menuConfigDraft.items?.[0]?.key || '';
   $('#menuConfigStatus').textContent = `Draft loaded · Published version ${configuration.publishedVersion || 0}`;
   renderMenuConfig(); renderMenuVersions();
+  beginBuilderDraft('menu');
 }
 
 async function saveMenuConfiguration(publish = false) {
   const path = publish ? '/api/menu/configuration/publish' : '/api/menu/configuration/draft';
   const payload = await api(path, { method: publish ? 'POST' : 'PUT', body: JSON.stringify(state.menuConfigDraft) });
   state.menuConfigDraft = payload.config;
+  beginBuilderDraft('menu');
   if (publish) { await loadSidebarMenu(); await loadMenuConfiguration(); }
   toast(publish ? 'Sidebar Menu Published.' : 'Menu Draft Saved.');
 }
@@ -9939,8 +12053,9 @@ async function loadAccount() {
 
 function toggleAccountMenu(force) {
   const menu = $('#accountMenu'); const button = $('#accountMenuButton');
-  const open = force === undefined ? menu.hidden : Boolean(force);
-  menu.hidden = !open; button.setAttribute('aria-expanded', String(open));
+  const open = force === undefined ? button.getAttribute('aria-expanded') !== 'true' : Boolean(force);
+  setFloatingSurfaceOpen(menu, button, open, { container: $('#accountHub') });
+  button.setAttribute('aria-expanded', String(open));
   if (open) toggleNotificationDrawer(false);
 }
 
@@ -10198,6 +12313,23 @@ function configureAuthUi() {
 }
 
 function bindEvents() {
+  initializeBuilderDraftControls();
+  ['pointerup', 'pointercancel', 'drop', 'dragend'].forEach((type) => window.addEventListener(type, stopReorderAutoScroll));
+  window.addEventListener('blur', stopReorderAutoScroll);
+  $('#dismissToast')?.addEventListener('click', dismissToast);
+  $('#toast')?.addEventListener('mouseenter', pauseToastDismiss);
+  $('#toast')?.addEventListener('mouseleave', resumeToastDismiss);
+  $('#toast')?.addEventListener('focusin', pauseToastDismiss);
+  $('#toast')?.addEventListener('focusout', resumeToastDismiss);
+  document.addEventListener('invalid', (event) => {
+    if (event.target.matches('input, select, textarea')) showFieldError(event.target);
+  }, true);
+  document.addEventListener('input', (event) => {
+    if (event.target.matches('input, select, textarea') && event.target.validity.valid) clearFieldError(event.target);
+  });
+  document.addEventListener('change', (event) => {
+    if (event.target.matches('select, input[type="checkbox"], input[type="radio"]') && event.target.validity.valid) clearFieldError(event.target);
+  });
   $('#notificationBell')?.addEventListener('click', () => toggleNotificationDrawer());
   $('#accountMenuButton')?.addEventListener('click', () => toggleAccountMenu());
   $('#accountMenu')?.addEventListener('click', (event) => {
@@ -10207,18 +12339,18 @@ function bindEvents() {
   });
   $$('[data-account-tab]').forEach((button) => button.addEventListener('click', () => selectAccountTab(button.dataset.accountTab)));
   $('#backFromAccountSettings')?.addEventListener('click', () => showView(state.accountReturnView || 'customersView'));
-  $('#accountProfileForm')?.addEventListener('submit', (event) => runWorkflowUi(() => saveAccountProfile(event)));
-  $('#accountPreferencesForm')?.addEventListener('submit', (event) => runWorkflowUi(() => saveAccountPreferences(event)));
-  $('#accountPasswordForm')?.addEventListener('submit', (event) => runWorkflowUi(() => changeAccountPassword(event)));
+  bindAsyncSubmit($('#accountProfileForm'), (event) => runWorkflowUi(() => saveAccountProfile(event)));
+  bindAsyncSubmit($('#accountPreferencesForm'), (event) => runWorkflowUi(() => saveAccountPreferences(event)));
+  bindAsyncSubmit($('#accountPasswordForm'), (event) => runWorkflowUi(() => changeAccountPassword(event)));
   $('#accountAvatarInput')?.addEventListener('change', (event) => runWorkflowUi(() => uploadAccountAvatar(event.target.files?.[0])));
   $('#removeAccountAvatar')?.addEventListener('click', () => runWorkflowUi(removeAccountAvatar));
   $('#notificationUnreadOnly')?.addEventListener('change', (event) => { state.notificationUnreadOnly = event.target.checked; runWorkflowUi(loadNotifications); });
   $('#markAllNotificationsRead')?.addEventListener('click', () => runWorkflowUi(async () => { await api('/api/notifications/read-all', { method: 'POST', body: '{}' }); await loadNotifications(); }));
   $('#notificationList')?.addEventListener('click', (event) => { const button = event.target.closest('[data-notification-id]'); if (!button) return; const item = state.notifications.find((entry) => entry.id === Number(button.dataset.notificationId)); if (item) runWorkflowUi(() => openNotification(item)); });
-  $('#emailSettingsForm')?.addEventListener('submit', (event) => runWorkflowUi(() => saveEmailSettings(event)));
+  bindAsyncSubmit($('#emailSettingsForm'), (event) => runWorkflowUi(() => saveEmailSettings(event)));
   $('#emailSettingsForm select[name="provider"]')?.addEventListener('change', syncEmailProviderExamples);
   $('#sendTestEmail')?.addEventListener('click', () => runWorkflowUi(sendEmailSettingsTest));
-  $('#loginForm').addEventListener('submit', async (event) => {
+  bindAsyncSubmit($('#loginForm'), async (event) => {
     event.preventDefault();
     const rememberMe = Boolean(event.currentTarget.elements.rememberMe?.checked);
     try {
@@ -10262,6 +12394,14 @@ function bindEvents() {
   });
 
   $('#mainSidebarNav')?.addEventListener('click', (event) => {
+    const groupTrigger = event.target.closest('.nav-group-trigger');
+    if (groupTrigger) {
+      const group = groupTrigger.closest('[data-nav-group-key]');
+      const expanded = groupTrigger.getAttribute('aria-expanded') === 'true';
+      if (group?.classList.contains('has-current-page') && expanded) return;
+      setSidebarGroupExpanded(group, !expanded);
+      return;
+    }
     const button = event.target.closest('[data-module-view]');
     if (button && state.token) return openRuntimeModulePage(button.dataset.moduleView).catch((error) => toast(titleCaseMessage(error.message), 'error'));
     const viewButton = event.target.closest('[data-view]');
@@ -10273,6 +12413,7 @@ function bindEvents() {
     if (viewButton.dataset.view === 'workflowMonitoringView') runWorkflowUi(loadWorkflowMonitoring);
     if (viewButton.dataset.view === 'workflowDelegationView') runWorkflowUi(loadWorkflowDelegations);
   });
+  $('#toggleMainSidebar')?.addEventListener('click', () => setMainSidebarCompact(!state.sidebarCompact));
   document.addEventListener('click', (event) => {
     if (!event.target.closest('#accountHub')) toggleAccountMenu(false);
   });
@@ -10344,8 +12485,115 @@ function bindEvents() {
           toast(titleCaseMessage(error.message), 'error');
         }
       }
+      if (button.dataset.adminSection === 'adminDocumentTemplatesSection') {
+        closeDocumentDesigner();
+        renderDocumentTemplateList();
+        await loadServerDocumentTemplates().catch((error) => toast(error.message, 'error'));
+      }
     });
   });
+  $('#newDocumentTemplateButton')?.addEventListener('click', () => {
+    state.documentImportResult = null; $('#documentPdfImportForm').hidden = true; $('#documentImportSummary').innerHTML = ''; $('#importAnalyzedDocument').hidden = true; $('#documentCreateDialog').showModal();
+  });
+  $('#closeDocumentCreateDialog')?.addEventListener('click', () => $('#documentCreateDialog').close());
+  $('#documentCreateDialog')?.addEventListener('click', (event) => {
+    const start = event.target.closest('[data-document-start]'); if (!start) return;
+    if (start.dataset.documentStart === 'pdf') { $('#documentPdfImportForm').hidden = false; $('#documentPdfFile').focus(); return; }
+    const template = start.dataset.documentStart === 'duplicate' ? duplicateDocumentTemplate() : blankDocumentTemplate();
+    state.documentTemplates.unshift(template); $('#documentCreateDialog').close(); openDocumentDesigner(template.templateKey);
+  });
+  $('#documentPdfImportForm')?.addEventListener('submit', analyzeDocumentPdf);
+  $('#importAnalyzedDocument')?.addEventListener('click', importAnalyzedDocument);
+  $('#documentTemplateList')?.addEventListener('click', (event) => {
+    const open = event.target.closest('[data-open-document-template]'); const preview = event.target.closest('[data-preview-document-template]');
+    if (open) openDocumentDesigner(open.dataset.openDocumentTemplate);
+    if (preview) openDocumentDesigner(preview.dataset.previewDocumentTemplate, true);
+  });
+  $('#closeDocumentDesigner')?.addEventListener('click', closeDocumentDesigner);
+  $('#documentDesignMode')?.addEventListener('click', () => { state.documentDesignerMode = 'design'; renderDocumentDesigner(); });
+  $('#documentPreviewMode')?.addEventListener('click', () => { state.documentDesignerMode = 'preview'; renderDocumentDesigner(); });
+  $('#documentCompareMode')?.addEventListener('change', (event) => { state.documentCompareMode = event.target.value; renderDocumentDesigner(); });
+  $('#documentOriginalOpacity')?.addEventListener('input', renderDocumentDesigner);
+  $('#documentPreviousPage')?.addEventListener('click', () => { state.documentPageIndex = Math.max(0, state.documentPageIndex - 1); state.documentSelectedElementId = ''; state.documentSelectedCell = null; renderDocumentDesigner(); });
+  $('#documentNextPage')?.addEventListener('click', () => { state.documentPageIndex = Math.min(documentPhysicalPages().length - 1, state.documentPageIndex + 1); state.documentSelectedElementId = ''; state.documentSelectedCell = null; renderDocumentDesigner(); });
+  for (const id of ['documentOutputRecordId', 'documentOutputWorkflowId']) $(`#${id}`)?.addEventListener('change', () => { if (state.documentDesignerMode === 'preview') renderDocumentDesigner(); });
+  $('#downloadDocumentPdf')?.addEventListener('click', async () => {
+    const template = activeDocumentTemplate(); if (!template) return;
+    const current = structuredClone(template); delete current.serverRevision; delete current.serverSnapshot; delete current.hasSourcePdf;
+    if (!template.serverRevision || JSON.stringify(current) !== template.serverSnapshot || $('#documentTemplateName').value.trim() !== template.name) { $('#documentOutputStatus').textContent = 'Save your current template to the server before downloading.'; return; }
+    try { await downloadSavedDocumentPdf(template.templateKey, { ...documentOutputContext(), revision: template.serverRevision }, $('#downloadDocumentPdf')); $('#documentOutputStatus').textContent = 'PDF downloaded. Your draft is unchanged.'; }
+    catch (error) { $('#documentOutputStatus').textContent = error.message; }
+  });
+  $('#documentZoom')?.addEventListener('input', renderDocumentDesigner);
+  $('#saveDocumentTemplate')?.addEventListener('click', saveDocumentTemplate);
+  $('#printDocumentTemplate')?.addEventListener('click', async () => {
+    state.documentDesignerMode = 'preview'; renderDocumentDesigner();
+    try { await updateDocumentOutputPreview(); $('#documentOutputPreview').contentWindow.print(); }
+    catch (error) { $('#documentOutputStatus').textContent = error.message; }
+  });
+  $('#closeRecordDocument')?.addEventListener('click', () => $('#recordDocumentDialog').close());
+  $('#recordDocumentTemplate')?.addEventListener('change', () => { $('#recordDocumentFrame').hidden = true; });
+  $('#recordDocumentPreview')?.addEventListener('click', async () => {
+    const key = $('#recordDocumentTemplate').value; if (!key) return;
+    const { moduleKey, ...input } = recordDocumentContext;
+    try { const resolved = await api(`/api/document-templates/${encodeURIComponent(key)}/preview`, { method: 'POST', body: JSON.stringify(input) }); await mountDocumentOutputFrame($('#recordDocumentFrame'), resolved.template, resolved.context, 75); $('#recordDocumentStatus').textContent = 'Preview uses the same renderer as Download PDF.'; }
+    catch (error) { $('#recordDocumentStatus').textContent = error.message; }
+  });
+  $('#recordDocumentDownload')?.addEventListener('click', async () => {
+    const key = $('#recordDocumentTemplate').value; if (!key) return;
+    const { moduleKey, ...input } = recordDocumentContext;
+    try { await downloadSavedDocumentPdf(key, input, $('#recordDocumentDownload')); $('#recordDocumentStatus').textContent = 'PDF downloaded.'; }
+    catch (error) { $('#recordDocumentStatus').textContent = error.message; }
+  });
+  $('#customerDocumentOutput')?.addEventListener('click', () => { const recordId = Number($('#customerForm').elements.id.value); if (recordId) void openRecordDocumentOutput({ moduleKey: 'customers', recordId }); else toast('Save the record first.'); });
+  $('#moduleDocumentOutput')?.addEventListener('click', () => { const recordId = Number($('#moduleRecordForm').elements.id.value); if (recordId) void openRecordDocumentOutput({ moduleKey: state.activeRuntimeModuleKey, recordId }); else toast('Save the record first.'); });
+  $('#workflowRequestDetail')?.addEventListener('click', (event) => { if (event.target.closest('[data-workflow-document-output]')) void openRecordDocumentOutput({ workflowRequestId: state.activeWorkflowRequestKey }); });
+  $('#documentUndo')?.addEventListener('click', () => restoreDocumentHistory(false));
+  $('#documentRedo')?.addEventListener('click', () => restoreDocumentHistory(true));
+  $$('#documentDesignerWorkspace [data-add-document-element]').forEach((button) => button.addEventListener('click', () => insertDocumentElement(button.dataset.addDocumentElement)));
+  $('#documentTemplateSource')?.addEventListener('change', (event) => { const template = activeDocumentTemplate(); if (!template) return; captureDocumentHistory(); template.source = event.target.value; renderDocumentDesigner(); });
+  $('#documentPage')?.addEventListener('click', (event) => {
+    if (state.documentDesignerMode === 'preview') return;
+    const cell = event.target.closest('[data-document-cell]'); const element = event.target.closest('[data-document-element]'); const region = event.target.closest('[data-document-region]');
+    if (region) {
+      state.documentSelectedRegion = region.dataset.documentRegion;
+      const page = activeDocumentPhysicalPage().page; const columns = state.documentSelectedRegion === 'header' ? page.headerColumns : state.documentSelectedRegion === 'footer' ? page.footerColumns : 1; const bounds = region.getBoundingClientRect();
+      state.documentSelectedColumn = Math.min(columns, Math.max(1, Math.floor(((event.clientX - bounds.left) / Math.max(1, bounds.width)) * columns) + 1));
+    }
+    if (cell) { const [tableId, row, column] = cell.dataset.documentCell.split(':'); state.documentSelectedElementId = tableId; state.documentSelectedCell = { tableId, row: Number(row), column: Number(column) }; }
+    else if (element) { state.documentSelectedElementId = element.dataset.documentElement; state.documentSelectedCell = null; }
+    else { state.documentSelectedElementId = ''; state.documentSelectedCell = null; }
+    renderDocumentDesigner();
+  });
+  $('#documentFieldPalette')?.addEventListener('click', (event) => { const field = event.target.closest('[data-insert-document-field]'); const element = event.target.closest('[data-add-document-element]'); if (field) insertDocumentField(field.dataset.insertDocumentField, field.dataset.documentFieldLabel); if (element) insertDocumentElement(element.dataset.addDocumentElement); });
+  $('#documentFieldPalette')?.addEventListener('dragstart', (event) => { const field = event.target.closest('[data-insert-document-field]'); if (!field) return; event.dataTransfer.effectAllowed = 'copy'; event.dataTransfer.setData('application/x-babyyy-document-field', JSON.stringify({ binding: field.dataset.insertDocumentField, label: field.dataset.documentFieldLabel })); });
+  $('#documentPage')?.addEventListener('dragover', (event) => { if (event.dataTransfer.types.includes('application/x-babyyy-document-field')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } });
+  $('#documentPage')?.addEventListener('drop', (event) => { const payload = event.dataTransfer.getData('application/x-babyyy-document-field'); if (!payload) return; event.preventDefault(); const region = event.target.closest('[data-document-region]'); if (region) { state.documentSelectedRegion = region.dataset.documentRegion; const columns = state.documentSelectedRegion === 'header' ? activeDocumentTemplate().page.headerColumns : state.documentSelectedRegion === 'footer' ? activeDocumentTemplate().page.footerColumns : 1; const bounds = region.getBoundingClientRect(); state.documentSelectedColumn = Math.min(columns, Math.max(1, Math.floor(((event.clientX - bounds.left) / Math.max(1, bounds.width)) * columns) + 1)); } const field = parseStoredJson(payload); if (field?.binding) insertDocumentField(field.binding, field.label); });
+  $('#documentFieldsTab')?.addEventListener('click', () => { state.documentPaletteTab = 'fields'; renderDocumentFieldPalette(); });
+  $('#documentElementsTab')?.addEventListener('click', () => { state.documentPaletteTab = 'elements'; renderDocumentFieldPalette(); });
+  $('#documentFieldSearch')?.addEventListener('input', (event) => { state.documentFieldQuery = event.target.value; renderDocumentFieldPalette(); $('#documentFieldSearch').focus(); });
+  $('#documentCoordinateSystem')?.addEventListener('pointerdown', (event) => { if (state.documentDesignerMode === 'preview') return; const margin = event.target.closest('[data-document-margin-handle]'); const indent = event.target.closest('[data-document-indent-handle]'); const column = event.target.closest('[data-document-column-marker]'); const rowHeight = event.target.closest('[data-document-row-height-handle]'); if (!(margin || indent || column || rowHeight)) return; event.preventDefault(); event.target.setPointerCapture?.(event.pointerId); captureDocumentHistory(); if (margin) { state.documentMarginDrag = { side: margin.dataset.documentMarginHandle, pointerId: event.pointerId }; updateDocumentMarginDrag(event); } else if (rowHeight) { state.documentRulerDrag = { kind: 'row-height', rowTopCm: Number(rowHeight.dataset.documentRowTopCm), pointerId: event.pointerId }; updateDocumentRulerDrag(event); } else { state.documentRulerDrag = indent ? { kind: 'indent', side: indent.dataset.documentIndentHandle, pointerId: event.pointerId } : { kind: 'column', index: Number(column.dataset.documentColumnMarker), pointerId: event.pointerId }; updateDocumentRulerDrag(event); } });
+  document.addEventListener('pointermove', (event) => { if (state.documentMarginDrag) updateDocumentMarginDrag(event); if (state.documentRulerDrag) updateDocumentRulerDrag(event); });
+  document.addEventListener('pointerup', () => { if (state.documentMarginDrag) { state.documentMarginDrag = null; renderDocumentDesigner(); $('#documentDesignerAnnouncement').textContent = 'Page margin updated.'; } if (state.documentRulerDrag) { state.documentRulerDrag = null; renderDocumentDesigner(); $('#documentDesignerAnnouncement').textContent = 'Selected content geometry updated.'; } });
+  $('#documentProperties')?.addEventListener('change', (event) => updateDocumentProperty(event.target));
+  window.addEventListener('beforeprint', prepareDocumentPrint);
+  window.addEventListener('afterprint', restoreDocumentAfterPrint);
+  $('#documentProperties')?.addEventListener('change', (event) => updateDocumentPageProperty(event.target));
+  $('#documentPropertiesTab')?.addEventListener('click', () => { state.documentPropertiesTab = 'properties'; renderDocumentDesigner(); });
+  $('#documentPageTab')?.addEventListener('click', () => { state.documentPropertiesTab = 'page'; renderDocumentDesigner(); });
+  $('#documentProperties')?.addEventListener('click', (event) => {
+    const suggestionBind = event.target.closest('[data-document-suggestion-bind]');
+    if (suggestionBind) { const { element, cell } = selectedDocumentTarget(); const binding = suggestionBind.dataset.documentSuggestionBind; const label = documentSuggestionFields().find((field) => field.binding === binding)?.label || titleCaseMessage(binding.split('.').pop()); captureDocumentHistory(); if (cell) cell.binding = binding; else if (element) { element.type = 'field'; element.binding = binding; element.label = label; } renderDocumentDesigner(); return; }
+    const suggestionReject = event.target.closest('[data-document-suggestion-reject]');
+    if (suggestionReject) { const { element, table, cell } = selectedDocumentTarget(); const target = documentSuggestionTarget(element, table, cell); state.documentRejectedSuggestions.add(`${target.id}:${suggestionReject.dataset.documentSuggestionReject}`); renderDocumentDesigner(); return; }
+    const action = event.target.closest('[data-document-table-action]'); if (action) return documentTableAction(action.dataset.documentTableAction);
+    if (event.target.closest('[data-open-document-page-settings]')) { state.documentPropertiesTab = 'page'; renderDocumentDesigner(); return; }
+    if (event.target.closest('[data-document-static-text]')) { const { element } = selectedDocumentTarget(); if (!element) return; captureDocumentHistory(); element.type = 'text'; element.content = element.label || titleCaseMessage(element.binding); delete element.binding; delete element.label; renderDocumentDesigner(); return; }
+    if (event.target.closest('[data-remove-document-element]')) { const { template, element } = selectedDocumentTarget(); if (!element) return; captureDocumentHistory(); const regions = activeDocumentPhysicalPage(template).regions; regions[state.documentSelectedRegion] = regions[state.documentSelectedRegion].filter((item) => item.id !== element.id); state.documentSelectedElementId = ''; renderDocumentDesigner(); }
+  });
+  for (const id of ['workflowDocumentEnabled', 'workflowDocumentTemplate', 'workflowDocumentTrigger', 'workflowDocumentFormat']) $(`#${id}`)?.addEventListener('change', saveWorkflowDocumentOutput);
+  $('#openWorkflowDocumentDesigner')?.addEventListener('click', () => { const key = $('#workflowDocumentTemplate').value; if (key) { showAdminSection('adminDocumentTemplatesSection'); openDocumentDesigner(key); } });
+  $('#previewWorkflowDocument')?.addEventListener('click', () => { const key = $('#workflowDocumentTemplate').value; if (key) { showAdminSection('adminDocumentTemplatesSection'); openDocumentDesigner(key, true); } });
   $('#addMenuGroup')?.addEventListener('click', () => {
     const label = 'New group'; const key = menuStableKey(label);
     state.menuConfigDraft.items.push({ key, type: 'group', parentKey: null, label, icon: 'none', enabled: true, order: state.menuConfigDraft.items.length + 1, destination: null, visibility: { roles: [], userIds: [], departmentIds: [] } });
@@ -10363,15 +12611,41 @@ function bindEvents() {
   $('#publishMenuConfig')?.addEventListener('click', () => runWorkflowUi(() => saveMenuConfiguration(true)));
   $('#resetMenuConfig')?.addEventListener('click', () => runWorkflowUi(async () => { const confirmed = await showConfirmationModal({ title: 'Reset menu draft', message: 'Replace the current draft with the safe default sidebar? The published menu remains unchanged until you publish.', confirmLabel: 'Reset draft' }); if (!confirmed) return; const payload = await api('/api/menu/configuration/reset', { method: 'POST' }); state.menuConfigDraft = payload.config; state.selectedMenuItemKey = state.menuConfigDraft.items[0]?.key || ''; renderMenuConfig(); toast('Menu Draft Reset.'); }));
   $('#menuConfigTree')?.addEventListener('click', (event) => { const row = event.target.closest('[data-menu-item-key]'); if (!row) return; state.selectedMenuItemKey = row.dataset.menuItemKey; renderMenuConfig(); });
-  $('#menuConfigTree')?.addEventListener('dragstart', (event) => { const row = event.target.closest('[data-menu-item-key]'); if (!row) return; state.draggingMenuItemKey = row.dataset.menuItemKey; event.dataTransfer.effectAllowed = 'move'; });
-  $('#menuConfigTree')?.addEventListener('dragover', (event) => { if (event.target.closest('[data-menu-item-key]')) event.preventDefault(); });
+  $('#menuConfigTree')?.addEventListener('dragstart', (event) => { const row = event.target.closest('[data-menu-item-key]'); if (!row) return; state.draggingMenuItemKey = row.dataset.menuItemKey; event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', state.draggingMenuItemKey); });
+  $('#menuConfigTree')?.addEventListener('dragover', (event) => { const row = event.target.closest('[data-menu-item-key]'); if (!row) return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; showMenuDropTarget(row, menuDropPlacement(row, event.clientY)); autoScrollReorderSurface($('#menuConfigTree'), event.clientY, event.clientX); });
   $('#menuConfigTree')?.addEventListener('drop', (event) => {
-    event.preventDefault(); const targetRow = event.target.closest('[data-menu-item-key]'); const source = state.menuConfigDraft.items.find((item) => item.key === state.draggingMenuItemKey); const target = state.menuConfigDraft.items.find((item) => item.key === targetRow?.dataset.menuItemKey); if (!source || !target || source === target || source.systemKey === 'admin_portal') return;
-    let ancestor = target; while (ancestor?.parentKey) { if (ancestor.parentKey === source.key) return; ancestor = state.menuConfigDraft.items.find((item) => item.key === ancestor.parentKey); }
-    if (target.type === 'group') source.parentKey = target.key; else { source.parentKey = target.parentKey || null; const siblings = state.menuConfigDraft.items.filter((item) => item.parentKey === source.parentKey && item !== source).sort((a,b) => a.order-b.order); const index = siblings.indexOf(target); siblings.splice(index < 0 ? siblings.length : index, 0, source); siblings.forEach((item, order) => { item.order = order + 1; }); }
-    state.draggingMenuItemKey = ''; renderMenuConfig();
+    event.preventDefault(); const targetRow = event.target.closest('[data-menu-item-key]'); const placement = state.menuDropTarget?.placement || menuDropPlacement(targetRow, event.clientY); moveMenuItem(event.dataTransfer.getData('text/plain') || state.draggingMenuItemKey, targetRow?.dataset.menuItemKey, placement); state.draggingMenuItemKey = ''; state.menuDropTarget = null;
   });
+  $('#menuConfigTree')?.addEventListener('dragend', () => { state.draggingMenuItemKey = ''; state.menuDropTarget = null; showMenuDropTarget(null, 'after'); });
+  $('#menuConfigTree')?.addEventListener('pointerdown', (event) => {
+    if (event.pointerType === 'mouse' || !event.target.closest('.menu-tree-grip')) return;
+    const row = event.target.closest('[data-menu-item-key]');
+    if (!row) return;
+    state.menuPointerDrag = { pointerId: event.pointerId, key: row.dataset.menuItemKey, startX: event.clientX, startY: event.clientY, active: false };
+    row.setPointerCapture?.(event.pointerId);
+  });
+  window.addEventListener('pointermove', (event) => {
+    const drag = state.menuPointerDrag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    if (!drag.active && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 10) return;
+    drag.active = true;
+    state.draggingMenuItemKey = drag.key;
+    const row = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('[data-menu-item-key]');
+    showMenuDropTarget(row?.closest('#menuConfigTree') ? row : null, menuDropPlacement(row, event.clientY));
+    autoScrollReorderSurface($('#menuConfigTree'), event.clientY, event.clientX);
+    event.preventDefault();
+  }, { passive: false });
+  const finishMenuPointerDrag = (event) => {
+    const drag = state.menuPointerDrag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    const row = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('#menuConfigTree [data-menu-item-key]');
+    if (event.type === 'pointerup' && drag.active && row) moveMenuItem(drag.key, row.dataset.menuItemKey, menuDropPlacement(row, event.clientY));
+    state.menuPointerDrag = null; state.draggingMenuItemKey = ''; state.menuDropTarget = null; showMenuDropTarget(null, 'after');
+  };
+  window.addEventListener('pointerup', finishMenuPointerDrag);
+  window.addEventListener('pointercancel', finishMenuPointerDrag);
   $('#menuConfigInspector')?.addEventListener('input', (event) => {
+    if (event.target.id === 'menuMoveGroup') return;
     const item = state.menuConfigDraft?.items?.find((entry) => entry.key === state.selectedMenuItemKey); if (!item) return;
     const field = event.target.dataset.menuField;
     if (field === 'label') item.label = event.target.value;
@@ -10382,12 +12656,45 @@ function bindEvents() {
     if (field !== 'label' && field !== 'externalUrl') renderMenuConfig();
   });
   $('#menuConfigInspector')?.addEventListener('change', (event) => {
+    if (event.target.id === 'menuMoveGroup') { $('#menuConfigInspector [data-move-menu="into"]').disabled = !event.target.value; return; }
     const item = state.menuConfigDraft?.items?.find((entry) => entry.key === state.selectedMenuItemKey); if (!item || event.target.dataset.menuField !== 'destination') return;
     const value = event.target.value; item.destination = value === 'external' ? { type: 'external', url: 'https://' } : { type: value.split(':')[0], key: value.split(':').slice(1).join(':') }; renderMenuConfig();
   });
-  $('#menuConfigInspector')?.addEventListener('click', (event) => { if (!event.target.closest('[data-remove-menu-item]')) return; const key = state.selectedMenuItemKey; state.menuConfigDraft.items = state.menuConfigDraft.items.filter((item) => item.key !== key && item.parentKey !== key); state.selectedMenuItemKey = state.menuConfigDraft.items[0]?.key || ''; renderMenuConfig(); });
+  $('#menuConfigInspector')?.addEventListener('click', async (event) => {
+    const move = event.target.closest('[data-move-menu]');
+    if (move) {
+      const item = state.menuConfigDraft.items.find((entry) => entry.key === state.selectedMenuItemKey);
+      if (!item || item.systemKey === 'admin_portal') return;
+      const siblings = menuSiblings(item.parentKey, item.key);
+      const ordered = menuSiblings(item.parentKey);
+      const index = ordered.findIndex((entry) => entry.key === item.key);
+      if (move.dataset.moveMenu === 'up' && index > 0) moveMenuItem(item.key, ordered[index - 1].key, 'before');
+      if (move.dataset.moveMenu === 'down' && index < ordered.length - 1) moveMenuItem(item.key, ordered[index + 1].key, 'after');
+      if (move.dataset.moveMenu === 'out' && item.parentKey) moveMenuItem(item.key, state.menuConfigDraft.items.find((entry) => entry.key === item.parentKey)?.key, 'after');
+      if (move.dataset.moveMenu === 'into') { const groupKey = $('#menuMoveGroup')?.value; if (groupKey) moveMenuItem(item.key, groupKey, 'inside'); }
+      $('#menuConfigInspector [data-move-menu="' + move.dataset.moveMenu + '"]:not(:disabled)')?.focus();
+      return;
+    }
+    if (!event.target.closest('[data-remove-menu-item]')) return;
+    const key = state.selectedMenuItemKey;
+    const item = state.menuConfigDraft.items.find((entry) => entry.key === key);
+    const descendants = menuDescendantKeys(key);
+    if (descendants.size) {
+      const confirmed = await showConfirmationModal({
+        title: 'Remove Menu Branch',
+        message: `Remove ${item?.label || 'this group'} and all ${descendants.size} descendant ${descendants.size === 1 ? 'entry' : 'entries'}? This only changes the draft until you publish.`,
+        confirmLabel: `Remove ${descendants.size + 1} Entries`
+      });
+      if (!confirmed) return;
+    }
+    descendants.add(key);
+    if (descendants.has(state.menuConfigDraft.defaultModuleGroupKey)) state.menuConfigDraft.defaultModuleGroupKey = '';
+    state.menuConfigDraft.items = state.menuConfigDraft.items.filter((entry) => !descendants.has(entry.key));
+    state.selectedMenuItemKey = state.menuConfigDraft.items[0]?.key || '';
+    renderMenuConfig();
+  });
   $('#menuConfigVersions')?.addEventListener('click', (event) => { const button = event.target.closest('[data-restore-menu-version]'); if (!button) return; runWorkflowUi(async () => { const payload = await api(`/api/menu/configuration/versions/${button.dataset.restoreMenuVersion}/restore`, { method: 'POST' }); state.menuConfigDraft = payload.config; state.selectedMenuItemKey = state.menuConfigDraft.items[0]?.key || ''; renderMenuConfig(); toast('Menu Version Restored To Draft.'); }); });
-  $('#newWorkflowRequestButton')?.addEventListener('click', openWorkflowSubmitModal);
+  $('#newWorkflowRequestButton')?.addEventListener('click', () => openWorkflowSubmitModal().catch((error) => toast(titleCaseMessage(error.message), 'error')));
   $('#refreshWorkflowMonitoring')?.addEventListener('click', () => runWorkflowUi(state.workflowMonitoringTab === 'history' ? loadWorkflowReport : loadWorkflowMonitoring));
   $('#runWorkflowSlaButton')?.addEventListener('click', () => runWorkflowUi(runWorkflowSlaCheck));
   $('#workflowMonitoringStatus')?.addEventListener('change', (event) => { state.workflowMonitoringStatus = event.target.value; runWorkflowUi(loadWorkflowMonitoring); });
@@ -10409,23 +12716,33 @@ function bindEvents() {
     if (filter) { state.workflowMonitoringSla = filter.dataset.monitoringSlaFilter; $('#workflowMonitoringSla').value = state.workflowMonitoringSla; runWorkflowUi(loadWorkflowMonitoring); }
   });
   $('#newWorkflowDelegationButton')?.addEventListener('click', openWorkflowDelegationModal);
-  $('#workflowDelegationForm')?.addEventListener('submit', (event) => runWorkflowUi(() => saveWorkflowDelegation(event)));
+  bindAsyncSubmit($('#workflowDelegationForm'), (event) => runWorkflowUi(() => saveWorkflowDelegation(event)));
   $('#closeWorkflowDelegationModal')?.addEventListener('click', () => closeWorkflowModal('workflowDelegationModal'));
   $('#cancelWorkflowDelegationModal')?.addEventListener('click', () => closeWorkflowModal('workflowDelegationModal'));
   $('#workflowDelegationStatus')?.addEventListener('change', (event) => { state.workflowDelegationStatus = event.target.value; runWorkflowUi(loadWorkflowDelegations); });
   $('#workflowDelegationSearch')?.addEventListener('input', debounce((event) => { state.workflowDelegationSearch = event.target.value.trim(); runWorkflowUi(loadWorkflowDelegations); }, 200));
   $('#workflowDelegationList')?.addEventListener('click', (event) => { const button = event.target.closest('[data-cancel-workflow-delegation]'); if (button) runWorkflowUi(() => cancelWorkflowDelegation(button.dataset.cancelWorkflowDelegation)); });
-  $('#workflowReassignForm')?.addEventListener('submit', (event) => runWorkflowUi(() => reassignWorkflowAssignment(event)));
+  bindAsyncSubmit($('#workflowReassignForm'), (event) => runWorkflowUi(() => reassignWorkflowAssignment(event)));
   $('#closeWorkflowReassignModal')?.addEventListener('click', () => closeWorkflowModal('workflowReassignModal'));
   $('#cancelWorkflowReassignModal')?.addEventListener('click', () => closeWorkflowModal('workflowReassignModal'));
-  $('#workflowSubmitForm')?.elements.workflowKey.addEventListener('change', syncWorkflowSubmitBinding);
-  $('#workflowSubmitForm')?.addEventListener('submit', (event) => runWorkflowUi(() => submitWorkflowRequest(event)));
+  $('#workflowSubmitForm')?.elements.workflowKey.addEventListener('change', () => {
+    syncWorkflowSubmitBinding();
+    $('#workflowSourceRecordSearch').value = '';
+    $('#workflowSubmitForm').dataset.preferredRecordId = '';
+    loadWorkflowSourceRecords().catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  });
+  $('#workflowSourceRecordSearch')?.addEventListener('input', debounce(() => loadWorkflowSourceRecords().catch((error) => toast(titleCaseMessage(error.message), 'error')), 250));
+  $('#workflowSourceRecordOptions')?.addEventListener('click', (event) => {
+    const record = event.target.closest('[data-workflow-source-record]');
+    if (record) selectWorkflowSourceRecord(record.dataset.workflowSourceRecord);
+  });
+  bindAsyncSubmit($('#workflowSubmitForm'), (event) => runWorkflowUi(() => submitWorkflowRequest(event)));
   $('#closeWorkflowSubmitModal')?.addEventListener('click', () => closeWorkflowModal('workflowSubmitModal'));
   $('#cancelWorkflowSubmitModal')?.addEventListener('click', () => closeWorkflowModal('workflowSubmitModal'));
-  $('#workflowDecisionForm')?.addEventListener('submit', (event) => runWorkflowUi(() => decideWorkflowRequest(event)));
+  bindAsyncSubmit($('#workflowDecisionForm'), (event) => runWorkflowUi(() => decideWorkflowRequest(event)));
   $('#closeWorkflowDecisionModal')?.addEventListener('click', () => closeWorkflowModal('workflowDecisionModal'));
   $('#cancelWorkflowDecisionModal')?.addEventListener('click', () => closeWorkflowModal('workflowDecisionModal'));
-  $('#workflowLifecycleForm')?.addEventListener('submit', (event) => runWorkflowUi(() => runWorkflowLifecycle(event)));
+  bindAsyncSubmit($('#workflowLifecycleForm'), (event) => runWorkflowUi(() => runWorkflowLifecycle(event)));
   $('#closeWorkflowLifecycleModal')?.addEventListener('click', () => closeWorkflowModal('workflowLifecycleModal'));
   $('#cancelWorkflowLifecycleModal')?.addEventListener('click', () => closeWorkflowModal('workflowLifecycleModal'));
   $('#workflowRequestList')?.addEventListener('click', (event) => {
@@ -10473,7 +12790,7 @@ function bindEvents() {
     renderWorkflowDefinitionList();
     showWorkflowDefinition(activeWorkflowDefinition());
   });
-  $('#workflowDefinitionForm')?.addEventListener('submit', (event) => runWorkflowUi(() => saveWorkflowDefinition(event)));
+  bindAsyncSubmit($('#workflowDefinitionForm'), (event) => runWorkflowUi(() => saveWorkflowDefinition(event)));
   $('#workflowDefinitionForm')?.elements.name.addEventListener('input', syncWorkflowStableKey);
   $('#workflowDefinitionForm')?.elements.sourceModuleKey.addEventListener('change', () => renderWorkflowCanvasInspector());
   $('#workflowDefinitionForm')?.elements.requestFormKey.addEventListener('change', () => renderWorkflowCanvasInspector());
@@ -10481,6 +12798,7 @@ function bindEvents() {
   $('#workflowConnectButton')?.addEventListener('click', () => {
     state.workflowConnectFrom = state.workflowConnectFrom ? '' : state.selectedWorkflowNodeId;
     if (!state.workflowConnectFrom) toast('Select a source node, then click Connect.', 'error');
+    else announceWorkflowCanvas('Connection mode started. Tab to a destination node and press Enter. Press Escape to cancel.');
     renderWorkflowCanvas();
   });
   $('#workflowZoomOut')?.addEventListener('click', () => { state.workflowCanvasZoom = Math.max(.4, state.workflowCanvasZoom - .1); renderWorkflowCanvas(); });
@@ -10491,6 +12809,10 @@ function bindEvents() {
   $('#saveWorkflowRouteDesigner')?.addEventListener('click', () => runWorkflowUi(saveWorkflowRouteDesigner));
   $('#workflowInspectorToggle')?.addEventListener('click', () => setWorkflowInspectorCollapsed(!state.workflowInspectorCollapsed));
   $('#workflowCanvas')?.addEventListener('click', (event) => {
+    if (state.workflowCanvasSuppressClick) {
+      state.workflowCanvasSuppressClick = false;
+      return;
+    }
     const nodeButton = event.target.closest('[data-workflow-node-id]');
     const edgeButton = event.target.closest('[data-workflow-edge-id]');
     if (nodeButton) {
@@ -10507,12 +12829,45 @@ function bindEvents() {
       renderWorkflowCanvas();
     }
   });
+  $('#workflowCanvas')?.addEventListener('keydown', (event) => {
+    const nodeButton = event.target.closest('[data-workflow-node-id]');
+    if (!nodeButton) return;
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+      moveWorkflowNodeByKeyboard(nodeButton.dataset.workflowNodeId, event.key, event.shiftKey);
+      event.preventDefault();
+      return;
+    }
+    if ((event.key === 'Delete' || event.key === 'Backspace') && nodeButton.dataset.workflowNodeId === state.selectedWorkflowNodeId) {
+      const node = state.workflowBuilderGraph.nodes.find((item) => item.id === nodeButton.dataset.workflowNodeId);
+      if (node?.type !== 'start') {
+        removeSelectedWorkflowNode();
+        event.preventDefault();
+      }
+    }
+  });
   $('#workflowCanvas')?.addEventListener('pointerdown', (event) => {
     const button = event.target.closest('[data-workflow-node-id]');
     if (!button || state.workflowConnectFrom) return;
     const node = state.workflowBuilderGraph.nodes.find((item) => item.id === button.dataset.workflowNodeId);
     if (!node) return;
-    state.workflowCanvasDrag = { nodeId: node.id, startX: event.clientX, startY: event.clientY, x: Number(node.x), y: Number(node.y) };
+    const bounds = button.getBoundingClientRect();
+    state.workflowCanvasDrag = {
+      nodeId: node.id,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      x: Number(node.x),
+      y: Number(node.y),
+      previewX: Number(node.x),
+      previewY: Number(node.y),
+      maxX: 1600 - (bounds.width / state.workflowCanvasZoom),
+      maxY: 820 - (bounds.height / state.workflowCanvasZoom),
+      width: bounds.width,
+      height: bounds.height,
+      grabOffsetX: (event.clientX - bounds.left) / state.workflowCanvasZoom,
+      grabOffsetY: (event.clientY - bounds.top) / state.workflowCanvasZoom,
+      dragging: false
+    };
     button.setPointerCapture?.(event.pointerId);
     event.preventDefault();
   });
@@ -10524,14 +12879,14 @@ function bindEvents() {
     viewport.setPointerCapture?.(event.pointerId);
   });
   window.addEventListener('pointermove', (event) => {
-    if (state.workflowCanvasDrag) {
+    if (state.workflowCanvasDrag && event.pointerId === state.workflowCanvasDrag.pointerId) {
       const drag = state.workflowCanvasDrag;
-      const node = state.workflowBuilderGraph.nodes.find((item) => item.id === drag.nodeId);
-      if (node) {
-        node.x = Math.max(0, drag.x + ((event.clientX - drag.startX) / state.workflowCanvasZoom));
-        node.y = Math.max(0, drag.y + ((event.clientY - drag.startY) / state.workflowCanvasZoom));
-        renderWorkflowCanvas();
-      }
+      const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
+      if (!drag.dragging && distance < 8) return;
+      drag.dragging = true;
+      const position = workflowDragPosition(drag, event.clientX, event.clientY);
+      Object.assign(drag, { previewX: position.x, previewY: position.y, maxX: position.maxX, maxY: position.maxY });
+      queueWorkflowDragFrame();
     }
     if (state.workflowCanvasPan) {
       const viewport = $('#workflowCanvasViewport');
@@ -10539,10 +12894,13 @@ function bindEvents() {
       viewport.scrollTop = state.workflowCanvasPan.top - (event.clientY - state.workflowCanvasPan.startY);
     }
   });
-  window.addEventListener('pointerup', () => {
-    state.workflowCanvasDrag = null;
-    state.workflowCanvasPan = null;
-    $('#workflowCanvasViewport')?.classList.remove('is-panning');
+  window.addEventListener('pointerup', finishWorkflowCanvasInteraction);
+  window.addEventListener('pointercancel', finishWorkflowCanvasInteraction);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && state.workflowRouteDesignerOpen && cancelWorkflowCanvasMode()) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
   });
   $('#workflowCanvasInspector')?.addEventListener('change', (event) => {
     if (event.target.dataset.workflowNodeField) updateWorkflowInspectorField(event.target.dataset.workflowNodeField, event.target);
@@ -10588,6 +12946,11 @@ function bindEvents() {
     }
   });
   $('#checkWorkflowDefinitionButton')?.addEventListener('click', () => runWorkflowUi(checkWorkflowDefinition));
+  $('#workflowCheckPanel')?.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-workflow-check-target-type]');
+    if (target) openWorkflowCheckTarget(target);
+    if (event.target.closest('[data-check-workflow-again]')) runWorkflowUi(checkWorkflowDefinition);
+  });
   $('#publishWorkflowDefinitionButton')?.addEventListener('click', () => runWorkflowUi(publishWorkflowDefinition));
   $('#checkpointWorkflowDefinitionButton')?.addEventListener('click', () => runWorkflowUi(checkpointWorkflowDefinition));
   $('#cloneWorkflowDefinitionButton')?.addEventListener('click', () => runWorkflowUi(cloneWorkflowDefinition));
@@ -10598,7 +12961,7 @@ function bindEvents() {
   $('#closeDashboardSourceDrawer')?.addEventListener('click', closeDashboardSourceDrawer);
   $('#cancelDashboardSourceDrawer')?.addEventListener('click', closeDashboardSourceDrawer);
   $('#dashboardSourceDrawer')?.addEventListener('click', (event) => { if (event.target === event.currentTarget) closeDashboardSourceDrawer(); });
-  $('#dashboardSourceForm')?.addEventListener('submit', (event) => saveDashboardSource(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  bindAsyncSubmit($('#dashboardSourceForm'), (event) => saveDashboardSource(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
   $('#dashboardSourceForm [name="sourceType"]')?.addEventListener('change', updateDashboardSourceFormMode);
   $('#dashboardSourceSearch')?.addEventListener('input', (event) => { state.dashboardSourceSearch = event.currentTarget.value; renderDashboardSourceList(); });
   $('#dashboardSourceList')?.addEventListener('click', (event) => {
@@ -10615,7 +12978,7 @@ function bindEvents() {
   $('#closeDashboardFormModal')?.addEventListener('click', closeDashboardFormModal);
   $('#cancelDashboardFormModal')?.addEventListener('click', closeDashboardFormModal);
   $('#dashboardFormModal')?.addEventListener('click', (event) => { if (event.target === event.currentTarget) closeDashboardFormModal(); });
-  $('#dashboardForm')?.addEventListener('submit', (event) => saveDashboard(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  bindAsyncSubmit($('#dashboardForm'), (event) => saveDashboard(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
   $('#dashboardManagementSearch')?.addEventListener('input', (event) => { state.dashboardManagementSearch = event.currentTarget.value; renderDashboardManagement(); });
   $('.dashboard-status-filter')?.addEventListener('click', (event) => {
     const button = event.target.closest('[data-dashboard-status]');
@@ -10649,14 +13012,14 @@ function bindEvents() {
   $('#closeDashboardLifecycleDrawer')?.addEventListener('click', closeDashboardLifecycleDrawer);
   $('#cancelDashboardLifecycleDrawer')?.addEventListener('click', closeDashboardLifecycleDrawer);
   $('#dashboardLifecycleDrawer')?.addEventListener('click', (event) => { if (event.target === event.currentTarget) closeDashboardLifecycleDrawer(); });
-  $('#dashboardLifecycleForm')?.addEventListener('submit', (event) => createDashboardCheckpoint(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  bindAsyncSubmit($('#dashboardLifecycleForm'), (event) => createDashboardCheckpoint(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
   $('#dashboardVersionList')?.addEventListener('click', (event) => { const button = event.target.closest('[data-restore-dashboard-version]'); if (button) restoreDashboardVersion(button.dataset.restoreDashboardVersion).catch((error) => toast(titleCaseMessage(error.message), 'error')); });
   $('#exportDashboardConfigurationButton')?.addEventListener('click', () => exportDashboardConfiguration().catch((error) => toast(titleCaseMessage(error.message), 'error')));
   $('#importDashboardConfigurationInput')?.addEventListener('change', (event) => importDashboardConfiguration(event.target.files?.[0]).catch((error) => toast(titleCaseMessage(error.message), 'error')).finally(() => { event.target.value = ''; }));
   $('#closeDashboardAccessDrawer')?.addEventListener('click', closeDashboardAccessDrawer);
   $('#cancelDashboardAccessDrawer')?.addEventListener('click', closeDashboardAccessDrawer);
   $('#dashboardAccessDrawer')?.addEventListener('click', (event) => { if (event.target === event.currentTarget) closeDashboardAccessDrawer(); });
-  $('#dashboardAccessForm')?.addEventListener('submit', (event) => saveDashboardAccess(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  bindAsyncSubmit($('#dashboardAccessForm'), (event) => saveDashboardAccess(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
   $('#dashboardAccessRules')?.addEventListener('input', (event) => {
     const search = event.target.closest('[data-permission-search]');
     if (search) filterPermissionPicker(search.closest('[data-permission-picker]'));
@@ -10670,7 +13033,7 @@ function bindEvents() {
   $('#closeDashboardFilterDrawer')?.addEventListener('click', closeDashboardFilterDrawer);
   $('#cancelDashboardFilterDrawer')?.addEventListener('click', closeDashboardFilterDrawer);
   $('#dashboardFilterDrawer')?.addEventListener('click', (event) => { if (event.target === event.currentTarget) closeDashboardFilterDrawer(); });
-  $('#dashboardFilterForm')?.addEventListener('submit', saveDashboardFilter);
+  bindAsyncSubmit($('#dashboardFilterForm'), saveDashboardFilter);
   $('#dashboardFilterForm [name="type"]')?.addEventListener('change', updateDashboardFilterFormFields);
   $('#dashboardFilterForm [name="dataSourceKey"]')?.addEventListener('change', updateDashboardFilterFormFields);
   $('#removeDashboardFilterButton')?.addEventListener('click', removeDashboardFilter);
@@ -10700,6 +13063,8 @@ function bindEvents() {
     renderDashboardCanvas();
   });
   $('#dashboardCanvas')?.addEventListener('click', (event) => {
+    handleDashboardWorkspaceClick(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+    if (event.target.closest('[data-dashboard-task-form], [data-dashboard-task-id], [data-dashboard-request], [data-dashboard-view], [data-dashboard-calendar-date], [data-dashboard-calendar-shift], [data-dashboard-calendar-today], [data-dashboard-calendar-close], .dashboard-calendar-popover')) return;
     const pageButton = event.target.closest('[data-dashboard-table-page]');
     const pivotToggle = event.target.closest('[data-dashboard-pivot-toggle]');
     const frame = event.target.closest('[data-dashboard-widget-key]');
@@ -10722,9 +13087,14 @@ function bindEvents() {
     renderDashboardCanvas();
   });
   $('#dashboardCanvas')?.addEventListener('pointerdown', startDashboardLayoutInteraction);
+  bindAsyncSubmit($('#dashboardCanvas'), (event) => handleDashboardTaskSubmit(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  $('#dashboardCanvas')?.addEventListener('change', (event) => handleDashboardTaskChange(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
   document.addEventListener('pointermove', moveDashboardLayoutInteraction);
   document.addEventListener('pointerup', endDashboardLayoutInteraction);
-  window.addEventListener('resize', syncDashboardCanvasExtent);
+  window.addEventListener('resize', debounce(() => {
+    syncDashboardCanvasExtent();
+    if (!$('#publishedDashboardPage')?.hidden && state.dashboardConfiguration) renderPublishedDashboardCanvas();
+  }, 120));
   $('#dashboardCanvas')?.addEventListener('keydown', (event) => {
     const frame = event.target.closest('[data-dashboard-widget-key]');
     if (!frame || !['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return;
@@ -10754,7 +13124,11 @@ function bindEvents() {
   });
   $('#duplicateDashboardWidgetButton')?.addEventListener('click', duplicateSelectedDashboardWidget);
   $('#removeDashboardWidgetButton')?.addEventListener('click', removeSelectedDashboardWidget);
-  $('#dashboardWidgetType')?.addEventListener('change', (event) => updateSelectedDashboardWidgetConfiguration((widget) => { widget.type = event.currentTarget.value; widget.config = { ...dashboardWidgetConfig(widget), mappings: {} }; }));
+  $('#dashboardWidgetType')?.addEventListener('change', (event) => updateSelectedDashboardWidgetConfiguration((widget) => {
+    widget.type = event.currentTarget.value;
+    if (isDashboardWorkspaceWidget(widget)) widget.dataSourceKey = '';
+    widget.config = { ...dashboardWidgetConfig(widget), mappings: {}, status: widget.type === 'approval_inbox' ? 'pending' : widget.type === 'todo_list' ? 'open' : undefined };
+  }));
   $('#dashboardWidgetDataSource')?.addEventListener('change', (event) => updateSelectedDashboardWidgetConfiguration((widget) => { widget.dataSourceKey = event.currentTarget.value; widget.config = { ...dashboardWidgetConfig(widget), mappings: {} }; }));
   $('#dashboardWidgetMappingFields')?.addEventListener('change', (event) => {
     const control = event.target.closest('[data-dashboard-mapping]');
@@ -10791,6 +13165,8 @@ function bindEvents() {
   $('#backToPublishedDashboardList')?.addEventListener('click', renderPublishedDashboardList);
   $('#publishedDashboardSelector')?.addEventListener('change', (event) => openPublishedDashboard(event.currentTarget.value).catch((error) => toast(titleCaseMessage(error.message), 'error')));
   $('#publishedDashboardCanvas')?.addEventListener('click', (event) => {
+    handleDashboardWorkspaceClick(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+    if (event.target.closest('[data-dashboard-task-form], [data-dashboard-task-id], [data-dashboard-request], [data-dashboard-view], [data-dashboard-calendar-date], [data-dashboard-calendar-shift], [data-dashboard-calendar-today], [data-dashboard-calendar-close], .dashboard-calendar-popover')) return;
     const refresh = event.target.closest('[data-refresh-published-widget]');
     if (refresh) {
       const widget = state.dashboardConfiguration?.widgets.find((item) => item.widgetKey === refresh.dataset.refreshPublishedWidget);
@@ -10800,6 +13176,8 @@ function bindEvents() {
     const drillDown = event.target.closest('[data-dashboard-drill-down]');
     if (drillDown) openDashboardWidgetDrillDown(drillDown.dataset.dashboardDrillDown).catch((error) => toast(titleCaseMessage(error.message), 'error'));
   });
+  bindAsyncSubmit($('#publishedDashboardCanvas'), (event) => handleDashboardTaskSubmit(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  $('#publishedDashboardCanvas')?.addEventListener('change', (event) => handleDashboardTaskChange(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
   $('#publishedDashboardFilters')?.addEventListener('change', (event) => {
     const control = event.target.closest('[data-dashboard-filter-key]');
     if (!control) return;
@@ -10818,7 +13196,7 @@ function bindEvents() {
   });
   $('#newActionFlowButton')?.addEventListener('click', createActionFlow);
   $('#createManagedActionFlowButton')?.addEventListener('click', createActionFlow);
-  $('#actionFlowCreateForm')?.addEventListener('submit', (event) => saveNewActionFlow(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  bindAsyncSubmit($('#actionFlowCreateForm'), (event) => saveNewActionFlow(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
   $('#closeActionFlowCreateModal')?.addEventListener('click', closeActionFlowCreateModal);
   $('#cancelActionFlowCreateModal')?.addEventListener('click', closeActionFlowCreateModal);
   $('#actionFlowCreateModal')?.addEventListener('click', (event) => {
@@ -10868,7 +13246,7 @@ function bindEvents() {
   });
   $('#runActionFlowButton')?.addEventListener('click', openActionFlowRunModal);
   $('#clearActionFlowRunButton')?.addEventListener('click', clearActionFlowRun);
-  $('#actionFlowRunForm')?.addEventListener('submit', (event) => runActiveActionFlowOnce(event).catch((error) => {
+  bindAsyncSubmit($('#actionFlowRunForm'), (event) => runActiveActionFlowOnce(event).catch((error) => {
     state.actionFlowRun = { status: 'failed', steps: [], error: error.message };
     renderActionFlowStudio();
     toast(titleCaseMessage(error.message), 'error');
@@ -10882,11 +13260,7 @@ function bindEvents() {
   $('#actionFlowList')?.addEventListener('click', (event) => {
     const button = event.target.closest('[data-action-flow-key]');
     if (!button) return;
-    state.activeActionFlowKey = button.dataset.actionFlowKey;
-    state.selectedActionFlowNodeId = '';
-    state.actionFlowDirty = false;
-    state.actionFlowRun = null;
-    renderActionFlowStudio();
+    openActionFlowCanvas(button.dataset.actionFlowKey);
   });
   $('#actionFlowPalette')?.addEventListener('click', (event) => {
     const button = event.target.closest('[data-flow-node-type]');
@@ -11082,7 +13456,7 @@ function bindEvents() {
     state.actionFlowZoom = Math.max(.4, Math.min(1, Number(Math.min(horizontalFit, verticalFit).toFixed(2))));
     renderActionFlowCanvas();
     $('#actionFlowZoomLabel').textContent = `${Math.round(state.actionFlowZoom * 100)}%`;
-    viewport.scrollTo({ left: 0, top: 0, behavior: 'smooth' });
+    viewport.scrollTo({ left: 0, top: 0, behavior: preferredScrollBehavior() });
   });
   $('#departmentTree')?.addEventListener('click', (event) => {
     const button = event.target.closest('[data-department-node]');
@@ -11101,7 +13475,7 @@ function bindEvents() {
   $('#closeDepartmentNodeModal')?.addEventListener('click', closeDepartmentNodeModal);
   $('#cancelDepartmentNodeModal')?.addEventListener('click', closeDepartmentNodeModal);
   $('#departmentNodeModal')?.addEventListener('click', (event) => { if (event.target === event.currentTarget) closeDepartmentNodeModal(); });
-  $('#departmentNodeForm')?.addEventListener('submit', (event) => saveDepartmentNode(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
+  bindAsyncSubmit($('#departmentNodeForm'), (event) => saveDepartmentNode(event).catch((error) => toast(titleCaseMessage(error.message), 'error')));
   $('#departmentNodeForm select[name="type"]')?.addEventListener('change', (event) => {
     if (!$('#departmentNodeForm').elements.id.value) $('#departmentNodeFormTitle').textContent = `New ${titleCaseMessage(event.target.value)}`;
   });
@@ -11122,8 +13496,8 @@ function bindEvents() {
   $('#formBuilderCreateModal')?.addEventListener('click', (event) => {
     if (event.target === event.currentTarget) closeFormBuilderCreateModal();
   });
-  $('#formBuilderCreateForm')?.addEventListener('submit', (event) => {
-    saveFormBuilderCreate(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  bindAsyncSubmit($('#formBuilderCreateForm'), (event) => {
+    return saveFormBuilderCreate(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
   });
   $('#formBuilderCreateForm [name="formType"]')?.addEventListener('change', syncFormBuilderCreateFields);
   $('#formBuilderCreateForm [name="name"]')?.addEventListener('input', (event) => {
@@ -11142,8 +13516,8 @@ function bindEvents() {
   });
   $('#closeModuleModal')?.addEventListener('click', closeModuleModal);
   $('#cancelModuleButton')?.addEventListener('click', closeModuleModal);
-  $('#moduleForm')?.addEventListener('submit', (event) => {
-    saveModule(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  bindAsyncSubmit($('#moduleForm'), (event) => {
+    return saveModule(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
   });
   $('#moduleModal')?.addEventListener('click', (event) => {
     if (event.target === event.currentTarget) closeModuleModal();
@@ -11215,8 +13589,8 @@ function bindEvents() {
       openModuleModal(editButton.dataset.editModule).catch((error) => toast(titleCaseMessage(error.message), 'error'));
     }
   });
-  $('#pageViewPermissionForm')?.addEventListener('submit', (event) => {
-    savePageViewPermission(event);
+  bindAsyncSubmit($('#pageViewPermissionForm'), (event) => {
+    return savePageViewPermission(event);
   });
   $('#closePageViewPermissionModal')?.addEventListener('click', closePageViewPermissionModal);
   $('#cancelPageViewPermissionButton')?.addEventListener('click', closePageViewPermissionModal);
@@ -11229,7 +13603,11 @@ function bindEvents() {
   });
   $('#pageViewPermissionForm')?.addEventListener('change', (event) => {
     const checkbox = event.target.closest('.permission-check input[type="checkbox"]');
-    if (checkbox) updatePermissionPickerCount(checkbox.closest('[data-permission-picker]'));
+    if (checkbox) {
+      const picker = checkbox.closest('[data-permission-picker]');
+      updatePermissionPickerCount(picker);
+      syncPermissionHierarchyState(picker);
+    }
   });
   $('#moduleRuntimeSearchButton')?.addEventListener('click', () => {
     state.moduleRuntimeSearch = $('#moduleRuntimeSearch').value;
@@ -11247,8 +13625,8 @@ function bindEvents() {
   $('#moduleRecordModal')?.addEventListener('click', (event) => {
     if (event.target === event.currentTarget) closeModuleRecordModal();
   });
-  $('#moduleRecordForm')?.addEventListener('submit', (event) => {
-    saveModuleRecord(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  bindAsyncSubmit($('#moduleRecordForm'), (event) => {
+    return saveModuleRecord(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
   });
   $('#moduleRecordRows')?.addEventListener('click', (event) => {
     const editButton = event.target.closest('[data-edit-module-record]');
@@ -11287,8 +13665,8 @@ function bindEvents() {
   $('#apiCategoryModal')?.addEventListener('click', (event) => {
     if (event.target === event.currentTarget) closeApiCategoryModal();
   });
-  $('#apiCategoryForm')?.addEventListener('submit', (event) => {
-    saveApiCategory(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  bindAsyncSubmit($('#apiCategoryForm'), (event) => {
+    return saveApiCategory(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
   });
   $('#apiCategoryRows')?.addEventListener('click', (event) => {
     const editButton = event.target.closest('[data-edit-api-category]');
@@ -11311,8 +13689,8 @@ function bindEvents() {
   $('#apiConnectorModal')?.addEventListener('click', (event) => {
     if (event.target === event.currentTarget) closeApiConnectorModal();
   });
-  $('#apiConnectorForm')?.addEventListener('submit', (event) => {
-    saveApiConnector(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  bindAsyncSubmit($('#apiConnectorForm'), (event) => {
+    return saveApiConnector(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
   });
   $('#apiConnectorForm [name="name"]')?.addEventListener('input', (event) => {
     const form = event.currentTarget.form;
@@ -11354,8 +13732,8 @@ function bindEvents() {
   $('#apiInterfaceModal')?.addEventListener('click', (event) => {
     if (event.target === event.currentTarget) closeApiInterfaceModal();
   });
-  $('#apiInterfaceForm')?.addEventListener('submit', (event) => {
-    saveApiInterface(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
+  bindAsyncSubmit($('#apiInterfaceForm'), (event) => {
+    return saveApiInterface(event).catch((error) => toast(titleCaseMessage(error.message), 'error'));
   });
   $('#apiInterfaceForm')?.addEventListener('input', (event) => updateApiDefinitionRow(event.target));
   $('#apiInterfaceForm')?.addEventListener('change', (event) => {
@@ -11479,7 +13857,7 @@ function bindEvents() {
     updatePermissionPickerCount(checkbox.closest('[data-permission-picker]'));
   });
 
-  $('#browserButtonForm').addEventListener('submit', async (event) => {
+  bindAsyncSubmit($('#browserButtonForm'), async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
     const data = serializeForm(form);
@@ -12117,6 +14495,14 @@ function bindEvents() {
       return;
     }
     if (!field) return;
+    if (actionButton.dataset.designAction === 'move-up') {
+      moveFormDesignField(field.fieldKey, -1);
+      return;
+    }
+    if (actionButton.dataset.designAction === 'move-down') {
+      moveFormDesignField(field.fieldKey, 1);
+      return;
+    }
     if (actionButton.dataset.designAction === 'edit-field') {
       openFieldConfigModal(field);
       $('#fieldConfigModal').classList.add('is-over-drawer');
@@ -12131,6 +14517,13 @@ function bindEvents() {
     }
   });
   $('#formDesignCanvas').addEventListener('keydown', (event) => {
+    const card = event.target.closest('[data-design-field]');
+    if (card && event.target === card && ['Enter', ' '].includes(event.key)) {
+      event.preventDefault();
+      selectFormDesignField(card.dataset.designField);
+      $('#formDesignCanvas [data-design-action="move-up"]:not(:disabled), #formDesignCanvas [data-design-action="move-down"]:not(:disabled)')?.focus();
+      return;
+    }
     const input = event.target.closest('[data-detail-table-name-input]');
     if (!input) return;
     if (event.key === 'Enter') {
@@ -12231,12 +14624,18 @@ function bindEvents() {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
     const nextDragOver = fieldCard?.dataset.designField || '';
+    state.formDesignDropPlacement = fieldCard ? formDesignDropPlacement(fieldCard, event.clientY) : '';
     if (state.dragOverFormDesignFieldKey !== nextDragOver) {
       state.dragOverFormDesignFieldKey = nextDragOver;
       $$('#formDesignCanvas [data-design-field]').forEach((card) => {
         card.classList.toggle('is-drag-over', card.dataset.designField === state.dragOverFormDesignFieldKey);
       });
     }
+    $$('#formDesignCanvas [data-design-field]').forEach((card) => {
+      card.classList.toggle('is-drop-before', card === fieldCard && state.formDesignDropPlacement === 'before');
+      card.classList.toggle('is-drop-after', card === fieldCard && state.formDesignDropPlacement === 'after');
+    });
+    autoScrollReorderSurface($('#formDesignCanvas'), event.clientY, event.clientX);
     $$('#formDesignCanvas [data-design-dropzone]').forEach((zone) => {
       zone.classList.toggle('is-drop-active', zone === dropzone && !fieldCard);
     });
@@ -12271,7 +14670,7 @@ function bindEvents() {
       if (!isFormDesignFieldVisible(draggedField)) {
         await setFormDesignFieldVisibility(draggedFieldKey, true);
       }
-      reorderFormDesignField(draggedFieldKey, fieldCard.dataset.designField);
+      reorderFormDesignFieldAt(draggedFieldKey, fieldCard.dataset.designField, state.formDesignDropPlacement || 'before');
     } else if (dropzone?.dataset.designDropzone === 'form') {
       await setFormDesignFieldVisibility(draggedFieldKey, true);
     }
@@ -12281,13 +14680,55 @@ function bindEvents() {
     state.dragOverFormDesignFieldKey = '';
     state.draggingFormDesignDetailTable = '';
     state.dragOverFormDesignDetailTable = '';
+    state.formDesignDropPlacement = '';
     $$('#formDesignCanvas [data-design-field]').forEach((card) => {
-      card.classList.remove('is-dragging', 'is-drag-over');
+      card.classList.remove('is-dragging', 'is-drag-over', 'is-drop-before', 'is-drop-after');
     });
     $$('#formDesignCanvas [data-design-detail-table]').forEach((table) => {
       table.classList.remove('is-dragging', 'is-drag-over');
     });
     $$('#formDesignCanvas [data-design-dropzone]').forEach((zone) => zone.classList.remove('is-drop-active'));
+  });
+  $('#formDesignCanvas').addEventListener('pointerdown', (event) => {
+    if (event.pointerType === 'mouse' || !event.target.closest('.form-reorder-grip')) return;
+    const card = event.target.closest('[data-design-field]');
+    if (!card) return;
+    state.formDesignPointerDrag = { pointerId: event.pointerId, key: card.dataset.designField, startX: event.clientX, startY: event.clientY, active: false };
+    card.setPointerCapture?.(event.pointerId);
+  });
+  window.addEventListener('pointermove', (event) => {
+    const drag = state.formDesignPointerDrag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    if (!drag.active && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 10) return;
+    drag.active = true;
+    state.draggingFormDesignFieldKey = drag.key;
+    const card = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('[data-design-field]');
+    const placement = card ? formDesignDropPlacement(card, event.clientY) : '';
+    state.dragOverFormDesignFieldKey = card?.dataset.designField || '';
+    state.formDesignDropPlacement = placement;
+    $$('#formDesignCanvas [data-design-field]').forEach((item) => {
+      item.classList.toggle('is-dragging', item.dataset.designField === drag.key);
+      item.classList.toggle('is-drop-before', item === card && placement === 'before');
+      item.classList.toggle('is-drop-after', item === card && placement === 'after');
+    });
+    autoScrollReorderSurface($('#formDesignCanvas'), event.clientY, event.clientX);
+    event.preventDefault();
+  }, { passive: false });
+  const finishFormDesignPointerDrag = (event) => {
+    const drag = state.formDesignPointerDrag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    const card = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('#formDesignCanvas [data-design-field]');
+    if (event.type === 'pointerup' && drag.active && card) reorderFormDesignFieldAt(drag.key, card.dataset.designField, formDesignDropPlacement(card, event.clientY));
+    state.formDesignPointerDrag = null; state.draggingFormDesignFieldKey = ''; state.dragOverFormDesignFieldKey = ''; state.formDesignDropPlacement = '';
+    $$('#formDesignCanvas [data-design-field]').forEach((card) => card.classList.remove('is-dragging', 'is-drop-before', 'is-drop-after'));
+  };
+  window.addEventListener('pointerup', finishFormDesignPointerDrag);
+  window.addEventListener('pointercancel', finishFormDesignPointerDrag);
+  window.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    stopReorderAutoScroll();
+    if (state.menuPointerDrag) finishMenuPointerDrag({ type: 'pointercancel', pointerId: state.menuPointerDrag.pointerId, clientX: 0, clientY: 0 });
+    if (state.formDesignPointerDrag) finishFormDesignPointerDrag({ type: 'pointercancel', pointerId: state.formDesignPointerDrag.pointerId, clientX: 0, clientY: 0 });
   });
   $('#formDesignCanvas').addEventListener('dblclick', (event) => {
     const fieldCard = event.target.closest('[data-design-field]');
@@ -12315,7 +14756,7 @@ function bindEvents() {
       removeButton.closest('tr')?.remove();
     }
   });
-  $('#fieldLinkageForm')?.addEventListener('submit', async (event) => {
+  bindAsyncSubmit($('#fieldLinkageForm'), async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
     const fieldKey = form.elements.fieldKey.value;
@@ -12395,7 +14836,7 @@ function bindEvents() {
     if (!button) return;
     insertAtCursor($('#formulaBuilderForm').elements.formulaExpression, button.dataset.insertFormula);
   });
-  $('#formulaBuilderForm').addEventListener('submit', async (event) => {
+  bindAsyncSubmit($('#formulaBuilderForm'), async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
     const fieldKey = form.elements.fieldKey.value;
@@ -12433,7 +14874,7 @@ function bindEvents() {
     }
   });
 
-  $('#fieldConfigForm').addEventListener('submit', async (event) => {
+  bindAsyncSubmit($('#fieldConfigForm'), async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
     const data = serializeForm(form);
@@ -12535,7 +14976,7 @@ function bindEvents() {
     form.elements.databaseFieldName.value = preview;
   });
 
-  $('#batchFieldForm').addEventListener('submit', async (event) => {
+  bindAsyncSubmit($('#batchFieldForm'), async (event) => {
     event.preventDefault();
     const existingRows = state.batchShowingArchived ? [] : state.batchEditRows.filter((row) => row.label.trim());
     const newRows = state.batchDraftRows.filter((row) => row.label.trim());
@@ -12630,7 +15071,7 @@ function bindEvents() {
     }
   });
 
-  $('#fieldPropertiesForm').addEventListener('submit', async (event) => {
+  bindAsyncSubmit($('#fieldPropertiesForm'), async (event) => {
     event.preventDefault();
     const rows = Array.from($('#fieldPropertiesRows').querySelectorAll('[data-properties-field]'));
     const submitButton = $('#saveFieldPropertiesButton');
@@ -12671,7 +15112,7 @@ function bindEvents() {
     }
   });
 
-  $('#importExportMappingForm').addEventListener('submit', async (event) => {
+  bindAsyncSubmit($('#importExportMappingForm'), async (event) => {
     event.preventDefault();
     const rows = Array.from($('#importExportMappingRows').querySelectorAll('[data-mapping-field]'));
     const submitButton = $('#saveImportExportMappingButton');
@@ -12736,7 +15177,7 @@ function bindEvents() {
     if (button) editUser(Number(button.dataset.editUser));
   });
 
-  $('#customerForm').addEventListener('submit', async (event) => {
+  bindAsyncSubmit($('#customerForm'), async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
     const data = customerFormData(form);
@@ -12757,7 +15198,7 @@ function bindEvents() {
     }
   });
 
-  $('#userForm').addEventListener('submit', async (event) => {
+  bindAsyncSubmit($('#userForm'), async (event) => {
     event.preventDefault();
     try {
       const form = event.currentTarget;
@@ -12789,7 +15230,7 @@ function bindEvents() {
     }
   });
 
-  $('#importForm').addEventListener('submit', async (event) => {
+  bindAsyncSubmit($('#importForm'), async (event) => {
     event.preventDefault();
     const submitButton = event.currentTarget.querySelector('button[type="submit"]');
     submitButton.disabled = true;
@@ -12829,12 +15270,15 @@ function debounce(fn, wait) {
 }
 
 async function init() {
+  loadDocumentPrototypeState();
   try {
     await loadAuthConfig();
   } catch (error) {
     toast(titleCaseMessage(error.message), 'error');
   }
   initializeScrollableModalFrames();
+  initializeModalSurfaces();
+  initializeParallelInspectors();
   bindEvents();
   configureAuthUi();
 

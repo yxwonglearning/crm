@@ -8,6 +8,7 @@ const dashboardStatuses = new Set(['draft', 'published', 'archived']);
 const sourceTypes = new Set(['sql_view', 'select_query']);
 const validationStatuses = new Set(['untested', 'valid', 'invalid']);
 const subjectTypes = new Set(['role', 'user', 'department']);
+const workspaceWidgetTypes = new Set(['approval_inbox', 'todo_list', 'calendar', 'quick_actions', 'recent_records', 'notifications']);
 
 function stableKey(value) {
   return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 80);
@@ -178,6 +179,7 @@ async function checkConfiguration(dashboardKey, candidate) {
   const configuration = candidate ? validateConfiguration(candidate) : await getDashboard(dashboardKey);
   const issues = [];
   for (const widget of configuration.widgets || []) {
+    if (workspaceWidgetTypes.has(widget.type)) continue;
     if (!widget.dataSourceKey) { issues.push({ area: 'widget', key: widget.widgetKey, message: 'Choose Dashboard Data.' }); continue; }
     const source = await repository.findDataSourceByKey(widget.dataSourceKey);
     if (!source || source.archived) { issues.push({ area: 'widget', key: widget.widgetKey, message: `Data source is unavailable: ${widget.dataSourceKey}` }); continue; }
@@ -228,7 +230,7 @@ async function publishDashboard(dashboardKey, user) {
   const checked = await checkConfiguration(dashboardKey, configuration);
   if (!checked.valid) throw new AppError(`Dashboard check failed: ${checked.issues[0].message}`, 422);
   if (!configuration.widgets.length) throw new AppError('Add at least one widget before publishing', 422);
-  const invalidWidget = configuration.widgets.find((widget) => !widget.dataSourceKey);
+  const invalidWidget = configuration.widgets.find((widget) => !workspaceWidgetTypes.has(widget.type) && !widget.dataSourceKey);
   if (invalidWidget) throw new AppError(`Connect Dashboard Data to ${invalidWidget.title} before publishing`, 422);
   return repository.publishConfiguration(dashboardKey, configuration, user?.id);
 }

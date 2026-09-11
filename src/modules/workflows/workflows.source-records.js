@@ -65,4 +65,28 @@ async function getRecord(moduleKey, id, user) {
   return moduleRecords.getRecord(moduleKey, id, user);
 }
 
-module.exports = { customerRecord, getRecord, userRecord };
+function recordText(values = []) {
+  return values.filter((value) => value !== undefined && value !== null && String(value).trim()).map(String);
+}
+
+async function listSelectableRecords(moduleKey, search, user) {
+  if (moduleKey === 'customers') {
+    await requireView(moduleKey, user);
+    const rows = await customerRepository.listCustomers({ search: String(search || '').trim() });
+    return rows.slice(0, 50).map((row) => ({ id: Number(row.id), label: row.company_name || `Customer ${row.id}`, secondary: recordText([row.contact_person, row.email]).join(' · ') }));
+  }
+  if (moduleKey === 'users') {
+    await requireView(moduleKey, user);
+    const rows = await userRepository.listUsers({ search: String(search || '').trim() });
+    return rows.slice(0, 50).map((row) => ({ id: Number(row.id), label: row.name || row.staff_id || `User ${row.id}`, secondary: recordText([row.staff_id, row.email]).join(' · ') }));
+  }
+  const payload = await moduleRecords.listRecords(moduleKey, { search: String(search || '').trim() }, user);
+  const displayFields = (payload.fields || []).filter((field) => field.tableType !== 'detail' && field.archived !== true)
+    .sort((left, right) => Number(right.showInTable) - Number(left.showInTable)).slice(0, 3);
+  return (payload.records || []).slice(0, 50).map((record) => {
+    const values = recordText(displayFields.map((field) => record.customFields?.[field.fieldKey]));
+    return { id: Number(record.id), label: values[0] || `${payload.module?.name || moduleKey} record`, secondary: values.slice(1).join(' · ') };
+  });
+}
+
+module.exports = { customerRecord, getRecord, listSelectableRecords, userRecord };

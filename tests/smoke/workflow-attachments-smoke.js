@@ -24,6 +24,17 @@ assert.throws(
   () => attachments.validateFiles([textFile()], { ...policy, mode: 'disabled' }, 'submission'),
   (error) => error.details.code === 'WORKFLOW_ATTACHMENT_DISABLED'
 );
+const formAttachment = { ...textFile('medical-certificate.txt'), fieldname: 'responseAttachment:medical_certificate' };
+assert.equal(
+  attachments.validateFiles([formAttachment], { ...policy, mode: 'disabled' }, 'approval')[0].fileName,
+  'medical-certificate.txt',
+  'Named form attachment fields must remain usable when additional supporting files are disabled'
+);
+assert.throws(
+  () => attachments.validateFiles([{ ...formAttachment, mimetype: 'text/html' }], { ...policy, mode: 'disabled' }, 'approval'),
+  (error) => error.details.code === 'WORKFLOW_ATTACHMENT_TYPE_DENIED',
+  'Form attachment fields must still obey the workflow file-type allowlist'
+);
 assert.throws(
   () => attachments.validateFiles([{ originalname: 'page.html', mimetype: 'text/html', buffer: Buffer.from('<script>') }], policy, 'submission'),
   (error) => error.details.code === 'WORKFLOW_ATTACHMENT_TYPE_DENIED'

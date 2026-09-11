@@ -1,0 +1,8 @@
+#documentOutputPreview, #recordDocumentFrame { display:block; border:0; background:white; max-width:none; margin:16px auto; box-shadow:0 8px 30px #25223822; }
+#documentOutputPreview[hidden], #recordDocumentFrame[hidden] { display:none; }
+#documentOutputStatus { margin:0; padding:8px 16px; background:var(--surface); color:var(--muted); font-size:var(--type-support); }
+.document-designer-toolbar input:not([type=range]) { width:125px; }
+.document-designer-toolbar:has(#documentOutputRecordId) { flex-wrap:wrap; }
+#recordDocumentDialog { max-width:95vw; max-height:90vh; overflow:auto; width:850px; border:var(--border-standard); border-radius:var(--radius-dialog); padding:24px; color:var(--text); }
+#recordDocumentDialog::backdrop { background:#25223866; }
+@media print { #documentOutputStatus { display:none; } }

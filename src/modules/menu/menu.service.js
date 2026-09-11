@@ -50,7 +50,6 @@ function validate(config) {
       current = items.find((candidate) => candidate.key === current.parentKey);
       if (!current) break;
     }
-    if (depth > 2) errors.push(`${item.label || item.key} exceeds the maximum of two submenu levels.`);
   });
   const admin = items.find((item) => item.systemKey === 'admin_portal');
   if (!admin || !admin.enabled || admin.destination?.key !== 'sysadminView') errors.push('Admin Portal must remain enabled and linked to the Admin Portal.');

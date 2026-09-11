@@ -89,6 +89,10 @@ The sections below serve as the detailed project log, implementation notes, feat
 - Page View permissions support Organization, Department, and Group access with inheritance to users assigned to descendant units.
 - All pop-out modals include a fullscreen/enlarge button.
 - Authenticated pages use the shared application shell: a compact global utility bar for notifications and account controls, a flexible page-content region, and a lightweight footer. Page names and descriptions appear only in the page header and are never repeated in the global utility bar. Standard, published, and low-code-generated module pages inherit this shell automatically; genuine full-screen designers use their dedicated toolbar without floating global controls over the canvas.
+- Surface controls visually belong to the surface they affect. Sidebar collapse controls stay fully inside a dedicated sidebar control lane, align to its trailing edge when expanded, center within its collapsed rail, and never straddle the boundary between columns.
+- Navigation keeps the configured menu hierarchy, highlights the current destination, remembers useful group expansion per user, and adapts between aligned desktop, compact-sidebar, tablet, and mobile layouts. Intent-based Work/Admin regrouping remains deliberately deferred so the established menu design is preserved.
+- Menus and calendar details are anchored to their triggering controls and use matching entrance/exit paths. Scrims are reserved for modal tasks; workflow, automation, dashboard, and menu inspectors remain non-blocking parallel surfaces with persistent selected-item highlighting. Shared depth tokens and opaque reduced-transparency fallbacks keep these materials consistent.
+- The interface uses one canonical design-system foundation for semantic color, typography, spacing, control sizing, motion, radii, borders, shadows, and focus treatment. Component-specific shapes remain intentional, while shared controls and panels consume the same tokens instead of relying on later cascade overrides.
 - Customer detail-table data entry inside the Add/Edit Customer modal.
 - Detail-table row controls:
   - add row
@@ -264,12 +268,12 @@ Admins should have a dedicated portal for configuring the CRM:
    - The admin-only permission-audit API supports module, action, result, and result-limit filters.
    - Record-scope rules such as Own, Assigned, or Department records are intentionally not required; the exploratory Record Access interface remains disabled behind a frontend feature flag.
    - Database migration, allowed/denied audit coverage, field-view redaction coverage, and the complete backend smoke suite passed on 2026-07-21.
-7. Phase 7: Dashboard Builder - in progress
-   - Dashboard persistence and the guarded data-source execution foundation are complete; the user-facing builder is not implemented yet.
+7. Phase 7: Dashboard Builder - complete
+   - Dashboard persistence, guarded data-source execution, the user-facing builder, and published Homepage rendering are implemented.
    - MySQL stores registered data sources, dashboards, widget layouts, filters, permissions, immutable versions, and published-version references.
    - Authenticated admin APIs can discover SQL views, inspect their columns, register approved SQL views or guarded SELECT queries, and execute registered sources with parameter binding, pagination, row limits, timeouts, concurrency limits, and safe error responses.
    - Dashboard query execution supports optional dedicated read-only credentials through `DASHBOARD_DB_USER` and `DASHBOARD_DB_PASSWORD`.
-   - Admin Portal now includes a Dashboard Data workspace for registering SQL views or guarded queries, inspecting returned columns, refreshing metadata, and running bounded result previews. Standard data-backed widgets remain planned.
+   - Admin Portal includes a Dashboard Data workspace for registering SQL views or guarded queries, inspecting returned columns, refreshing metadata, and running bounded result previews.
    - Admin Portal now includes Dashboard Builder management plus a responsive 12-column desktop and 4-column mobile canvas with persisted widget frames, drag/resize, collision protection, selection controls, keyboard movement, and undo/redo.
    - Saved frames can now connect to registered Dashboard Data and render configurable KPI/number, donut, bar, line, and bounded paginated table widgets with column mappings, aggregations, formats, preview states, refresh, and CSV export.
    - Pivot tables are first-class widgets with multi-level row and column fields, multiple value fields, count/sum/average/minimum/maximum aggregation, sorting, empty-value labels, collapsible row groups, independent subtotal/grand-total controls, result-size bounds, and CSV/Excel export.
@@ -280,6 +284,8 @@ Admins should have a dedicated portal for configuring the CRM:
    - Builder and published widgets support explicit refresh and show query timing, last-refreshed time, and cached/fresh state. Cache entries become stale after 60 seconds and are never served after their 30-second reuse window.
    - Dashboard lifecycle controls now expose Save Draft, Check, Publish, and a one-column Version History drawer. Admins can create immutable named checkpoints with remarks, export credential-free versioned JSON, validate and import compatible configuration, and restore a prior snapshot as a new draft checkpoint without changing the active published version.
    - Publishing creates and activates one immutable snapshot in a single database transaction. Widgets may define an allowlisted drill-down to another published dashboard or CRM module page; the backend rechecks destination access before returning identifiers, approved parameters, and a timestamp only.
+   - Dashboard Builder also provides workspace widgets for Approval Inbox, personal To-Do List, an interactive month-grid Calendar combining personal task due dates with approval SLA dates, Quick Actions, Recent Records, and Notifications. Calendar dates show colour-coded task, approval, and overdue indicators; hover or keyboard focus provides a compact preview, while click or tap opens the actionable item pop-out. These widgets use authenticated application APIs instead of requiring SQL Dashboard Data, remain draggable/resizable/versioned, and render in both draft preview and the published Homepage.
+   - Personal dashboard tasks are owner-scoped: authenticated users can create and update only tasks assigned to themselves. Approval and notification widgets reuse their existing user-scoped APIs and Recent Records continues to enforce module permissions.
    - Add low-code dashboard pages made from saved widget configuration instead of generated source code.
    - Use saved SQL views or guarded `SELECT` queries as dashboard data sources.
    - Support first widget types such as number cards, ring/donut charts, line charts, bar charts, and table widgets.
@@ -1848,6 +1854,17 @@ These endpoints require authentication and apply the viewer's module and dashboa
 | `POST /api/dashboard-pages/:dashboardKey/widgets/:widgetKey/execute` | Execute a published widget with runtime filters. |
 | `POST /api/dashboard-pages/:dashboardKey/widgets/:widgetKey/drill-down` | Resolve a widget drill-down destination and filtered records. |
 
+### Dashboard Workspace Widgets
+
+These endpoints require authentication. Task records and calendar events are restricted to the signed-in user; workflow events retain their existing approver access rules.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/dashboard-workspace/tasks` | List the current user's personal dashboard tasks, optionally filtered by status. |
+| `POST /api/dashboard-workspace/tasks` | Create a personal task assigned to the current user. |
+| `PATCH /api/dashboard-workspace/tasks/:id` | Update one task only when it belongs to the current user. |
+| `GET /api/dashboard-workspace/calendar` | List personal task deadlines and pending approval SLA deadlines in a bounded date range. |
+
 ### Automation Flow
 
 All `/api/action-flows` endpoints require an authenticated administrator. Published flows may be linked to approval events through their trigger configuration.
@@ -1881,6 +1898,7 @@ Definition administration:
 | Endpoint | Access and purpose |
 | --- | --- |
 | `GET /api/workflows/catalog` | Authenticated; list published workflows and request forms available to the viewer. |
+| `GET /api/workflows/source-records` | Authenticated; search readable, permission-filtered records for a published workflow. The browser keeps the underlying record ID hidden and binds it automatically when the requester selects a record. |
 | `GET /api/workflows/definitions` | Admin; list workflow definitions. |
 | `POST /api/workflows/definitions` | Admin; create a draft definition. The stable key and readable request prefix are generated from the workflow name. |
 | `GET /api/workflows/definitions/:workflowKey` | Admin; load one definition and graph. |
@@ -1912,7 +1930,7 @@ Request lifecycle:
 | Endpoint | Access and purpose |
 | --- | --- |
 | `GET /api/workflows/requests` | Authenticated; list requests visible to the current user. |
-| `POST /api/workflows/requests` | Authenticated; submit a request as `multipart/form-data`, with `Idempotency-Key`. Supports up to 20 attachments, each up to 25 MB. |
+| `POST /api/workflows/requests` | Authenticated; submit a request as `multipart/form-data`, with `Idempotency-Key`. The UI supplies the selected source record ID automatically; users choose records by readable name instead of entering database identifiers. Supports up to 20 attachments, each up to 25 MB. |
 | `GET /api/workflows/requests/:requestKey` | Authenticated and authorized; return request data, current stage, assignments, decisions, history, and permitted actions. |
 | `POST /api/workflows/requests/:requestKey/decisions` | Eligible approver; approve, reject, or return using `multipart/form-data` and `Idempotency-Key`. Structured values use the `responses` JSON field; attachment response inputs use `responseAttachment:<fieldKey>`. |
 | `GET /api/workflows/requests/:requestKey/attachments/:attachmentId` | Authorized viewer; download an attachment as binary content. |

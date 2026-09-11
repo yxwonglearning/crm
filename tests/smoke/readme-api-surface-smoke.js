@@ -11,6 +11,7 @@ const routeGroups = [
   ['src/modules/notifications/notifications.routes.js', 'notificationRoutes', '/api/notifications'],
   ['src/modules/menu/menu.routes.js', 'menuRoutes', '/api/menu'],
   ['src/modules/account/account.routes.js', 'accountRoutes', '/api/account']
+  ,['src/modules/dashboard-workspace/dashboard-workspace.routes.js', 'dashboardWorkspaceRoutes', '/api/dashboard-workspace']
 ];
 
 const missing = [];

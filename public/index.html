@@ -9,12 +9,15 @@
   <body class="is-auth">
     <main class="app-shell">
       <aside class="sidebar">
+        <div class="sidebar-heading">
         <div class="brand">
           <span class="brand-mark">A</span>
-          <span>
+          <span class="brand-copy">
             <strong>Amperes CRM</strong>
             <small id="sessionLabel">Not signed in</small>
           </span>
+        </div>
+          <button type="button" id="toggleMainSidebar" class="sidebar-compact-button" aria-label="Use compact navigation" aria-pressed="false" title="Use compact navigation"><span aria-hidden="true">«</span></button>
         </div>
         <nav class="nav" id="mainSidebarNav" aria-label="Main navigation">
           <button class="nav-button is-active" data-view="customersView">Customers</button>
@@ -32,7 +35,7 @@
           <div class="app-header-utilities">
             <div id="notificationHub" class="notification-hub" hidden>
               <button type="button" id="notificationBell" class="notification-bell" aria-label="Notifications" aria-expanded="false" aria-controls="notificationDrawer"><span aria-hidden="true">🔔</span><b id="notificationBadge" hidden>0</b></button>
-              <aside id="notificationDrawer" class="notification-drawer" hidden aria-label="Notification centre">
+              <aside id="notificationDrawer" class="notification-drawer anchored-popover" hidden aria-label="Notification centre" data-surface-kind="parallel">
                 <div class="notification-drawer-heading"><div><span class="eyebrow">Updates</span><h2>Notifications</h2></div><button type="button" class="link-button" id="markAllNotificationsRead">Mark all read</button></div>
                 <label class="notification-unread-filter"><input id="notificationUnreadOnly" type="checkbox"> Unread only</label>
                 <div id="notificationList" class="notification-list"></div>
@@ -44,7 +47,7 @@
                 <span class="account-menu-identity"><strong id="headerAccountName">Account</strong><small id="headerAccountRole">User</small></span>
                 <span aria-hidden="true">⌄</span>
               </button>
-              <aside id="accountMenu" class="account-menu" hidden aria-label="Account menu">
+              <aside id="accountMenu" class="account-menu anchored-popover" hidden aria-label="Account menu" data-surface-kind="parallel">
                 <div class="account-menu-summary"><span class="account-avatar large"><img id="menuAvatarImage" alt="" hidden><span id="menuAvatarInitials">A</span></span><div><strong id="menuAccountName">Account</strong><small id="menuAccountEmail"></small></div></div>
                 <button type="button" data-open-account-settings="profile"><span>My profile</span><small>Photo and personal details</small></button>
                 <button type="button" data-open-account-settings="security"><span>Security</span><small>Change your password</small></button>
@@ -139,6 +142,7 @@
               <div id="customerFormFields"></div>
               <div class="form-actions">
                 <button type="submit">Save Customer</button>
+                <button type="button" class="secondary" id="customerDocumentOutput">Document PDF</button>
                 <button type="button" class="secondary" id="clearCustomerForm">Clear</button>
               </div>
             </form>
@@ -247,6 +251,7 @@
               <div id="moduleRecordFormFields"></div>
               <div class="form-actions">
                 <button type="submit" id="saveModuleRecordButton">Save Record</button>
+                <button type="button" class="secondary" id="moduleDocumentOutput">Document PDF</button>
                 <button type="button" class="secondary" id="cancelModuleRecordButton">Cancel</button>
               </div>
             </form>
@@ -400,8 +405,8 @@
           </header>
 
           <div class="admin-layout">
-            <aside class="admin-menu">
-              <button type="button" class="admin-collapse-button" id="toggleAdminMenu" aria-label="Collapse admin menu">‹</button>
+            <aside class="admin-menu" id="adminMenu">
+              <button type="button" class="admin-collapse-button" id="toggleAdminMenu" aria-label="Collapse admin menu" aria-controls="adminMenu" aria-expanded="true" title="Collapse admin menu">‹</button>
               <button type="button" class="admin-section-button" data-admin-section="adminDashboardBuilderSection" data-short="D">
                 <span>Dashboard Builder</span>
                 <small>Dashboards and publish state</small>
@@ -438,6 +443,10 @@
                 <span>Approval Workflow</span>
                 <small>Stages, approvers, and publish state</small>
               </button>
+              <button type="button" class="admin-section-button" data-admin-section="adminDocumentTemplatesSection" data-short="DT">
+                <span>Document Templates</span>
+                <small>Printable layouts and data bindings</small>
+              </button>
               <button type="button" class="admin-section-button" data-admin-section="adminApiSection" data-short="API">
                 <span>API</span>
                 <small>Connectors and endpoints</small>
@@ -465,9 +474,10 @@
                 <div id="menuConfigStatus" class="menu-config-status">Open this page to load the current navigation draft.</div>
                 <div class="menu-config-workspace">
                   <section class="menu-config-tree-card">
-                    <div class="menu-config-card-heading"><div><h3>Structure</h3><p>Drag entries to reorder. Groups can contain menu items.</p></div><div><button type="button" class="secondary" id="addMenuGroup">+ Group</button><button type="button" class="secondary" id="addMenuItem">+ Item</button></div></div>
+                    <div class="menu-config-card-heading"><div><h3>Structure</h3><p>Drag entries before, after, or into a group. You can also use the move buttons.</p></div><div><button type="button" class="secondary" id="addMenuGroup">+ Group</button><button type="button" class="secondary" id="addMenuItem">+ Item</button></div></div>
                     <div class="menu-config-preview-controls"><label>Preview access<select id="menuPreviewRole"><option value="admin">Admin</option><option value="manager">Manager</option><option value="user">User</option></select></label><label>Auto-add published modules<select id="menuDefaultGroup"><option value="">Top level</option></select></label></div>
                     <div id="menuConfigTree" class="menu-config-tree" role="tree" aria-label="Configured sidebar items"></div>
+                    <p id="menuConfigAnnouncement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
                   </section>
                   <aside id="menuConfigInspector" class="menu-config-inspector"><div class="empty-state"><h3>Select an entry</h3><p>Choose a group or menu item to edit its label, destination, icon, and visibility.</p></div></aside>
                 </div>
@@ -993,22 +1003,111 @@
                           <button type="button" class="secondary workflow-inspector-toggle" id="workflowInspectorToggle" aria-expanded="true">Hide settings</button>
                         </div>
                       </div>
+                      <div class="workflow-keyboard-help" id="workflowKeyboardHelp">
+                        <strong>Keyboard controls</strong>
+                        <span>Tab to a node, use arrow keys to move it, Enter to select or connect, and Delete to remove it. Hold Shift to move farther. Escape cancels connecting.</span>
+                      </div>
                       <div class="workflow-builder-shell">
                         <div id="workflowCanvasViewport" class="workflow-canvas-viewport">
                           <div id="workflowCanvas" class="workflow-canvas" aria-label="Approval workflow canvas"></div>
                         </div>
                         <aside id="workflowCanvasInspector" class="workflow-canvas-inspector" aria-label="Workflow selection configuration"></aside>
                       </div>
+                      <p id="workflowCanvasAnnouncement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
                       <div id="workflowStageEditor" hidden></div>
                     </section>
                     <section class="workflow-config-card">
                       <div class="workflow-config-card-heading"><div><span class="workflow-config-index">04</span><div><h3>Linked Automation Flows</h3><p>Published Automation Flows can react after this workflow records an event.</p></div></div></div>
                       <div id="workflowLinkedAutomationFlows" class="workflow-stage-editor"></div>
                     </section>
+                    <section class="workflow-config-card" id="workflowDocumentOutputCard">
+                      <div class="workflow-config-card-heading"><div><span class="workflow-config-index">05</span><div><h3>Document output</h3><p>Reference a reusable template without making it part of this workflow.</p></div></div><span class="status-pill status-draft">Prototype</span></div>
+                      <div class="workflow-document-output-grid">
+                        <label class="checkbox-label workflow-document-toggle"><input id="workflowDocumentEnabled" type="checkbox"><span><strong>Generate document after approval</strong><small>Create the selected output when this route reaches its configured event.</small></span></label>
+                        <label>Template<select id="workflowDocumentTemplate"></select></label>
+                        <label>Generate when<select id="workflowDocumentTrigger"><option value="final_approval">Final approval</option></select></label>
+                        <label>Output<select id="workflowDocumentFormat"><option value="pdf">PDF</option></select></label>
+                      </div>
+                      <div class="form-actions workflow-document-actions"><button type="button" class="secondary" id="openWorkflowDocumentDesigner">Open Document Designer</button><button type="button" class="secondary" id="previewWorkflowDocument">Preview</button><small id="workflowDocumentSaveHint">Prototype settings are saved with the browser draft.</small></div>
+                    </section>
                     <section id="workflowCheckPanel" class="workflow-check-panel" hidden></section>
                     <footer class="workflow-definition-footer"><button type="button" class="secondary danger-link" id="archiveWorkflowDefinitionButton">Archive workflow</button><span class="muted">Published requests retain the exact version with which they started.</span></footer>
                   </form>
                 </main>
+              </div>
+            </section>
+
+            <section id="adminDocumentTemplatesSection" class="admin-section document-templates-section" hidden>
+              <div id="documentTemplateManagement" class="document-template-management">
+                <header class="toolbar document-template-management-header">
+                  <div><span class="eyebrow">Document Templates</span><h2>Print-ready business documents</h2><p>Build reusable layouts independently from data-entry forms and workflow routes.</p></div>
+                  <button type="button" id="newDocumentTemplateButton">Create template</button>
+                </header>
+                <div class="document-template-overview">
+                  <div><strong id="documentTemplateCount">0</strong><span>Templates</span></div>
+                  <div><strong>A4</strong><span>Prototype page format</span></div>
+                  <div><strong>Generic</strong><span>Module, form, workflow, or system data</span></div>
+                </div>
+                <div id="documentTemplateList" class="document-template-list" aria-live="polite"></div>
+              </div>
+
+              <div id="documentDesignerWorkspace" class="document-designer-workspace" hidden>
+                <header class="document-designer-titlebar">
+                  <button type="button" class="secondary" id="closeDocumentDesigner" aria-label="Back to Document Templates">← Templates</button>
+                  <label>Template name<input id="documentTemplateName" maxlength="160"></label>
+                  <label>Data context<select id="documentTemplateSource"></select></label>
+                  <div class="document-designer-title-actions">
+                    <button type="button" class="secondary" id="documentDesignMode" aria-pressed="true">Design</button>
+                    <button type="button" class="secondary" id="documentPreviewMode" aria-pressed="false">Preview</button>
+                    <div class="document-compare-controls" id="documentCompareControls" hidden>
+                      <label>View<select id="documentCompareMode"><option value="generated">Generated</option><option value="original">Original</option><option value="overlay">Overlay</option></select></label>
+                      <label id="documentOriginalOpacityLabel" hidden>Original opacity<input id="documentOriginalOpacity" type="range" min="10" max="90" step="10" value="40"></label>
+                    </div>
+                    <nav class="document-page-navigation" id="documentPageNavigation" aria-label="Imported PDF pages" hidden><button type="button" class="secondary" id="documentPreviousPage">Previous</button><strong id="documentPagePosition">Page 1 of 1</strong><button type="button" class="secondary" id="documentNextPage">Next</button></nav>
+                    <button type="button" id="downloadDocumentPdf">Download PDF</button>
+                    <button type="button" class="secondary" id="printDocumentTemplate" title="Convenience browser print. Use Download PDF for formal output.">Print</button>
+                    <button type="button" id="saveDocumentTemplate">Save</button>
+                  </div>
+                </header>
+                <div class="document-designer-toolbar" role="toolbar" aria-label="Document editing tools">
+                  <button type="button" class="secondary" id="documentUndo" aria-label="Undo document change">↶ Undo</button>
+                  <button type="button" class="secondary" id="documentRedo" aria-label="Redo document change">↷ Redo</button>
+                  <span class="document-toolbar-divider" aria-hidden="true"></span>
+                  <button type="button" class="secondary" data-add-document-element="text">+ Text</button>
+                  <button type="button" class="secondary" data-add-document-element="image">+ Image</button>
+                  <button type="button" class="secondary" data-add-document-element="table">+ Table</button>
+                  <span class="document-toolbar-hint">Select a region or table cell, then insert content.</span>
+                  <label>Record ID<input id="documentOutputRecordId" type="number" min="1" placeholder="Optional"></label>
+                  <label>Workflow request<input id="documentOutputWorkflowId" placeholder="Optional"></label>
+                  <label class="document-zoom-control">Zoom <input id="documentZoom" type="range" min="50" max="150" step="25" value="100"><output id="documentZoomLabel">100%</output></label>
+                </div>
+                <div class="document-designer-shell">
+                  <aside class="document-field-palette" aria-label="Available document fields">
+                    <div class="document-palette-tabs" role="tablist" aria-label="Insert content"><button type="button" id="documentFieldsTab" role="tab" aria-selected="true">Fields</button><button type="button" id="documentElementsTab" role="tab" aria-selected="false">Elements</button></div>
+                    <label class="document-field-search"><span class="sr-only">Search fields</span><input id="documentFieldSearch" type="search" placeholder="Search fields…" autocomplete="off"></label>
+                    <div id="documentFieldPalette"></div>
+                    <div class="document-insert-helper"><span aria-hidden="true">⇲</span><div><strong>Drag or click to insert</strong><p>Drag fields into the document or click to insert at cursor.</p></div></div>
+                  </aside>
+                  <main class="document-canvas-workspace">
+                    <iframe id="documentOutputPreview" title="Document PDF preview" sandbox="allow-same-origin allow-modals" hidden></iframe>
+                    <div id="documentPageViewport" class="document-page-viewport">
+                      <div id="documentCoordinateSystem" class="document-coordinate-system">
+                        <div class="document-ruler-corner" aria-hidden="true">cm</div>
+                        <div class="document-ruler document-horizontal-ruler" aria-label="Horizontal page ruler"><div id="documentRulerTicks"></div></div>
+                        <div class="document-ruler document-vertical-ruler" aria-label="Vertical page ruler"><div id="documentVerticalRulerTicks"></div></div>
+                        <article id="documentPage" class="document-page is-design" aria-label="A4 document page"></article>
+                        <embed id="documentOriginalPdf" class="document-original-pdf" type="application/pdf" hidden>
+                      </div>
+                    </div>
+                  </main>
+                  <aside class="document-properties-panel" aria-label="Selected item properties">
+                    <div class="document-properties-tabs" role="tablist" aria-label="Document settings"><button type="button" id="documentPropertiesTab" role="tab" aria-selected="true">Properties</button><button type="button" id="documentPageTab" role="tab" aria-selected="false">Page</button></div>
+                    <div class="document-panel-heading"><span class="eyebrow">Format</span><h3 id="documentPropertiesTitle">Properties</h3><p id="documentSelectionHelp">Select an element or cell to edit it.</p></div>
+                    <div id="documentProperties"></div>
+                  </aside>
+                </div>
+                <p id="documentOutputStatus" role="status" aria-live="polite">Download PDF is the recommended formal output. Enter a record ID or workflow request for live data.</p>
+                <p id="documentDesignerAnnouncement" class="sr-only" role="status" aria-live="polite"></p>
               </div>
             </section>
 
@@ -1146,8 +1245,8 @@
                     <div id="dashboardWidgetInspectorForm" hidden>
                       <span class="eyebrow">Selected widget</span><h3 id="dashboardSelectedWidgetKey">Widget</h3>
                       <label>Title<input id="dashboardWidgetTitle" maxlength="160"></label>
-                      <label>Widget type<select id="dashboardWidgetType"><option value="number">Number / KPI</option><option value="donut">Donut</option><option value="bar">Bar</option><option value="line">Line</option><option value="table">Table</option><option value="pivot">Pivot table</option></select></label>
-                      <label>Dashboard data<select id="dashboardWidgetDataSource"><option value="">Choose a data source</option></select></label>
+                      <label>Widget type<select id="dashboardWidgetType"><optgroup label="Data"><option value="number">Number / KPI</option><option value="donut">Donut</option><option value="bar">Bar</option><option value="line">Line</option><option value="table">Table</option><option value="pivot">Pivot table</option></optgroup><optgroup label="My work"><option value="approval_inbox">Approval inbox</option><option value="todo_list">To-do list</option><option value="calendar">Calendar</option></optgroup><optgroup label="Workspace"><option value="quick_actions">Quick actions</option><option value="recent_records">Recent records</option><option value="notifications">Notifications</option></optgroup></select></label>
+                      <label id="dashboardWidgetDataSourceField">Dashboard data<select id="dashboardWidgetDataSource"><option value="">Choose a data source</option></select></label>
                       <div id="dashboardWidgetMappingFields" class="dashboard-widget-mapping-fields"></div>
                       <details class="dashboard-widget-display-options"><summary>Display options</summary><div id="dashboardWidgetDisplayFields"></div></details>
                       <div class="dashboard-widget-data-actions"><button type="button" class="secondary" id="refreshDashboardWidgetButton">Refresh preview</button><button type="button" class="secondary" id="exportDashboardWidgetButton" hidden>Export CSV</button><button type="button" class="secondary" id="exportDashboardWidgetExcelButton" hidden>Export Excel</button><span id="dashboardWidgetPreviewStatus" class="muted" aria-live="polite"></span></div>
@@ -2130,7 +2229,10 @@
       </aside>
     </div>
 
-    <div id="toast" class="toast" hidden></div>
+    <div id="toast" class="toast" hidden tabindex="-1">
+      <span id="toastMessage"></span>
+      <button type="button" id="dismissToast" class="toast-dismiss" aria-label="Dismiss notification">×</button>
+    </div>
     <div id="successPrompt" class="modal-backdrop success-prompt-backdrop" hidden>
       <div class="panel modal-card narrow-modal success-prompt-card">
         <div class="success-prompt-icon" aria-hidden="true">✓</div>
@@ -2268,11 +2370,16 @@
     </div>
     <div id="workflowSubmitModal" class="modal-backdrop" hidden>
       <form id="workflowSubmitForm" class="panel modal-card narrow-modal workflow-command-modal" role="dialog" aria-modal="true" aria-labelledby="workflowSubmitTitle">
-        <div class="modal-header"><div><span class="eyebrow">Approval Workflow</span><h2 id="workflowSubmitTitle">New approval request</h2><p class="muted">Choose the published workflow and the existing source record that needs approval.</p></div><button type="button" class="icon-button" id="closeWorkflowSubmitModal" aria-label="Close">x</button></div>
+        <div class="modal-header"><div><span class="eyebrow">Approval Workflow</span><h2 id="workflowSubmitTitle">New approval request</h2><p class="muted">Choose a workflow and the record that needs approval. The system links the record automatically.</p></div><button type="button" class="icon-button" id="closeWorkflowSubmitModal" aria-label="Close">x</button></div>
         <label>Workflow<select name="workflowKey" required></select></label>
-        <label>Source record ID<input name="sourceRecordId" type="number" min="1" required placeholder="For example: 42"></label>
+        <input name="sourceRecordId" type="hidden">
+        <div class="workflow-source-picker">
+          <label>Record<input id="workflowSourceRecordSearch" type="search" autocomplete="off" placeholder="Search records by name or details"></label>
+          <div id="workflowSourceRecordStatus" class="muted" aria-live="polite">Loading available records...</div>
+          <div id="workflowSourceRecordOptions" class="workflow-source-record-options" role="listbox" aria-label="Available records"></div>
+        </div>
         <div id="workflowSubmitBinding" class="workflow-command-note">The source module is taken from the selected workflow.</div>
-        <label id="workflowSubmitAttachments" hidden>Supporting attachments<input name="attachments" type="file" multiple><small class="muted"></small></label>
+        <label id="workflowSubmitAttachments" hidden>Additional supporting files<input name="attachments" type="file" multiple><small class="muted"></small></label>
         <div class="form-actions end-actions"><button type="submit">Send for approval</button><button type="button" class="secondary" id="cancelWorkflowSubmitModal">Cancel</button></div>
       </form>
     </div>
@@ -2300,7 +2407,7 @@
         <div class="modal-header"><div><span class="eyebrow">Approval decision</span><h2 id="workflowDecisionTitle">Approve request</h2><p id="workflowDecisionHelp" class="muted"></p></div><button type="button" class="icon-button" id="closeWorkflowDecisionModal" aria-label="Close">x</button></div>
         <input name="requestKey" type="hidden"><input name="action" type="hidden">
         <div id="workflowDecisionResponseFields" class="workflow-decision-response-fields"></div>
-        <label id="workflowDecisionAttachments" hidden>Decision attachments<input name="attachments" type="file" multiple><small class="muted"></small></label>
+        <label id="workflowDecisionAttachments" hidden>Additional supporting files<input name="attachments" type="file" multiple><small class="muted"></small></label>
         <label>Remark<textarea name="remark" rows="5" maxlength="2000" placeholder="Add context for the requester"></textarea></label>
         <div class="form-actions end-actions"><button type="submit" id="confirmWorkflowDecisionButton">Approve</button><button type="button" class="secondary" id="cancelWorkflowDecisionModal">Cancel</button></div>
       </form>
@@ -2313,6 +2420,33 @@
         <div class="form-actions end-actions"><button type="submit" id="confirmWorkflowLifecycleButton">Continue</button><button type="button" class="secondary" id="cancelWorkflowLifecycleModal">Cancel</button></div>
       </form>
     </div>
+    <script src="/draft-history.js"></script>
+    <dialog id="recordDocumentDialog" aria-labelledby="recordDocumentTitle">
+      <h2 id="recordDocumentTitle">Document output</h2>
+      <p>Select a saved template. Only documents for records you can view are available.</p>
+      <label>Template<select id="recordDocumentTemplate"></select></label>
+      <p id="recordDocumentStatus" role="status"></p>
+      <div class="form-actions"><button type="button" id="recordDocumentPreview">Preview</button><button type="button" id="recordDocumentDownload">Download PDF</button><button type="button" class="secondary" id="closeRecordDocument">Close</button></div>
+      <iframe id="recordDocumentFrame" title="Record document preview" sandbox="allow-same-origin" hidden></iframe>
+    </dialog>
+    <dialog id="documentCreateDialog" aria-labelledby="documentCreateTitle" class="document-import-dialog">
+      <div class="document-import-heading"><span class="eyebrow">Create template</span><h2 id="documentCreateTitle">Choose a starting point</h2><p>Import creates an editable draft for review; it does not change the existing Preview or PDF output path.</p></div>
+      <div class="document-start-options">
+        <button type="button" data-document-start="blank"><strong>Blank template</strong><small>Start with the standard A4 document structure.</small></button>
+        <button type="button" data-document-start="pdf"><strong>Import from PDF</strong><small>Analyze a business-document PDF and create editable pages.</small></button>
+        <button type="button" data-document-start="duplicate"><strong>Duplicate existing</strong><small>Copy the most recently updated template.</small></button>
+      </div>
+      <form id="documentPdfImportForm" hidden>
+        <ol class="document-import-steps"><li class="is-current">Upload PDF</li><li>Analyze document</li><li>Review structure</li><li>Import &amp; Edit</li></ol>
+        <label class="document-pdf-drop">PDF file<input id="documentPdfFile" name="pdf" type="file" accept="application/pdf,.pdf" required><small>Supported business-document sizes · digital or scanned · up to 25 pages · maximum 10 MB</small></label>
+        <div id="documentImportSummary" class="document-import-summary" aria-live="polite"></div>
+        <div class="form-actions"><button type="submit" id="analyzeDocumentPdf">Analyze PDF</button><button type="button" id="importAnalyzedDocument" hidden>Import &amp; Edit</button></div>
+      </form>
+      <div class="form-actions"><button type="button" class="secondary" id="closeDocumentCreateDialog">Cancel</button></div>
+    </dialog>
+    <link rel="stylesheet" href="/document-output-ui.css">
+    <script src="/document-output.js"></script>
+    <script src="/document-binding-suggestions.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>
