@@ -117,6 +117,29 @@ const state = {
   workflowInspectorCollapsed: false,
   workflowRouteReturnScrollY: 0,
   workflowRouteSaveNoticeTimer: null,
+  documentTemplates: [],
+  activeDocumentTemplateKey: '',
+  documentDesignerMode: 'design',
+  documentSelectedRegion: 'body',
+  documentSelectedColumn: 1,
+  documentSelectedElementId: '',
+  documentSelectedCell: null,
+  documentHistory: [],
+  documentFuture: [],
+  documentDirty: false,
+  documentPropertiesTab: 'properties',
+  documentPaletteTab: 'fields',
+  documentFieldQuery: '',
+  documentMarginDrag: null,
+  documentRulerDrag: null,
+  documentModeBeforePrint: null,
+  documentImportResult: null,
+  documentOriginalPdfUrl: '',
+  documentOriginalPdfFile: null,
+  documentCompareMode: 'generated',
+  documentPageIndex: 0,
+  documentRejectedSuggestions: new Set(),
+  workflowDocumentOutputs: {},
   workflowRequests: [],
   workflowInbox: [],
   workflowRequestMode: 'requests',
@@ -4384,6 +4407,7 @@ function showView(id) {
 function showAdminSection(id) {
   if (id !== state.activeAdminSection && deferBuilderLeave(undefined, () => showAdminSection(id))) return;
   state.activeAdminSection = id;
+  if (id !== 'adminDocumentTemplatesSection') document.body.classList.remove('document-designer-open');
   $$('.admin-section').forEach((section) => {
     section.hidden = section.id !== id;
   });
@@ -5388,6 +5412,7 @@ function showWorkflowDefinition(definition) {
   $('#saveWorkflowDefinitionButton').disabled = definition?.status === 'archived';
   renderWorkflowStages();
   renderWorkflowLinkedAutomationFlows(definition);
+  renderWorkflowDocumentOutput(definition);
   renderWorkflowCheck(null);
   beginBuilderDraft('workflow');
 }
@@ -5492,6 +5517,675 @@ function renderWorkflowCheck(check) {
   panel.className = `workflow-check-panel ${check.valid ? 'is-valid' : 'is-invalid'}`;
   const findings = (check.findings || []).map(workflowCheckFindingView);
   panel.innerHTML = `<div class="workflow-check-heading"><div><span class="workflow-check-eyebrow">Workflow health check</span><strong>${check.valid ? 'Ready to publish' : `${check.errors?.length || 0} item${check.errors?.length === 1 ? '' : 's'} to fix before publishing`}</strong><p>${check.valid ? 'This workflow passed all publishing checks.' : 'Work through each item below, then check the workflow again.'}</p></div><div class="workflow-check-heading-actions"><button type="button" class="secondary" data-check-workflow-again>Check again</button><span class="workflow-check-result-icon" aria-hidden="true">${check.valid ? '✓' : '!'}</span></div></div>${findings.length ? `<div class="workflow-check-list">${findings.map((finding, index) => `<article><span class="workflow-check-number" aria-hidden="true">${index + 1}</span><div><span class="workflow-check-severity">Must fix</span><strong>${escapeHtml(finding.title)}</strong><p>${escapeHtml(finding.detail)}</p></div>${finding.action ? `<button type="button" class="secondary workflow-check-action" data-workflow-check-target-type="${escapeHtml(finding.targetType)}" data-workflow-check-target-id="${escapeHtml(finding.targetId)}">${escapeHtml(finding.action)} <span aria-hidden="true">→</span></button>` : ''}</article>`).join('')}</div>` : ''}`;
+}
+
+const documentTemplateStorageKey = 'crm:document-templates:prototype:v1';
+const workflowDocumentStorageKey = 'crm:workflow-document-output:prototype:v1';
+const documentPageSizesCm = { A4: { portrait: { width: 21, height: 29.7 }, landscape: { width: 29.7, height: 21 } } };
+const documentMinimumContentCm = { horizontal: 3, vertical: 5 };
+const prototypeDocumentContexts = [{ key: 'procurement_requests', name: 'Procurement requests · sample data', fields: [['Company', 'record.company'], ['Contact', 'record.contact'], ['Description', 'record.items.description'], ['Quantity', 'record.items.quantity'], ['Unit price', 'record.items.unit_price'], ['Amount', 'record.items.amount']] }];
+
+function documentId(prefix = 'block') {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function documentText(content, options = {}) {
+  return { id: documentId('text'), type: 'text', content, column: options.column || 1, leftIndent: options.leftIndent || 0, rightIndent: options.rightIndent || 0, alignment: options.alignment || 'left', fontSize: options.fontSize || 11, fontWeight: options.fontWeight || '400', padding: options.padding ?? 4 };
+}
+
+function documentField(label, binding, options = {}) {
+  return { id: documentId('field'), type: 'field', label, binding, column: options.column || 1, leftIndent: options.leftIndent || 0, rightIndent: options.rightIndent || 0, alignment: options.alignment || 'left', fontSize: options.fontSize || 11, fontWeight: options.fontWeight || '600', padding: options.padding ?? 3 };
+}
+
+function documentTable(columns = 3, rows = 3) {
+  const safeColumns = Math.min(12, Math.max(2, Number(columns) || 3));
+  const equalWidth = Number((100 / safeColumns).toFixed(3));
+  return {
+    id: documentId('table'), type: 'table', printableBorders: true, repeatingSource: '',
+    width: 100,
+    columns: Array.from({ length: safeColumns }, (_, index) => ({ id: documentId('col'), width: Number((index === safeColumns - 1 ? 100 - (equalWidth * index) : equalWidth).toFixed(3)), label: `Column ${index + 1}` })),
+    rows: Array.from({ length: rows }, (_, rowIndex) => ({ id: documentId('row'), heightCm: .9, repeat: rowIndex === 1, cells: Array.from({ length: safeColumns }, (_, columnIndex) => ({ id: documentId('cell'), content: rowIndex === 0 ? `Column ${columnIndex + 1}` : '', binding: '', alignment: columnIndex ? 'right' : 'left', padding: 6, colSpan: 1 })) }))
+  };
+}
+
+function sampleDocumentTemplate() {
+  const table = documentTable(4, 3);
+  table.repeatingSource = 'record.items';
+  ['Description', 'Quantity', 'Unit price', 'Amount'].forEach((label, index) => { table.rows[0].cells[index].content = label; });
+  ['record.items.description', 'record.items.quantity', 'record.items.unit_price', 'record.items.amount'].forEach((binding, index) => { table.rows[1].cells[index].binding = binding; table.rows[1].cells[index].content = binding.split('.').pop().replaceAll('_', ' '); });
+  return {
+    templateKey: 'sample_purchase_order', name: 'Purchase Order — sample', status: 'sample', source: 'module:procurement_requests', updatedAt: new Date().toISOString(),
+    page: { size: 'A4', orientation: 'portrait', margins: { top: 2, right: 2, bottom: 2, left: 2 }, headerFromTop: 1.25, footerFromBottom: 1.25, showMarginGuides: true, showGrid: false, headerColumns: 3, footerColumns: 3 },
+    regions: {
+      header: [documentText('NORTHSTAR OPERATIONS', { fontSize: 10, fontWeight: '700', column: 1 }), documentText('PURCHASE ORDER', { fontSize: 18, fontWeight: '700', alignment: 'center', column: 2 }), documentField('Request number', 'workflow.request_number', { alignment: 'right', column: 3 })],
+      body: [documentText('Prepared for', { fontSize: 9, fontWeight: '700' }), documentField('Company', 'record.company', { fontSize: 14 }), documentField('Request number', 'workflow.request_number'), documentField('Submitted date', 'workflow.submitted_date'), table, documentText('Terms and notes may be added here. This sample demonstrates a generic template configured with procurement-related bindings.')],
+      footer: [documentText('Generated by Babyyy', { fontSize: 9, column: 1 }), documentText('Confidential', { fontSize: 9, alignment: 'center', column: 2 }), documentField('Page number', 'system.page_number', { alignment: 'right', fontSize: 9, column: 3 })]
+    }
+  };
+}
+
+function blankDocumentTemplate() {
+  return { templateKey: documentId('template'), name: 'Untitled document', status: 'draft', source: 'module:customers', updatedAt: new Date().toISOString(), page: { size: 'A4', orientation: 'portrait', margins: { top: 2, right: 2, bottom: 2, left: 2 }, headerFromTop: 1.25, footerFromBottom: 1.25, showMarginGuides: true, showGrid: false, headerColumns: 1, footerColumns: 3 }, regions: { header: [documentText('Document header', { fontSize: 10, fontWeight: '600' })], body: [documentText('Start writing your document here.')], footer: [documentText('Generated by Babyyy', { fontSize: 9, column: 1 }), documentText('Confidential', { fontSize: 9, alignment: 'center', column: 2 }), documentField('Page number', 'system.page_number', { alignment: 'right', fontSize: 9, column: 3 })] } };
+}
+
+function duplicateDocumentTemplate(source = state.documentTemplates[0]) {
+  const template = structuredClone(source || blankDocumentTemplate());
+  delete template.serverRevision; delete template.serverSnapshot;
+  template.templateKey = documentId('template'); template.name = `${template.name || 'Document'} — copy`; template.status = 'draft'; template.updatedAt = new Date().toISOString();
+  Object.values(template.regions || {}).flat().forEach((element) => { element.id = documentId(element.type); if (element.type === 'table') { element.columns.forEach((column) => { column.id = documentId('col'); }); element.rows.forEach((row) => { row.id = documentId('row'); row.cells.forEach((cell) => { cell.id = documentId('cell'); }); }); } });
+  return template;
+}
+
+function documentBindingOptions(selected = '') {
+  return Object.entries(documentFieldsForSource()).map(([group, fields]) => `<optgroup label="${group === 'record' ? 'Record / Form Fields' : `${titleCaseMessage(group)} Fields`}">${fields.map(([label, binding]) => `<option value="${escapeHtml(binding)}" ${binding === selected ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('')}</optgroup>`).join('');
+}
+
+function renderDocumentImportSummary(summary) {
+  const imageStatus = summary.images ? `${summary.importedImages || 0} imported${summary.skippedImages ? ` · ${summary.skippedImages} unsupported` : ''}` : 'None detected';
+  const entries = [[`${summary.pageCount || 1} page${(summary.pageCount || 1) === 1 ? '' : 's'} · ${summary.page.size} ${titleCaseMessage(summary.page.orientation)}`, 'Detected'], [`${summary.textBlocks} text blocks`, 'Detected'], [`${summary.images} images`, imageStatus], [`${summary.lines} lines / borders`, summary.lines ? 'Detected' : 'None detected'], [`${summary.tables} tables`, summary.tables ? 'Review recommended' : 'None detected'], ['Possible header', summary.possibleHeader ? 'Review recommended' : 'Not detected'], ['Possible footer', summary.possibleFooter ? 'Review recommended' : 'Not detected'], ['Possible repeating row', summary.possibleRepeatingRow ? 'Review recommended' : 'Not assumed']];
+  $('#documentImportSummary').innerHTML = `<strong>Detected structure</strong>${entries.map(([label, value]) => `<div><span>${escapeHtml(label)}</span><small>${escapeHtml(value)}</small></div>`).join('')}`;
+}
+
+async function analyzeDocumentPdf(event) {
+  event.preventDefault(); const file = $('#documentPdfFile').files[0]; if (!file) return;
+  const button = $('#analyzeDocumentPdf'); button.disabled = true; button.textContent = 'Analyzing PDF…'; $('#importAnalyzedDocument').hidden = true;
+  try {
+    const body = new FormData(); body.append('pdf', file);
+    state.documentImportResult = await api('/api/document-templates/import-pdf', { method: 'POST', body });
+    if (state.documentOriginalPdfUrl) URL.revokeObjectURL(state.documentOriginalPdfUrl);
+    state.documentOriginalPdfUrl = URL.createObjectURL(file); state.documentOriginalPdfFile = file; renderDocumentImportSummary(state.documentImportResult.detectedLayout);
+    $('#importAnalyzedDocument').hidden = false; button.textContent = 'Analyze again';
+  } catch (error) { state.documentImportResult = null; $('#documentImportSummary').innerHTML = `<p class="error-message">${escapeHtml(error.message)}</p>`; button.textContent = 'Analyze PDF'; }
+  finally { button.disabled = false; }
+}
+
+function importAnalyzedDocument() {
+  if (!state.documentImportResult?.template) return;
+  const template = state.documentImportResult.template; state.documentTemplates.unshift(template); state.documentCompareMode = 'generated';
+  $('#documentCreateDialog').close(); openDocumentDesigner(template.templateKey);
+}
+
+function loadDocumentPrototypeState() {
+  const templates = parseStoredJson(localStorage.getItem(documentTemplateStorageKey));
+  state.documentRecoveredTemplateKeys = new Set(Array.isArray(templates) ? templates.map((template) => template.templateKey) : []);
+  state.documentTemplates = Array.isArray(templates) && templates.length ? templates : [sampleDocumentTemplate()];
+  state.documentTemplates.forEach((template) => {
+    template.page ||= {}; template.page.size ||= 'A4'; template.page.orientation ||= 'portrait'; template.page.margins ||= { top: 2, right: 2, bottom: 2, left: 2 };
+    for (const side of ['top', 'right', 'bottom', 'left']) if (Number(template.page.margins[side]) > 5) template.page.margins[side] = Number(template.page.margins[side]) / 10;
+    template.page.headerFromTop = Math.min(3, Math.max(.5, Number(template.page.headerFromTop) || 1.25)); template.page.footerFromBottom = Math.min(3, Math.max(.5, Number(template.page.footerFromBottom) || 1.25));
+    template.page.showMarginGuides ??= true; template.page.showGrid ??= false; template.page.headerColumns ||= 3; template.page.footerColumns ||= 3;
+    for (const region of ['header', 'body', 'footer']) (template.regions?.[region] || []).forEach((element) => { if (element.type === 'table') { element.width = 100; fitDocumentColumnWidths(element, 0, normalizedDocumentColumnWidths(element)[0]); element.rows.forEach((row) => { row.heightCm = Math.min(3.2, Math.max(.65, Number(row.heightCm) || ((Number(element.rowHeight) || 34) / (96 / 2.54)))); }); delete element.rowHeight; } else { element.column ||= 1; element.leftIndent = Math.max(0, Number(element.leftIndent) || 0); element.rightIndent = Math.max(0, Number(element.rightIndent) || 0); } });
+  });
+  state.workflowDocumentOutputs = parseStoredJson(localStorage.getItem(workflowDocumentStorageKey)) || {};
+}
+
+function activeDocumentTemplate() {
+  return state.documentTemplates.find((template) => template.templateKey === state.activeDocumentTemplateKey) || null;
+}
+
+function documentSourceOptions(selected = '') {
+  const moduleOptions = configModules.map((module) => `<option value="module:${escapeHtml(module.key)}" ${selected === `module:${module.key}` ? 'selected' : ''}>Module · ${escapeHtml(module.name)}</option>`);
+  const formOptions = state.standaloneForms.map((form) => `<option value="form:${escapeHtml(form.formKey)}" ${selected === `form:${form.formKey}` ? 'selected' : ''}>Form · ${escapeHtml(form.name)}</option>`);
+  const prototypeOptions = prototypeDocumentContexts.map((context) => `<option value="module:${escapeHtml(context.key)}" ${selected === `module:${context.key}` ? 'selected' : ''}>Module · ${escapeHtml(context.name)}</option>`);
+  return [...moduleOptions, ...formOptions, ...prototypeOptions, `<option value="workflow" ${selected === 'workflow' ? 'selected' : ''}>Workflow context</option>`].join('');
+}
+
+function documentFieldsForSource(source = activeDocumentTemplate()?.source) {
+  const generic = { workflow: [
+    ['Request number', 'workflow.request_number'], ['Submitted by', 'workflow.submitted_by'], ['Submitted date', 'workflow.submitted_date'], ['Approved by', 'workflow.approved_by'], ['Approved date', 'workflow.approved_date'], ['Approval status', 'workflow.status']
+  ], system: [['Generated date', 'system.generated_date'], ['Generated time', 'system.generated_time'], ['Page number', 'system.page_number'], ['Total pages', 'system.total_pages'], ['Organization name', 'system.organization_name'], ['Current user', 'system.current_user']] };
+  const [kind, key] = String(source || '').split(':');
+  let record = [];
+  if (kind === 'module') {
+    const config = moduleConfigByKey(key);
+    record = (config?.fields || config?.module?.fields || []).map((field) => [field.label || field.name || titleCaseMessage(field.fieldKey), `record.${field.fieldKey}`]);
+    if (!record.length) record = prototypeDocumentContexts.find((context) => context.key === key)?.fields || [];
+    if (!record.length && key === 'customers') record = [['Company', 'record.company'], ['Contact', 'record.contact'], ['Email', 'record.email'], ['Phone', 'record.phone']];
+  } else if (kind === 'form') {
+    const form = state.standaloneForms.find((item) => item.formKey === key);
+    record = (form?.fields || []).map((field) => [field.label || titleCaseMessage(field.fieldKey), `record.${field.fieldKey}`]);
+  }
+  return { record, ...generic };
+}
+
+function documentFieldSemanticType(label = '', binding = '') {
+  const value = `${label} ${binding}`.toLowerCase();
+  if (/company|organization|organisation/.test(value)) return 'organization';
+  if (/submitted_by|approved_by|current_user|contact|person|owner|assignee|user/.test(value)) return 'person';
+  if (/date/.test(value) && /time/.test(value)) return 'datetime';
+  if (/date/.test(value)) return 'date';
+  if (/time/.test(value)) return 'time';
+  if (/price|amount|currency|cost|total_value/.test(value)) return 'currency';
+  if (/status|approved|active|enabled|boolean/.test(value)) return 'status';
+  if (/email/.test(value)) return 'email';
+  if (/phone|mobile|telephone/.test(value)) return 'phone';
+  if (/number|quantity|count|total_pages|page_number|_id\b|\bid\b/.test(value)) return 'number';
+  if (/description|notes|comment|address|multiline/.test(value)) return 'multiline';
+  if (/reference|link|url/.test(value)) return 'reference';
+  return 'text';
+}
+
+function documentFieldIcon(type) {
+  const paths = {
+    organization: '<path d="M4 20V6l8-3 8 3v14M8 8h1m3 0h1m3 0h1M8 12h1m3 0h1m3 0h1M9 20v-4h6v4"/>',
+    person: '<circle cx="12" cy="8" r="3"/><path d="M5 20c.6-4 3-6 7-6s6.4 2 7 6"/>',
+    date: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4m10-4v4M3 10h18"/>',
+    datetime: '<rect x="3" y="5" width="14" height="14" rx="2"/><path d="M7 3v4m6-4v4M3 10h14"/><circle cx="17" cy="17" r="4"/><path d="M17 15v2l1.5 1"/>',
+    time: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    currency: '<path d="M16 7.5c-1-1-2.2-1.5-4-1.5-2.2 0-4 1.1-4 3s1.5 2.6 4 3 4 1.1 4 3-1.8 3-4 3c-1.8 0-3.3-.6-4.5-1.8M12 3v18"/>',
+    status: '<circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/>',
+    email: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m4 7 8 6 8-6"/>',
+    phone: '<path d="M7 3h3l1 5-2 1c1 3 3 5 6 6l1-2 5 1v3c0 2-2 4-4 4C9 20 4 15 3 7c0-2 2-4 4-4Z"/>',
+    number: '<path d="M9 3 7 21m10-18-2 18M4 9h16M3 15h16"/>',
+    multiline: '<path d="M4 5h16M4 10h16M4 15h11M4 20h8"/>',
+    reference: '<path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"/>',
+    text: '<path d="M5 5h14M12 5v14M8 19h8"/>'
+  };
+  return `<span class="document-field-icon is-${type}" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false">${paths[type] || paths.text}</svg></span>`;
+}
+
+function documentPreviewValues() {
+  return {
+    'record.company': 'Aster & Pine Manufacturing', 'record.contact': 'Mei Lin Tan', 'record.email': 'meilin@example.test', 'record.phone': '+60 3 5550 0188',
+    'workflow.request_number': 'REQ-2026-00418', 'workflow.submitted_by': 'Nadia Rahman', 'workflow.submitted_date': '8 September 2026', 'workflow.approved_by': 'Daniel Wong', 'workflow.approved_date': '9 September 2026', 'workflow.status': 'Approved',
+    'system.generated_date': '9 September 2026', 'system.generated_time': '10:42 AM', 'system.page_number': 'Page 1', 'system.total_pages': '1', 'system.organization_name': 'Northstar Operations', 'system.current_user': 'System Admin',
+    'record.items.description': 'Workspace materials', 'record.items.quantity': '12', 'record.items.unit_price': 'RM 48.00', 'record.items.amount': 'RM 576.00'
+  };
+}
+
+function renderDocumentTemplateList() {
+  const list = $('#documentTemplateList');
+  if (!list) return;
+  $('#documentTemplateCount').textContent = state.documentTemplates.length;
+  list.innerHTML = state.documentTemplates.map((template) => `<article class="document-template-card"><div class="document-template-card-preview" aria-hidden="true"><span></span><i></i><i></i><b></b></div><div><span class="eyebrow">${escapeHtml(template.page?.size || 'A4')} · ${escapeHtml(titleCaseMessage(template.status || 'draft'))}</span><h3>${escapeHtml(template.name)}</h3><p>${escapeHtml(documentSourceLabel(template.source))}</p>${/— imported$/.test(template.name) ? '<div class="document-import-review">Imported from PDF · Review recommended</div>' : ''}<small>Updated ${escapeHtml(new Date(template.updatedAt).toLocaleString())}</small><div class="form-actions"><button type="button" data-open-document-template="${escapeHtml(template.templateKey)}">Open designer</button><button type="button" class="secondary" data-preview-document-template="${escapeHtml(template.templateKey)}">Preview</button></div></div></article>`).join('');
+}
+
+function documentSourceLabel(source) {
+  const [kind, key] = String(source || 'workflow').split(':');
+  if (kind === 'module') return `Module data · ${configModules.find((item) => item.key === key)?.name || prototypeDocumentContexts.find((item) => item.key === key)?.name || titleCaseMessage(key)}`;
+  if (kind === 'form') return `Form data · ${state.standaloneForms.find((item) => item.formKey === key)?.name || titleCaseMessage(key)}`;
+  return 'Workflow data context';
+}
+
+function documentPhysicalPages(template = activeDocumentTemplate()) {
+  return template?.pages?.length ? template.pages : template ? [{ page: template.page, regions: template.regions }] : [];
+}
+
+function activeDocumentPhysicalPage(template = activeDocumentTemplate()) {
+  const pages = documentPhysicalPages(template);
+  state.documentPageIndex = Math.min(Math.max(0, state.documentPageIndex), Math.max(0, pages.length - 1));
+  return pages[state.documentPageIndex];
+}
+
+async function loadDocumentOriginalPdf(template) {
+  if (state.documentOriginalPdfUrl) { URL.revokeObjectURL(state.documentOriginalPdfUrl); state.documentOriginalPdfUrl = ''; }
+  state.documentOriginalPdfFile = null;
+  if (!template?.hasSourcePdf) return;
+  const response = await fetch(`/api/document-templates/${encodeURIComponent(template.templateKey)}/source-pdf`, { headers: { Authorization: `Bearer ${await currentAuthToken()}` } });
+  if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'Unable to load the original PDF.');
+  state.documentOriginalPdfUrl = URL.createObjectURL(await response.blob());
+  if (state.activeDocumentTemplateKey === template.templateKey) { $('#documentCompareControls').hidden = false; $('#documentOriginalPdf').src = state.documentOriginalPdfUrl; renderDocumentDesigner(); }
+}
+
+function openDocumentDesigner(templateKey, preview = false) {
+  state.activeDocumentTemplateKey = templateKey;
+  const template = activeDocumentTemplate();
+  if (!template) return;
+  state.documentDesignerMode = preview ? 'preview' : 'design';
+  state.documentPageIndex = 0; state.documentSelectedRegion = 'body'; state.documentSelectedElementId = ''; state.documentSelectedCell = null;
+  state.documentHistory = []; state.documentFuture = []; state.documentDirty = false;
+  $('#documentTemplateManagement').hidden = true; $('#documentDesignerWorkspace').hidden = false;
+  document.body.classList.add('document-designer-open');
+  $('#documentTemplateName').value = template.name;
+  $('#documentTemplateSource').innerHTML = documentSourceOptions(template.source);
+  $('#documentZoom').value = 100;
+  $('#documentOutputRecordId').value = '';
+  $('#documentOutputWorkflowId').value = '';
+  const canCompare = /— imported$/.test(template.name) && Boolean(state.documentOriginalPdfUrl);
+  $('#documentCompareControls').hidden = !canCompare; $('#documentOriginalPdf').src = canCompare ? state.documentOriginalPdfUrl : '';
+  renderDocumentDesigner();
+  if (template.hasSourcePdf && !canCompare) void loadDocumentOriginalPdf(template).catch((error) => { $('#documentOutputStatus').textContent = error.message; });
+}
+
+function closeDocumentDesigner() {
+  $('#documentDesignerWorkspace').hidden = true; $('#documentTemplateManagement').hidden = false;
+  document.body.classList.remove('document-designer-open', 'document-print-portrait', 'document-print-landscape');
+  state.activeDocumentTemplateKey = ''; renderDocumentTemplateList();
+}
+
+function captureDocumentHistory() {
+  const template = activeDocumentTemplate();
+  if (!template) return;
+  state.documentHistory.push(structuredClone(template));
+  if (state.documentHistory.length > 40) state.documentHistory.shift();
+  state.documentFuture = []; state.documentDirty = true;
+}
+
+function restoreDocumentHistory(redo = false) {
+  const from = redo ? state.documentFuture : state.documentHistory;
+  const to = redo ? state.documentHistory : state.documentFuture;
+  const previous = from.pop(); const current = activeDocumentTemplate();
+  if (!previous || !current) return;
+  to.push(structuredClone(current));
+  state.documentTemplates[state.documentTemplates.findIndex((item) => item.templateKey === current.templateKey)] = previous;
+  renderDocumentDesigner();
+}
+
+function resolveDocumentValue(binding, fallback = '') {
+  return documentPreviewValues()[binding] || fallback || titleCaseMessage(String(binding || '').split('.').pop());
+}
+
+function renderDocumentElement(element, preview) {
+  if (element.type === 'table') return renderDocumentTable(element, preview);
+  const selected = element.id === state.documentSelectedElementId;
+  const value = element.type === 'field' && preview ? resolveDocumentValue(element.binding, element.label) : element.type === 'field' ? `{ ${element.label} }` : element.content;
+  const placement = `grid-column:${Math.max(1, Number(element.column) || 1)};width:auto;text-align:${element.alignment};padding:${element.padding}px;margin-left:${Math.max(0, Number(element.leftIndent) || 0)}cm;margin-right:${Math.max(0, Number(element.rightIndent) || 0)}cm`;
+  if (element.type === 'image') { const size = element.imageWidthCm ? `width:${element.imageWidthCm}cm;height:${element.imageHeightCm || 'auto'}cm` : ''; return `<button type="button" class="document-block document-image-block ${selected ? 'is-selected' : ''}" data-document-element="${element.id}" style="${placement};${size}">${element.source ? `<img src="${escapeHtml(element.source)}" alt="${escapeHtml(element.content || 'Imported image')}">` : '<span aria-hidden="true">◇</span>'}<strong ${element.source ? 'class="visually-hidden"' : ''}>${escapeHtml(element.content || 'Organization logo')}</strong></button>`; }
+  return `<button type="button" class="document-block document-${element.type}-block ${selected ? 'is-selected' : ''}" data-document-element="${element.id}" style="${placement};font-size:${element.fontSize}pt;font-weight:${element.fontWeight}">${escapeHtml(value)}</button>`;
+}
+
+function renderDocumentTable(table, preview) {
+  const selected = table.id === state.documentSelectedElementId;
+  const widths = normalizedDocumentColumnWidths(table);
+  const rows = table.rows.map((row, rowIndex) => `<tr data-document-row="${table.id}:${rowIndex}" class="${row.repeat && !preview ? 'is-repeating' : ''}" style="height:${Math.min(3.2, Math.max(.65, Number(row.heightCm) || .9))}cm">${row.cells.map((cell, columnIndex) => cell.hidden ? '' : `<td colspan="${cell.colSpan || 1}" style="text-align:${cell.alignment};padding:${cell.padding}px"><button type="button" data-document-cell="${table.id}:${rowIndex}:${columnIndex}" class="document-cell ${state.documentSelectedCell?.tableId === table.id && state.documentSelectedCell.row === rowIndex && state.documentSelectedCell.column === columnIndex ? 'is-selected' : ''}">${escapeHtml(preview && cell.binding ? resolveDocumentValue(cell.binding, cell.content) : cell.binding ? `{ ${cell.content || titleCaseMessage(cell.binding.split('.').pop())} }` : cell.content || 'Empty cell')}</button>${row.repeat && columnIndex === 0 && !preview ? '<span class="document-repeat-badge">↻ Repeating row</span>' : ''}</td>`).join('')}</tr>`).join('');
+  return `<div class="document-table-block ${selected ? 'is-selected' : ''} ${table.printableBorders ? 'has-print-borders' : ''}" data-document-element="${table.id}"><table><colgroup>${widths.map((width) => `<col style="width:${width}%">`).join('')}</colgroup><tbody>${rows}</tbody></table></div>`;
+}
+
+function normalizedDocumentColumnWidths(table) {
+  const raw = table.columns.map((column) => Math.max(8, Number(column.width) || 1));
+  const total = raw.reduce((sum, width) => sum + width, 0) || 1;
+  return raw.map((width) => Number(((width / total) * 100).toFixed(3)));
+}
+
+function fitDocumentColumnWidths(table, selectedIndex, requestedWidth) {
+  const count = table.columns.length; const minimum = Math.min(8, 100 / count); const maximum = 100 - (minimum * (count - 1));
+  const selected = Math.min(maximum, Math.max(minimum, Number(requestedWidth) || minimum)); const remaining = 100 - selected;
+  const others = table.columns.map((column, index) => ({ index, weight: index === selectedIndex ? 0 : Math.max(minimum, Number(column.width) || minimum) })).filter((column) => column.index !== selectedIndex);
+  let available = remaining; let active = [...others]; const widths = Array(count).fill(minimum); widths[selectedIndex] = selected;
+  while (active.length) {
+    const weightTotal = active.reduce((sum, column) => sum + column.weight, 0) || active.length; const belowMinimum = active.filter((column) => available * (column.weight / weightTotal) < minimum);
+    if (!belowMinimum.length) { active.forEach((column) => { widths[column.index] = available * (column.weight / weightTotal); }); break; }
+    belowMinimum.forEach((column) => { widths[column.index] = minimum; available -= minimum; }); active = active.filter((column) => !belowMinimum.includes(column));
+  }
+  table.columns.forEach((column, index) => { column.width = Number(widths[index].toFixed(3)); });
+}
+
+function documentPageGeometry(page = activeDocumentTemplate()?.page) {
+  return DocumentOutput.geometry(page || {});
+}
+
+function clampDocumentMargin(page, side, requested) {
+  const { width, height } = documentPageGeometry(page);
+  const opposite = side === 'left' ? 'right' : side === 'right' ? 'left' : side === 'top' ? 'bottom' : 'top';
+  const axisSize = ['left', 'right'].includes(side) ? width : height;
+  const minimumContent = ['left', 'right'].includes(side) ? documentMinimumContentCm.horizontal : documentMinimumContentCm.vertical;
+  const oppositeBoundary = side === 'top' ? Math.max(Number(page.margins.bottom) || 0, Number(page.footerFromBottom) + 2.1) : side === 'bottom' ? Math.max(Number(page.margins.top) || 0, Number(page.headerFromTop) + 2.1) : Number(page.margins[opposite] || 0);
+  return Math.min(Math.max(.5, axisSize - oppositeBoundary - minimumContent), Math.max(.5, Number(requested) || .5));
+}
+
+function documentMarginHandles(page, widthCm, heightCm) {
+  const horizontal = [['left', page.margins.left / widthCm], ['right', (widthCm - page.margins.right) / widthCm]];
+  const vertical = [['top', page.margins.top / heightCm], ['bottom', (heightCm - page.margins.bottom) / heightCm]];
+  $('#documentRulerTicks').insertAdjacentHTML('beforeend', horizontal.map(([side, ratio]) => `<button type="button" class="document-margin-handle is-${side}" data-document-margin-handle="${side}" style="--handle-position:${ratio * 100}%" aria-label="Adjust ${side} margin" title="${titleCaseMessage(side)} margin: ${page.margins[side]} cm"></button>`).join(''));
+  $('#documentVerticalRulerTicks').insertAdjacentHTML('beforeend', vertical.map(([side, ratio]) => `<button type="button" class="document-margin-handle is-${side}" data-document-margin-handle="${side}" style="--handle-position:${ratio * 100}%" aria-label="Adjust ${side} margin" title="${titleCaseMessage(side)} margin: ${page.margins[side]} cm"></button>`).join(''));
+  $('#documentVerticalRulerTicks').insertAdjacentHTML('beforeend', `<span class="document-region-ruler-marker is-header" style="--handle-position:${(page.headerFromTop / heightCm) * 100}%" title="Header from top: ${page.headerFromTop} cm"></span><span class="document-region-ruler-marker is-footer" style="--handle-position:${((heightCm - page.footerFromBottom) / heightCm) * 100}%" title="Footer from bottom: ${page.footerFromBottom} cm"></span>`);
+}
+
+function documentContextualRulerMarkers(page, widthCm) {
+  const { element, table } = selectedDocumentTarget(); if (!element) return '';
+  const contentWidth = widthCm - page.margins.left - page.margins.right;
+  if (element.type !== 'table') {
+    const left = page.margins.left + (Number(element.leftIndent) || 0); const right = widthCm - page.margins.right - (Number(element.rightIndent) || 0);
+    return `<span class="document-ruler-context-label">Paragraph</span><button type="button" class="document-context-marker is-indent is-left" data-document-indent-handle="left" style="--handle-position:${(left / widthCm) * 100}%" aria-label="Adjust paragraph left indent" title="Left indent: ${element.leftIndent || 0} cm"></button><button type="button" class="document-context-marker is-indent is-right" data-document-indent-handle="right" style="--handle-position:${(right / widthCm) * 100}%" aria-label="Adjust paragraph right indent" title="Right indent: ${element.rightIndent || 0} cm"></button>`;
+  }
+  const widths = normalizedDocumentColumnWidths(table); let cumulative = page.margins.left;
+  const markers = [`<span class="document-ruler-context-label">Table</span><span class="document-context-marker is-table-edge" style="--handle-position:${(page.margins.left / widthCm) * 100}%"></span>`];
+  widths.slice(0, -1).forEach((columnWidth, index) => { cumulative += contentWidth * columnWidth / 100; markers.push(`<button type="button" class="document-context-marker is-column" data-document-column-marker="${index}" data-document-table-id="${table.id}" style="--handle-position:${(cumulative / widthCm) * 100}%" aria-label="Resize table column ${index + 1}" title="Column ${index + 1} boundary"></button>`); });
+  markers.push(`<span class="document-context-marker is-table-edge" style="--handle-position:${((widthCm - page.margins.right) / widthCm) * 100}%"></span>`); return markers.join('');
+}
+
+function documentVerticalContextualRulerMarkers(page, heightCm) {
+  if (state.documentPropertiesTab === 'page') return '';
+  const { element, table } = selectedDocumentTarget();
+  let target = element ? $(`[data-document-element="${element.id}"]`) : null;
+  let kind = element?.type === 'table' ? 'table' : element ? 'paragraph' : '';
+  let rowIndex = null;
+  if (table && state.documentSelectedCell) { rowIndex = state.documentSelectedCell.row; target = $(`[data-document-row="${table.id}:${rowIndex}"]`); kind = 'row'; }
+  if (!target && ['header', 'footer'].includes(state.documentSelectedRegion)) { target = $(`.document-${state.documentSelectedRegion}`); kind = state.documentSelectedRegion; }
+  if (!target) return '';
+  const pageElement = $('#documentPage'); const pageBounds = pageElement.getBoundingClientRect(); const bounds = target.getBoundingClientRect();
+  const topCm = Math.min(heightCm, Math.max(0, ((bounds.top - pageBounds.top) / Math.max(1, pageBounds.height)) * heightCm));
+  const bottomCm = Math.min(heightCm, Math.max(topCm, ((bounds.bottom - pageBounds.top) / Math.max(1, pageBounds.height)) * heightCm));
+  if (kind === 'paragraph') return `<span class="document-vertical-context-label" style="--handle-position:${(topCm / heightCm) * 100}%">Selected</span><span class="document-vertical-context-marker is-position" style="--handle-position:${(topCm / heightCm) * 100}%" title="Selected block at ${topCm.toFixed(1)} cm"></span>`;
+  const label = kind === 'row' ? 'Row' : titleCaseMessage(kind);
+  const bottom = kind === 'row' ? `<button type="button" class="document-vertical-context-marker is-boundary is-bottom" data-document-row-height-handle="${rowIndex}" data-document-row-top-cm="${topCm}" style="--handle-position:${(bottomCm / heightCm) * 100}%" aria-label="Adjust selected row height" title="Row height: ${(bottomCm - topCm).toFixed(2)} cm"></button>` : `<span class="document-vertical-context-marker is-boundary is-bottom" style="--handle-position:${(bottomCm / heightCm) * 100}%"></span>`;
+  return `<span class="document-vertical-context-label" style="--handle-position:${(topCm / heightCm) * 100}%">${label}</span><span class="document-vertical-context-range" style="--range-top:${(topCm / heightCm) * 100}%;--range-height:${((bottomCm - topCm) / heightCm) * 100}%"></span><span class="document-vertical-context-marker is-boundary is-top" style="--handle-position:${(topCm / heightCm) * 100}%"></span>${bottom}`;
+}
+
+function renderDocumentDesigner() {
+  const template = activeDocumentTemplate(); if (!template) return;
+  const physicalPages = documentPhysicalPages(template); const physical = activeDocumentPhysicalPage(template);
+  const preview = state.documentDesignerMode === 'preview';
+  $('#documentPageViewport').hidden = preview;
+  $('#documentOutputPreview').hidden = !preview;
+  if (preview) void updateDocumentOutputPreview().catch((error) => { $('#documentOutputStatus').textContent = error.message; });
+  $('#documentDesignMode').setAttribute('aria-pressed', String(!preview)); $('#documentPreviewMode').setAttribute('aria-pressed', String(preview));
+  $('#documentDesignMode').classList.toggle('is-active', !preview); $('#documentPreviewMode').classList.toggle('is-active', preview);
+  $('.document-designer-workspace').classList.toggle('is-preview', preview);
+  const zoom = Number($('#documentZoom').value || 100); $('#documentZoomLabel').value = `${zoom}%`;
+  const page = physical.page; const { width: widthCm, height: heightCm } = documentPageGeometry(page);
+  document.body.classList.toggle('document-print-portrait', page.orientation === 'portrait'); document.body.classList.toggle('document-print-landscape', page.orientation === 'landscape');
+  const geometry = $('#documentCoordinateSystem');
+  const compareMode = $('#documentCompareControls').hidden ? 'generated' : state.documentCompareMode;
+  geometry.classList.toggle('is-original', compareMode === 'original'); geometry.classList.toggle('is-overlay', compareMode === 'overlay');
+  $('#documentOriginalPdf').hidden = compareMode === 'generated'; $('#documentOriginalOpacityLabel').hidden = compareMode !== 'overlay';
+  if (state.documentOriginalPdfUrl) $('#documentOriginalPdf').src = `${state.documentOriginalPdfUrl}#page=${state.documentPageIndex + 1}&view=Fit`;
+  $('#documentPageNavigation').hidden = physicalPages.length < 2;
+  $('#documentPagePosition').textContent = `Page ${state.documentPageIndex + 1} of ${physicalPages.length}`;
+  $('#documentPreviousPage').disabled = state.documentPageIndex === 0; $('#documentNextPage').disabled = state.documentPageIndex === physicalPages.length - 1;
+  geometry.style.setProperty('--original-opacity', `${Number($('#documentOriginalOpacity').value || 40) / 100}`);
+  const scale = zoom / 100;
+  for (const [property, value] of Object.entries({ '--document-zoom': scale, '--page-width': `${widthCm}cm`, '--page-height': `${heightCm}cm`, '--display-page-width': `${widthCm * scale}cm`, '--display-page-height': `${heightCm * scale}cm`, '--margin-top': `${page.margins.top}cm`, '--margin-right': `${page.margins.right}cm`, '--margin-bottom': `${page.margins.bottom}cm`, '--margin-left': `${page.margins.left}cm`, '--header-from-top': `${page.headerFromTop}cm`, '--footer-from-bottom': `${page.footerFromBottom}cm`, '--print-page-width': `${widthCm}cm`, '--print-page-height': `${heightCm}cm`, '--print-margin-top': `${page.margins.top}cm`, '--print-margin-right': `${page.margins.right}cm`, '--print-margin-bottom': `${page.margins.bottom}cm`, '--print-margin-left': `${page.margins.left}cm`, '--header-columns': page.headerColumns, '--footer-columns': page.footerColumns })) geometry.style.setProperty(property, value);
+  $('#documentRulerTicks').innerHTML = Array.from({ length: Math.ceil(widthCm) + 1 }, (_, index) => `<i><span>${index}</span></i>`).join('');
+  $('#documentVerticalRulerTicks').innerHTML = Array.from({ length: Math.ceil(heightCm) + 1 }, (_, index) => `<i><span>${index}</span></i>`).join('');
+  if (!preview && state.documentPropertiesTab === 'page') documentMarginHandles(page, widthCm, heightCm);
+  if (!preview && state.documentPropertiesTab !== 'page') $('#documentRulerTicks').insertAdjacentHTML('beforeend', documentContextualRulerMarkers(page, widthCm));
+  $('#documentPage').className = `document-page ${preview ? 'is-preview' : 'is-design'} is-${page.orientation}`;
+  $('#documentPage').classList.toggle('show-margin-guides', !preview && page.showMarginGuides); $('#documentPage').classList.toggle('show-layout-grid', !preview && page.showGrid);
+  $('#documentPage').innerHTML = `<div class="document-margin-guide" aria-hidden="true"></div>${['header', 'body', 'footer'].map((region) => `<section class="document-region document-${region} ${state.documentSelectedRegion === region ? 'is-selected' : ''}" style="--region-columns:${region === 'header' ? page.headerColumns : region === 'footer' ? page.footerColumns : 1}" data-document-region="${region}" aria-label="${titleCaseMessage(region)} region"><span class="document-region-label">${titleCaseMessage(region)}</span>${physical.regions[region].map((element) => renderDocumentElement(element, preview)).join('') || `<button type="button" class="document-empty-region">Add content to ${region}</button>`}</section>`).join('')}<span class="document-body-overflow-warning" role="status">Body content exceeds this page. Reduce content or add another page.</span>`;
+  if (!preview && state.documentPropertiesTab !== 'page') $('#documentVerticalRulerTicks').insertAdjacentHTML('beforeend', documentVerticalContextualRulerMarkers(page, heightCm));
+  const body = $('#documentPage .document-body'); $('#documentPage').classList.toggle('has-body-overflow', body.scrollHeight > body.clientHeight + 1);
+  renderDocumentFieldPalette(); renderDocumentProperties();
+  $('#documentUndo').disabled = !state.documentHistory.length; $('#documentRedo').disabled = !state.documentFuture.length;
+}
+
+function renderDocumentFieldPalette() {
+  const fields = documentFieldsForSource();
+  const fieldsTab = state.documentPaletteTab === 'fields'; const query = state.documentFieldQuery.trim().toLowerCase();
+  $('#documentFieldsTab').setAttribute('aria-selected', String(fieldsTab)); $('#documentElementsTab').setAttribute('aria-selected', String(!fieldsTab));
+  $('#documentFieldSearch').hidden = !fieldsTab; $('#documentFieldSearch').value = state.documentFieldQuery;
+  if (!fieldsTab) { $('#documentFieldPalette').innerHTML = '<section class="document-element-list"><button type="button" data-add-document-element="text"><span aria-hidden="true">T</span><strong>Text</strong><small>Add editable copy</small></button><button type="button" data-add-document-element="image"><span aria-hidden="true">◇</span><strong>Image</strong><small>Add an image placeholder</small></button><button type="button" data-add-document-element="table"><span aria-hidden="true">▦</span><strong>Table</strong><small>Fit a table to the content width</small></button></section>'; return; }
+  $('#documentFieldPalette').innerHTML = Object.entries(fields).map(([group, items]) => { const matches = items.filter(([label, binding]) => `${label} ${binding}`.toLowerCase().includes(query)); return `<section class="document-field-group"><h4>${group === 'record' ? 'Form / record fields' : `${titleCaseMessage(group)} fields`}</h4>${matches.length ? matches.map(([label, binding]) => { const type = documentFieldSemanticType(label, binding); return `<button type="button" draggable="true" data-insert-document-field="${escapeHtml(binding)}" data-document-field-label="${escapeHtml(label)}">${documentFieldIcon(type)}<strong>${escapeHtml(label)}</strong></button>`; }).join('') : '<p>No matching fields.</p>'}</section>`; }).join('');
+}
+
+function selectedDocumentTarget() {
+  const template = activeDocumentTemplate();
+  const regions = activeDocumentPhysicalPage(template)?.regions || {};
+  const element = Object.values(regions).flat().find((item) => item.id === state.documentSelectedElementId);
+  const table = element?.type === 'table' ? element : Object.values(regions).flat().find((item) => item.type === 'table' && item.id === state.documentSelectedCell?.tableId);
+  const cell = table && state.documentSelectedCell ? table.rows[state.documentSelectedCell.row]?.cells[state.documentSelectedCell.column] : null;
+  return { template, element, table, cell };
+}
+
+function documentSuggestionFields() {
+  const source = activeDocumentTemplate()?.source || ''; const [kind, key] = source.split(':');
+  const metadata = kind === 'module' ? (moduleConfigByKey(key)?.fields || moduleConfigByKey(key)?.module?.fields || []) : kind === 'form' ? (state.standaloneForms.find((form) => form.formKey === key)?.fields || []) : [];
+  const types = new Map(metadata.map((field) => [`record.${field.fieldKey}`, String(field.type || '').toLowerCase()]));
+  return Object.values(documentFieldsForSource()).flat().map(([label, binding]) => { const declared = types.get(binding) || ''; const type = /date/.test(declared) ? 'date' : /currency|money/.test(declared) ? 'currency' : /number|integer|decimal/.test(declared) ? 'number' : documentFieldSemanticType(label, binding); return { label, binding, type }; });
+}
+
+function documentSuggestionTarget(element, table, cell) {
+  const raw = cell || element; if (!raw) return null;
+  let label = '';
+  if (cell && state.documentSelectedCell?.row > 0) label = table.rows[0]?.cells[state.documentSelectedCell.column]?.content || '';
+  if (element) { const regions = activeDocumentPhysicalPage().regions; const region = Object.values(regions).find((items) => items.includes(element)); const index = region?.indexOf(element) ?? -1; const previous = index > 0 ? region[index - 1] : null; if (previous?.type === 'text' && /:\s*$/.test(previous.content || '') && !/:/.test(element.content || '')) label = previous.content.replace(/:\s*$/, ''); }
+  return { id: `${activeDocumentTemplate().templateKey}:${state.documentPageIndex}:${raw.id}`, text: cell ? cell.content : element.content, label, binding: cell ? cell.binding : element.binding, tableHeader: Boolean(cell && state.documentSelectedCell?.row === 0), tableId: table?.id };
+}
+
+function documentSuggestionMarkup(element, table, cell) {
+  if (!/— imported$/.test(activeDocumentTemplate()?.name || '') || (element && !cell && element.type !== 'text') || (!element && !cell)) return '';
+  const match = DocumentBindingSuggestions.suggest(documentSuggestionTarget(element, table, cell), documentSuggestionFields(), state.documentRejectedSuggestions)[0];
+  if (!match || match.confidence === 'low') return '';
+  return `<section class="document-binding-suggestion"><span class="eyebrow">Suggested field</span><strong>${escapeHtml(match.label)}</strong><small>${titleCaseMessage(match.confidence)} confidence · ${escapeHtml(match.reasons.join(' and '))}</small><button type="button" data-document-suggestion-bind="${escapeHtml(match.binding)}">Bind to ${escapeHtml(match.label)}</button><button type="button" class="secondary" data-document-suggestion-reject="${escapeHtml(match.binding)}">Keep static</button></section>`;
+}
+
+function renderDocumentProperties() {
+  const { element, table, cell } = selectedDocumentTarget();
+  const panel = $('#documentProperties');
+  const pageTab = state.documentPropertiesTab === 'page';
+  $('#documentPropertiesTab').setAttribute('aria-selected', String(!pageTab)); $('#documentPageTab').setAttribute('aria-selected', String(pageTab));
+  $('#documentPropertiesTitle').textContent = pageTab ? 'Page setup' : 'Properties';
+  if (pageTab) {
+    const page = activeDocumentPhysicalPage().page;
+    $('#documentSelectionHelp').textContent = 'Page geometry controls Design, Preview, and Print.';
+    panel.innerHTML = `<section class="document-page-properties"><label>Page size<select data-document-page-property="size"><option value="A4">A4 — 210 × 297 mm</option></select></label><fieldset><legend>Orientation</legend><div class="document-orientation-options"><label><input type="radio" name="documentOrientation" value="portrait" data-document-page-property="orientation" ${page.orientation === 'portrait' ? 'checked' : ''}> Portrait</label><label><input type="radio" name="documentOrientation" value="landscape" data-document-page-property="orientation" ${page.orientation === 'landscape' ? 'checked' : ''}> Landscape</label></div></fieldset><fieldset><legend>Margins (cm)</legend><div class="document-margin-inputs">${['top', 'bottom', 'left', 'right'].map((side) => `<label>${titleCaseMessage(side)}<input type="number" min="0.5" max="5" step="0.1" value="${page.margins[side]}" data-document-page-property="margin" data-document-margin-side="${side}"></label>`).join('')}</div></fieldset><label class="checkbox-label"><input type="checkbox" data-document-page-property="showMarginGuides" ${page.showMarginGuides ? 'checked' : ''}> Show margin guides</label><label class="checkbox-label"><input type="checkbox" data-document-page-property="showGrid" ${page.showGrid ? 'checked' : ''}> Show layout grid</label><fieldset><legend>Header &amp; footer</legend><label>Header from top (cm)<input type="number" min="0.5" max="3" step="0.1" value="${page.headerFromTop}" data-document-page-property="headerFromTop"></label><label>Footer from bottom (cm)<input type="number" min="0.5" max="3" step="0.1" value="${page.footerFromBottom}" data-document-page-property="footerFromBottom"></label><label>Header layout<select data-document-page-property="headerColumns"><option value="1">1 column</option><option value="2">2 columns</option><option value="3">3 columns</option></select></label><label>Footer layout<select data-document-page-property="footerColumns"><option value="1">1 column</option><option value="2">2 columns</option><option value="3">3 columns</option></select></label></fieldset></section>`;
+    panel.querySelector('[data-document-page-property="headerColumns"]').value = String(page.headerColumns); panel.querySelector('[data-document-page-property="footerColumns"]').value = String(page.footerColumns);
+    return;
+  }
+  if (!element && !cell) { const anchored = ['header', 'footer'].includes(state.documentSelectedRegion); $('#documentSelectionHelp').textContent = `Editing the ${state.documentSelectedRegion} region.`; panel.innerHTML = anchored ? `<div class="document-property-empty"><strong>${titleCaseMessage(state.documentSelectedRegion)} region active</strong><p>This region is anchored to the physical page and supports independent column content.</p><button type="button" class="secondary" data-open-document-page-settings>Adjust ${state.documentSelectedRegion} position</button></div>` : '<div class="document-property-empty"><strong>Select content to format</strong><p>Choose a block or table cell on the page. New content is inserted in the active region.</p></div>'; return; }
+  $('#documentSelectionHelp').textContent = cell ? 'Table cell selected.' : `${titleCaseMessage(element.type)} selected.`;
+  if (cell) {
+    const maximumColumnWidth = 100 - (Math.min(8, 100 / table.columns.length) * (table.columns.length - 1));
+    const row = table.rows[state.documentSelectedCell.row];
+    panel.innerHTML = `<label>Cell content<input data-document-property="cellContent" value="${escapeHtml(cell.content)}"></label><label>Bind to field<select data-document-property="cellBinding"><option value="">Keep as static text</option>${documentBindingOptions(cell.binding)}</select></label><label>Alignment<select data-document-property="cellAlignment"><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option></select></label><label>Padding<input type="number" min="0" max="24" data-document-property="cellPadding" value="${cell.padding}"></label><label>Row height (cm)<input type="number" min="0.65" max="3.2" step="0.05" data-document-property="rowHeightCm" value="${Number(row.heightCm || .9).toFixed(2)}"></label><label>Column width (%)<input type="number" min="${Math.min(8, 100 / table.columns.length)}" max="${maximumColumnWidth}" data-document-property="columnWidth" value="${table.columns[state.documentSelectedCell.column]?.width || 25}"></label><div class="document-property-actions"><button type="button" class="secondary" data-document-table-action="toggle-repeat">${row.repeat ? 'Keep as static row' : 'Set as repeating row'}</button><button type="button" class="secondary" data-document-table-action="add-row">Add row</button><button type="button" class="secondary" data-document-table-action="add-column" ${table.columns.length >= 12 ? 'disabled title="Maximum 12 columns"' : ''}>Add column</button><button type="button" class="secondary" data-document-table-action="merge-right">Merge right</button></div>`;
+    panel.insertAdjacentHTML('afterbegin', documentSuggestionMarkup(element, table, cell));
+    panel.querySelector('[data-document-property="cellAlignment"]').value = cell.alignment;
+    return;
+  }
+  if (element.type === 'table') { panel.innerHTML = `<label class="checkbox-label"><input type="checkbox" data-document-property="printableBorders" ${element.printableBorders ? 'checked' : ''}> Printable borders</label><label>Repeating source<input data-document-property="repeatingSource" value="${escapeHtml(element.repeatingSource || '')}" placeholder="record.collection"></label><p class="muted">Editing guides are always visible in Design mode. Only printable borders appear in Preview and print.</p>`; return; }
+  const currentPage = activeDocumentPhysicalPage(); const regionColumns = state.documentSelectedRegion === 'header' ? currentPage.page.headerColumns : state.documentSelectedRegion === 'footer' ? currentPage.page.footerColumns : 1;
+  const columnControl = regionColumns > 1 ? `<label>Region column<select data-document-property="column">${Array.from({ length: regionColumns }, (_, index) => `<option value="${index + 1}">Column ${index + 1}</option>`).join('')}</select></label>` : '';
+  panel.innerHTML = `${element.type === 'field' ? `<label>Field binding<select data-document-property="binding">${documentBindingOptions(element.binding)}</select></label><button type="button" class="secondary" data-document-static-text>Keep as static text</button>` : `<label>${element.type === 'image' ? 'Image label' : 'Text'}<textarea rows="4" data-document-property="content">${escapeHtml(element.content || '')}</textarea></label>${element.type === 'text' ? `<label>Bind to field<select data-document-property="bindText"><option value="">Keep as static text</option>${documentBindingOptions('')}</select></label>` : ''}`}${columnControl}<fieldset><legend>Paragraph</legend><div class="document-indent-inputs"><label>Left indent (cm)<input type="number" min="0" max="12" step="0.1" data-document-property="leftIndent" value="${element.leftIndent || 0}"></label><label>Right indent (cm)<input type="number" min="0" max="12" step="0.1" data-document-property="rightIndent" value="${element.rightIndent || 0}"></label></div></fieldset><label>Alignment<select data-document-property="alignment"><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option></select></label>${element.type !== 'image' ? `<label>Font size<input type="number" min="7" max="48" data-document-property="fontSize" value="${element.fontSize}"></label><label>Weight<select data-document-property="fontWeight"><option value="400">Regular</option><option value="600">Semibold</option><option value="700">Bold</option></select></label>` : ''}<label>Padding<input type="number" min="0" max="40" data-document-property="padding" value="${element.padding}"></label><button type="button" class="danger-button" data-remove-document-element>Remove element</button>`;
+  panel.insertAdjacentHTML('afterbegin', documentSuggestionMarkup(element, table, cell));
+  panel.querySelector('[data-document-property="alignment"]').value = element.alignment;
+  panel.querySelector('[data-document-property="column"]') && (panel.querySelector('[data-document-property="column"]').value = String(element.column || 1));
+  panel.querySelector('[data-document-property="fontWeight"]') && (panel.querySelector('[data-document-property="fontWeight"]').value = element.fontWeight);
+}
+
+function insertDocumentElement(type) {
+  const template = activeDocumentTemplate(); if (!template) return;
+  captureDocumentHistory();
+  const element = type === 'table' ? documentTable() : type === 'image' ? { id: documentId('image'), type: 'image', content: 'Organization logo', column: state.documentSelectedColumn, alignment: 'left', padding: 6, source: '' } : documentText('New text block', { column: state.documentSelectedColumn });
+  activeDocumentPhysicalPage(template).regions[state.documentSelectedRegion].push(element); state.documentSelectedElementId = element.id; state.documentSelectedCell = null; renderDocumentDesigner();
+}
+
+function prepareDocumentPrint() {
+  if (!activeDocumentTemplate() || $('#documentDesignerWorkspace')?.hidden) return;
+  if (state.documentModeBeforePrint === null) state.documentModeBeforePrint = state.documentDesignerMode;
+  state.documentDesignerMode = 'preview'; renderDocumentDesigner();
+}
+
+function restoreDocumentAfterPrint() {
+  if (state.documentModeBeforePrint === null) return;
+  state.documentDesignerMode = state.documentModeBeforePrint; state.documentModeBeforePrint = null; renderDocumentDesigner();
+}
+
+function insertDocumentField(binding, label) {
+  const { template, cell } = selectedDocumentTarget(); if (!template) return;
+  captureDocumentHistory();
+  if (cell) { cell.binding = binding; cell.content = label; } else { const element = documentField(label, binding, { column: state.documentSelectedColumn }); activeDocumentPhysicalPage(template).regions[state.documentSelectedRegion].push(element); state.documentSelectedElementId = element.id; }
+  renderDocumentDesigner(); $('#documentDesignerAnnouncement').textContent = `${label} inserted.`;
+}
+
+function updateDocumentProperty(target) {
+  const { element, table, cell } = selectedDocumentTarget(); const property = target.dataset.documentProperty; if (!property) return;
+  captureDocumentHistory(); const value = target.type === 'checkbox' ? target.checked : target.value;
+  if (cell) {
+    if (property === 'cellContent') { cell.content = value; cell.binding = ''; }
+    if (property === 'cellBinding') cell.binding = value;
+    if (property === 'cellAlignment') cell.alignment = value;
+    if (property === 'cellPadding') cell.padding = Number(value);
+    if (property === 'rowHeightCm') table.rows[state.documentSelectedCell.row].heightCm = Math.min(3.2, Math.max(.65, Number(value) || .9));
+    if (property === 'columnWidth') {
+      fitDocumentColumnWidths(table, state.documentSelectedCell.column, value);
+    }
+  } else if (element) {
+    if (property === 'bindText' && value) { element.type = 'field'; element.binding = value; element.label = target.selectedOptions[0]?.textContent || element.content; }
+    else if (property === 'binding') { element.binding = value; element.label = target.selectedOptions[0]?.textContent || element.label; }
+    else if (['leftIndent', 'rightIndent'].includes(property)) { const page = activeDocumentPhysicalPage().page; const width = documentPageGeometry(page).width - page.margins.left - page.margins.right; const opposite = property === 'leftIndent' ? 'rightIndent' : 'leftIndent'; element[property] = Math.min(Math.max(0, width - Number(element[opposite] || 0) - 1), Math.max(0, Number(value) || 0)); }
+    else element[property] = ['fontSize', 'padding', 'column'].includes(property) ? Number(value) : value;
+  }
+  renderDocumentDesigner();
+}
+
+function updateDocumentPageProperty(target) {
+  const property = target.dataset.documentPageProperty; const template = activeDocumentTemplate(); if (!property || !template) return;
+  captureDocumentHistory(); const page = activeDocumentPhysicalPage(template).page;
+  if (property === 'margin') page.margins[target.dataset.documentMarginSide] = clampDocumentMargin(page, target.dataset.documentMarginSide, target.value);
+  else if (['headerColumns', 'footerColumns'].includes(property)) page[property] = Number(target.value);
+  else if (['headerFromTop', 'footerFromBottom'].includes(property)) page[property] = Math.min(3, Math.max(.5, Number(target.value) || 1.25));
+  else page[property] = target.type === 'checkbox' ? target.checked : target.value;
+  renderDocumentDesigner();
+}
+
+function updateDocumentMarginDrag(event) {
+  const drag = state.documentMarginDrag; if (!drag) return;
+  const page = activeDocumentTemplate()?.page; if (!page) return;
+  const ruler = $(['left', 'right'].includes(drag.side) ? '.document-horizontal-ruler' : '.document-vertical-ruler'); const bounds = ruler.getBoundingClientRect(); const geometry = documentPageGeometry(page);
+  const pointer = ['left', 'right'].includes(drag.side) ? event.clientX - bounds.left : event.clientY - bounds.top; const ratio = Math.min(1, Math.max(0, pointer / (['left', 'right'].includes(drag.side) ? bounds.width : bounds.height)));
+  const raw = drag.side === 'left' ? ratio * geometry.width : drag.side === 'right' ? (1 - ratio) * geometry.width : drag.side === 'top' ? ratio * geometry.height : (1 - ratio) * geometry.height;
+  page.margins[drag.side] = Number(clampDocumentMargin(page, drag.side, raw).toFixed(1));
+  const coordinateSystem = $('#documentCoordinateSystem'); coordinateSystem.style.setProperty(`--margin-${drag.side}`, `${page.margins[drag.side]}cm`); coordinateSystem.style.setProperty(`--print-margin-${drag.side}`, `${page.margins[drag.side]}cm`);
+  const handle = $(`[data-document-margin-handle="${drag.side}"]`); const axisSize = ['left', 'right'].includes(drag.side) ? geometry.width : geometry.height; const handleRatio = ['left', 'top'].includes(drag.side) ? page.margins[drag.side] / axisSize : (axisSize - page.margins[drag.side]) / axisSize;
+  if (handle) { handle.style.setProperty('--handle-position', `${handleRatio * 100}%`); handle.title = `${titleCaseMessage(drag.side)} margin: ${page.margins[drag.side]} cm`; }
+  const input = $(`[data-document-margin-side="${drag.side}"]`); if (input) input.value = page.margins[drag.side];
+}
+
+function updateDocumentRulerDrag(event) {
+  const drag = state.documentRulerDrag; if (!drag) return; const { template, element, table } = selectedDocumentTarget(); if (!template || !element) return;
+  if (drag.kind === 'row-height' && table && state.documentSelectedCell) {
+    const ruler = $('.document-vertical-ruler'); const bounds = ruler.getBoundingClientRect(); const height = documentPageGeometry(activeDocumentPhysicalPage(template).page).height; const pointerCm = Math.min(height, Math.max(0, ((event.clientY - bounds.top) / Math.max(1, bounds.height)) * height));
+    const row = table.rows[state.documentSelectedCell.row]; row.heightCm = Number(Math.min(3.2, Math.max(.65, pointerCm - drag.rowTopCm)).toFixed(2));
+    const rowElement = $(`[data-document-row="${table.id}:${state.documentSelectedCell.row}"]`); if (rowElement) rowElement.style.height = `${row.heightCm}cm`;
+    const handle = $('[data-document-row-height-handle]'); if (handle) { handle.style.setProperty('--handle-position', `${(Math.min(height, drag.rowTopCm + row.heightCm) / height) * 100}%`); handle.title = `Row height: ${row.heightCm.toFixed(2)} cm`; }
+    const input = $('[data-document-property="rowHeightCm"]'); if (input) input.value = row.heightCm.toFixed(2);
+    return;
+  }
+  const ruler = $('.document-horizontal-ruler'); const bounds = ruler.getBoundingClientRect(); const page = activeDocumentPhysicalPage(template).page; const width = documentPageGeometry(page).width; const pointerCm = Math.min(width, Math.max(0, ((event.clientX - bounds.left) / Math.max(1, bounds.width)) * width)); const contentWidth = width - page.margins.left - page.margins.right;
+  if (drag.kind === 'indent') { const opposite = drag.side === 'left' ? Number(element.rightIndent) || 0 : Number(element.leftIndent) || 0; element[`${drag.side}Indent`] = Number(Math.min(contentWidth - opposite - 1, Math.max(0, drag.side === 'left' ? pointerCm - page.margins.left : width - page.margins.right - pointerCm)).toFixed(1)); const block = $(`[data-document-element="${element.id}"]`); if (block) block.style[`margin${titleCaseMessage(drag.side)}`] = `${element[`${drag.side}Indent`]}cm`; const input = $(`[data-document-property="${drag.side}Indent"]`); if (input) input.value = element[`${drag.side}Indent`]; }
+  if (drag.kind === 'column' && table) { const widths = normalizedDocumentColumnWidths(table); const before = widths.slice(0, drag.index).reduce((sum, value) => sum + value, 0); const pair = widths[drag.index] + widths[drag.index + 1]; const desired = ((pointerCm - page.margins.left) / contentWidth) * 100 - before; const left = Math.min(pair - 8, Math.max(8, desired)); table.columns[drag.index].width = Number(left.toFixed(3)); table.columns[drag.index + 1].width = Number((pair - left).toFixed(3)); }
+  const handle = drag.kind === 'indent' ? $(`[data-document-indent-handle="${drag.side}"]`) : $(`[data-document-column-marker="${drag.index}"]`); if (handle) handle.style.setProperty('--handle-position', `${(pointerCm / width) * 100}%`);
+  if (drag.kind === 'column' && table) { const columns = $$(`[data-document-element="${table.id}"] col`); normalizedDocumentColumnWidths(table).forEach((value, index) => { if (columns[index]) columns[index].style.width = `${value}%`; }); const input = $('[data-document-property="columnWidth"]'); if (input && state.documentSelectedCell?.column === drag.index) input.value = table.columns[drag.index].width; }
+}
+
+function documentTableAction(action) {
+  const { table, cell } = selectedDocumentTarget(); if (!table || !cell) return;
+  captureDocumentHistory();
+  if (action === 'add-row') table.rows.push({ id: documentId('row'), heightCm: .9, repeat: false, cells: table.columns.map(() => ({ id: documentId('cell'), content: '', binding: '', alignment: 'left', padding: 6, colSpan: 1 })) });
+  if (action === 'toggle-repeat') table.rows[state.documentSelectedCell.row].repeat = !table.rows[state.documentSelectedCell.row].repeat;
+  if (action === 'add-column' && table.columns.length < 12) { table.columns.push({ id: documentId('col'), width: 8, label: `Column ${table.columns.length + 1}` }); table.rows.forEach((row) => row.cells.push({ id: documentId('cell'), content: '', binding: '', alignment: 'left', padding: 6, colSpan: 1 })); fitDocumentColumnWidths(table, table.columns.length - 1, 8); }
+  if (action === 'merge-right') { const next = table.rows[state.documentSelectedCell.row].cells[state.documentSelectedCell.column + 1]; if (next && !next.hidden) { cell.colSpan = (cell.colSpan || 1) + (next.colSpan || 1); next.hidden = true; } }
+  renderDocumentDesigner();
+}
+
+async function saveDocumentTemplate() {
+  const template = activeDocumentTemplate(); if (!template) return;
+  const button = $('#saveDocumentTemplate'); if (button.disabled) return;
+  template.name = $('#documentTemplateName').value.trim() || 'Untitled document'; template.source = $('#documentTemplateSource').value; template.updatedAt = new Date().toISOString(); template.status = template.status === 'sample' ? 'draft' : template.status;
+  if (template.pages?.length) { template.page = structuredClone(template.pages[0].page); template.regions = structuredClone(template.pages[0].regions); }
+  localStorage.setItem(documentTemplateStorageKey, JSON.stringify(state.documentTemplates));
+  button.disabled = true; button.textContent = 'Saving…';
+  const snapshot = structuredClone(template);
+  try {
+    const saved = await api(`/api/document-templates/${encodeURIComponent(template.templateKey)}`, { method: 'PUT', body: JSON.stringify({ template: snapshot, revision: snapshot.serverRevision }) });
+    if (state.documentOriginalPdfFile) {
+      const sourceBody = new FormData(); sourceBody.append('pdf', state.documentOriginalPdfFile);
+      await api(`/api/document-templates/${encodeURIComponent(template.templateKey)}/source-pdf`, { method: 'PUT', body: sourceBody });
+      template.hasSourcePdf = true; state.documentOriginalPdfFile = null;
+    }
+    // Keep edits made while the request was in flight; they remain unsaved.
+    const currentDefinition = structuredClone(template); delete currentDefinition.serverRevision; delete currentDefinition.serverSnapshot; delete currentDefinition.hasSourcePdf;
+    const savedDefinition = structuredClone(snapshot); delete savedDefinition.serverRevision; delete savedDefinition.serverSnapshot; delete savedDefinition.hasSourcePdf;
+    const unchanged = JSON.stringify(currentDefinition) === JSON.stringify(savedDefinition);
+    template.serverRevision = saved.revision;
+    template.serverSnapshot = JSON.stringify(savedDefinition);
+    state.documentDirty = !unchanged;
+    localStorage.setItem(documentTemplateStorageKey, JSON.stringify(state.documentTemplates));
+    toast(unchanged ? 'Document template saved to server.' : 'Saved. Newer edits remain unsaved.');
+    renderDocumentDesigner();
+  } catch (error) { $('#documentOutputStatus').textContent = `Server save failed: ${error.message}. Local draft retained.`; }
+  finally { button.disabled = false; button.textContent = 'Save'; }
+}
+
+async function loadServerDocumentTemplates() {
+  const payload = await api('/api/document-templates');
+  for (const entry of payload.templates) {
+    const index = state.documentTemplates.findIndex((item) => item.templateKey === entry.template.templateKey);
+    const serverCopy = { ...entry.template, hasSourcePdf: entry.hasSourcePdf, serverRevision: entry.revision, serverSnapshot: JSON.stringify(entry.template) };
+    if (index < 0) state.documentTemplates.push(serverCopy);
+    else {
+      if (state.activeDocumentTemplateKey === entry.template.templateKey) continue;
+      const local = structuredClone(state.documentTemplates[index]); const baseline = local.serverSnapshot;
+      delete local.serverRevision; delete local.serverSnapshot; delete local.hasSourcePdf;
+      // Refresh unchanged server copies; never overwrite a local draft.
+      if (JSON.stringify(local) === baseline || (local.status === 'sample' && !state.documentRecoveredTemplateKeys.has(local.templateKey))) state.documentTemplates[index] = serverCopy;
+    }
+  }
+  renderDocumentTemplateList();
+}
+
+function documentOutputContext() {
+  const record = $('#documentOutputRecordId').value;
+  const workflow = $('#documentOutputWorkflowId').value.trim();
+  return { ...(record ? { recordId: Number(record) } : {}), ...(workflow ? { workflowRequestId: workflow } : {}) };
+}
+
+let documentPreviewSequence = 0;
+async function mountDocumentOutputFrame(frame, template, context, zoom = 100) {
+  frame.hidden = false;
+  await new Promise((resolve) => { frame.onload = resolve; frame.srcdoc = '<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\'"></head><body><main></main></body></html>'; });
+  const host = frame.contentDocument.querySelector('main');
+  const count = await DocumentOutput.mount(host, template, context);
+  const geometry = DocumentOutput.geometry(template.page);
+  host.style.transformOrigin = 'top left'; host.style.transform = `scale(${zoom / 100})`;
+  frame.style.width = `${geometry.width * zoom / 100}cm`; frame.style.height = `${geometry.height * count * zoom / 100}cm`;
+  const printStyle = frame.contentDocument.createElement('style'); printStyle.textContent = '@media screen{html,body{overflow:hidden}}@media print{main{transform:none!important}}'; host.append(printStyle);
+  return count;
+}
+
+async function updateDocumentOutputPreview() {
+  const sequence = ++documentPreviewSequence;
+  $('#documentOutputPreview').hidden = true;
+  $('#documentOutputStatus').textContent = 'Preparing preview…';
+  const template = structuredClone(activeDocumentTemplate()); if (!template) return;
+  const input = documentOutputContext();
+  let context = { system: { current_user: state.user?.name || '' } };
+  if (template.serverRevision) {
+    if ((input.recordId || input.workflowRequestId) && JSON.parse(template.serverSnapshot || '{}').source !== template.source) throw new Error('Save the changed data context before previewing record data.');
+    const resolved = await api(`/api/document-templates/${encodeURIComponent(template.templateKey)}/preview`, { method: 'POST', body: JSON.stringify({ ...input, revision: template.serverRevision }) });
+    context = resolved.context;
+  } else if (input.recordId || input.workflowRequestId) throw new Error('Save this template to the server before previewing record data.');
+  if (sequence !== documentPreviewSequence || state.documentDesignerMode !== 'preview') return;
+  const count = await mountDocumentOutputFrame($('#documentOutputPreview'), template, context, Number($('#documentZoom').value));
+  $('#documentOutputStatus').textContent = `${count} page${count === 1 ? '' : 's'} · ${input.recordId || input.workflowRequestId ? 'Authorized data' : 'Template-only preview; unbound fields are blank'} · Download PDF is the formal output.`;
+}
+
+async function downloadSavedDocumentPdf(templateKey, input, button) {
+  if (button.disabled) return;
+  const label = button.textContent; button.disabled = true; button.textContent = 'Generating PDF…'; button.setAttribute('aria-busy', 'true');
+  try {
+    const response = await fetch(`/api/document-templates/${encodeURIComponent(templateKey)}/render-pdf`, { method: 'POST', headers: { Authorization: `Bearer ${await currentAuthToken()}`, 'Content-Type': 'application/json' }, body: JSON.stringify(input) });
+    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'PDF generation failed');
+    if (!response.headers.get('content-type')?.includes('application/pdf')) throw new Error('Server did not return a PDF.');
+    const url = URL.createObjectURL(await response.blob()); const link = document.createElement('a');
+    link.href = url; link.download = response.headers.get('content-disposition')?.match(/filename="([^"]+)"/)?.[1] || 'document.pdf';
+    link.click(); setTimeout(() => URL.revokeObjectURL(url), 30000);
+  } finally { button.disabled = false; button.textContent = label; button.removeAttribute('aria-busy'); }
+}
+
+let recordDocumentContext = {};
+async function openRecordDocumentOutput(input) {
+  recordDocumentContext = input;
+  const dialog = $('#recordDocumentDialog'); if (!dialog.open) dialog.showModal();
+  $('#recordDocumentFrame').hidden = true; $('#recordDocumentStatus').textContent = 'Loading available templates…';
+  $('#recordDocumentTemplate').replaceChildren();
+  try {
+    const payload = await api('/api/document-templates/available', { method: 'POST', body: JSON.stringify(input) });
+    $('#recordDocumentTemplate').innerHTML = payload.templates.map((template) => `<option value="${escapeHtml(template.templateKey)}">${escapeHtml(template.name)}</option>`).join('');
+    $('#recordDocumentStatus').textContent = payload.templates.length ? 'Preview or download the selected document.' : 'No saved templates are available for this context.';
+  } catch (error) { $('#recordDocumentStatus').textContent = error.message; }
+}
+
+function renderWorkflowDocumentOutput(definition = activeWorkflowDefinition()) {
+  const key = definition?.workflowKey || $('#workflowDefinitionForm')?.elements.workflowKey?.value || 'new'; const output = state.workflowDocumentOutputs[key] || { enabled: false, templateKey: '', trigger: 'final_approval', format: 'pdf' };
+  $('#workflowDocumentEnabled').checked = output.enabled; $('#workflowDocumentTemplate').innerHTML = `<option value="">Select document template</option>${state.documentTemplates.map((template) => `<option value="${escapeHtml(template.templateKey)}">${escapeHtml(template.name)}</option>`).join('')}`; $('#workflowDocumentTemplate').value = output.templateKey || '';
+  $('#workflowDocumentTrigger').value = output.trigger; $('#workflowDocumentFormat').value = output.format; $('#workflowDocumentTemplate').disabled = !output.enabled; $('#workflowDocumentTrigger').disabled = !output.enabled; $('#workflowDocumentFormat').disabled = !output.enabled; $('#openWorkflowDocumentDesigner').disabled = !output.templateKey; $('#previewWorkflowDocument').disabled = !output.templateKey;
+}
+
+function saveWorkflowDocumentOutput() {
+  const key = activeWorkflowDefinition()?.workflowKey || $('#workflowDefinitionForm').elements.workflowKey.value || 'new';
+  state.workflowDocumentOutputs[key] = { enabled: $('#workflowDocumentEnabled').checked, templateKey: $('#workflowDocumentTemplate').value, trigger: $('#workflowDocumentTrigger').value, format: $('#workflowDocumentFormat').value };
+  localStorage.setItem(workflowDocumentStorageKey, JSON.stringify(state.workflowDocumentOutputs)); renderWorkflowDocumentOutput(activeWorkflowDefinition());
 }
 
 async function loadWorkflowDefinitions(selectKey = state.activeWorkflowKey) {
@@ -5645,7 +6339,7 @@ function renderWorkflowRequestDetail(payload) {
   if (state.user?.role === 'admin' && request.status === 'pending') actions.push('<button type="button" class="secondary danger-link" data-workflow-lifecycle="cancel">Cancel request</button>');
   const snapshot = payload.snapshot?.snapshot || {};
   const attachmentSection = `<section class="workflow-detail-section"><div class="workflow-detail-section-heading"><h3>Attachments</h3><span>${payload.attachments?.length || 0} files</span></div><div class="workflow-attachment-list">${(payload.attachments || []).map((attachment) => `<button type="button" class="secondary" data-workflow-attachment-download="${attachment.id}"><strong>${escapeHtml(attachment.fileName)}</strong><small>${escapeHtml(titleCaseMessage(attachment.purpose))} · ${Math.max(1, Math.ceil(attachment.fileSize / 1024))} KB</small></button>`).join('') || '<p class="muted">No attachments were added to this request.</p>'}</div></section>`;
-  $('#workflowRequestDetail').innerHTML = `<header class="workflow-request-detail-header"><div><span class="eyebrow">${escapeHtml(request.workflowName || request.workflowKey)}</span><h2>${escapeHtml(request.requestKey)}</h2><p>${escapeHtml(titleCaseMessage(payload.relationship))} view · ${escapeHtml(request.sourceModuleKey)} record #${escapeHtml(String(request.sourceRecordId))}</p></div><span class="status-pill ${workflowStatusClass(request.status)}">${escapeHtml(titleCaseMessage(request.status))}</span></header>
+  $('#workflowRequestDetail').innerHTML = `<header class="workflow-request-detail-header"><div><span class="eyebrow">${escapeHtml(request.workflowName || request.workflowKey)}</span><h2>${escapeHtml(request.requestKey)}</h2><p>${escapeHtml(titleCaseMessage(payload.relationship))} view · ${escapeHtml(request.sourceModuleKey)} record #${escapeHtml(String(request.sourceRecordId))}</p><button type="button" class="secondary" data-workflow-document-output>Document PDF</button></div><span class="status-pill ${workflowStatusClass(request.status)}">${escapeHtml(titleCaseMessage(request.status))}</span></header>
     <div class="workflow-request-actionbar">${actions.join('')}</div>${attachmentSection}
     <section class="workflow-detail-section"><div class="workflow-detail-section-heading"><h3>Approval rail</h3><span>Version ${request.workflowVersion}</span></div><div class="workflow-approval-rail">${payload.stages.map((stage, index) => `<article class="${workflowStageTone(stage)}"><span class="workflow-rail-marker">${['approved', 'auto-approved'].includes(stage.status) ? '✓' : index + 1}</span><div><strong>${escapeHtml(stage.name || stage.stageKey)}</strong><small>${escapeHtml(titleCaseMessage(stage.status))}${stage.dueAt ? ` · Due ${escapeHtml(new Date(stage.dueAt).toLocaleString())}` : ''}</small>${stage.reasonMessage ? `<p>${escapeHtml(stage.reasonMessage)}</p>` : ''}</div></article>`).join('')}</div></section>
     <section class="workflow-detail-section"><div class="workflow-detail-section-heading"><h3>Protected snapshot</h3><span>${escapeHtml(payload.presentation?.formName || 'Permitted fields')} · Revision ${payload.snapshot?.revisionNumber || 1}</span></div><dl class="workflow-snapshot-grid">${Object.entries(snapshot).map(([key, value]) => `<div><dt>${escapeHtml(titleCaseMessage(key))}</dt><dd>${escapeHtml(typeof value === 'object' ? JSON.stringify(value) : String(value ?? '—'))}</dd></div>`).join('') || '<div><dt>Visible fields</dt><dd>No fields are available in this node form under your field permissions.</dd></div>'}</dl></section>
@@ -11789,8 +12483,115 @@ function bindEvents() {
           toast(titleCaseMessage(error.message), 'error');
         }
       }
+      if (button.dataset.adminSection === 'adminDocumentTemplatesSection') {
+        closeDocumentDesigner();
+        renderDocumentTemplateList();
+        await loadServerDocumentTemplates().catch((error) => toast(error.message, 'error'));
+      }
     });
   });
+  $('#newDocumentTemplateButton')?.addEventListener('click', () => {
+    state.documentImportResult = null; $('#documentPdfImportForm').hidden = true; $('#documentImportSummary').innerHTML = ''; $('#importAnalyzedDocument').hidden = true; $('#documentCreateDialog').showModal();
+  });
+  $('#closeDocumentCreateDialog')?.addEventListener('click', () => $('#documentCreateDialog').close());
+  $('#documentCreateDialog')?.addEventListener('click', (event) => {
+    const start = event.target.closest('[data-document-start]'); if (!start) return;
+    if (start.dataset.documentStart === 'pdf') { $('#documentPdfImportForm').hidden = false; $('#documentPdfFile').focus(); return; }
+    const template = start.dataset.documentStart === 'duplicate' ? duplicateDocumentTemplate() : blankDocumentTemplate();
+    state.documentTemplates.unshift(template); $('#documentCreateDialog').close(); openDocumentDesigner(template.templateKey);
+  });
+  $('#documentPdfImportForm')?.addEventListener('submit', analyzeDocumentPdf);
+  $('#importAnalyzedDocument')?.addEventListener('click', importAnalyzedDocument);
+  $('#documentTemplateList')?.addEventListener('click', (event) => {
+    const open = event.target.closest('[data-open-document-template]'); const preview = event.target.closest('[data-preview-document-template]');
+    if (open) openDocumentDesigner(open.dataset.openDocumentTemplate);
+    if (preview) openDocumentDesigner(preview.dataset.previewDocumentTemplate, true);
+  });
+  $('#closeDocumentDesigner')?.addEventListener('click', closeDocumentDesigner);
+  $('#documentDesignMode')?.addEventListener('click', () => { state.documentDesignerMode = 'design'; renderDocumentDesigner(); });
+  $('#documentPreviewMode')?.addEventListener('click', () => { state.documentDesignerMode = 'preview'; renderDocumentDesigner(); });
+  $('#documentCompareMode')?.addEventListener('change', (event) => { state.documentCompareMode = event.target.value; renderDocumentDesigner(); });
+  $('#documentOriginalOpacity')?.addEventListener('input', renderDocumentDesigner);
+  $('#documentPreviousPage')?.addEventListener('click', () => { state.documentPageIndex = Math.max(0, state.documentPageIndex - 1); state.documentSelectedElementId = ''; state.documentSelectedCell = null; renderDocumentDesigner(); });
+  $('#documentNextPage')?.addEventListener('click', () => { state.documentPageIndex = Math.min(documentPhysicalPages().length - 1, state.documentPageIndex + 1); state.documentSelectedElementId = ''; state.documentSelectedCell = null; renderDocumentDesigner(); });
+  for (const id of ['documentOutputRecordId', 'documentOutputWorkflowId']) $(`#${id}`)?.addEventListener('change', () => { if (state.documentDesignerMode === 'preview') renderDocumentDesigner(); });
+  $('#downloadDocumentPdf')?.addEventListener('click', async () => {
+    const template = activeDocumentTemplate(); if (!template) return;
+    const current = structuredClone(template); delete current.serverRevision; delete current.serverSnapshot; delete current.hasSourcePdf;
+    if (!template.serverRevision || JSON.stringify(current) !== template.serverSnapshot || $('#documentTemplateName').value.trim() !== template.name) { $('#documentOutputStatus').textContent = 'Save your current template to the server before downloading.'; return; }
+    try { await downloadSavedDocumentPdf(template.templateKey, { ...documentOutputContext(), revision: template.serverRevision }, $('#downloadDocumentPdf')); $('#documentOutputStatus').textContent = 'PDF downloaded. Your draft is unchanged.'; }
+    catch (error) { $('#documentOutputStatus').textContent = error.message; }
+  });
+  $('#documentZoom')?.addEventListener('input', renderDocumentDesigner);
+  $('#saveDocumentTemplate')?.addEventListener('click', saveDocumentTemplate);
+  $('#printDocumentTemplate')?.addEventListener('click', async () => {
+    state.documentDesignerMode = 'preview'; renderDocumentDesigner();
+    try { await updateDocumentOutputPreview(); $('#documentOutputPreview').contentWindow.print(); }
+    catch (error) { $('#documentOutputStatus').textContent = error.message; }
+  });
+  $('#closeRecordDocument')?.addEventListener('click', () => $('#recordDocumentDialog').close());
+  $('#recordDocumentTemplate')?.addEventListener('change', () => { $('#recordDocumentFrame').hidden = true; });
+  $('#recordDocumentPreview')?.addEventListener('click', async () => {
+    const key = $('#recordDocumentTemplate').value; if (!key) return;
+    const { moduleKey, ...input } = recordDocumentContext;
+    try { const resolved = await api(`/api/document-templates/${encodeURIComponent(key)}/preview`, { method: 'POST', body: JSON.stringify(input) }); await mountDocumentOutputFrame($('#recordDocumentFrame'), resolved.template, resolved.context, 75); $('#recordDocumentStatus').textContent = 'Preview uses the same renderer as Download PDF.'; }
+    catch (error) { $('#recordDocumentStatus').textContent = error.message; }
+  });
+  $('#recordDocumentDownload')?.addEventListener('click', async () => {
+    const key = $('#recordDocumentTemplate').value; if (!key) return;
+    const { moduleKey, ...input } = recordDocumentContext;
+    try { await downloadSavedDocumentPdf(key, input, $('#recordDocumentDownload')); $('#recordDocumentStatus').textContent = 'PDF downloaded.'; }
+    catch (error) { $('#recordDocumentStatus').textContent = error.message; }
+  });
+  $('#customerDocumentOutput')?.addEventListener('click', () => { const recordId = Number($('#customerForm').elements.id.value); if (recordId) void openRecordDocumentOutput({ moduleKey: 'customers', recordId }); else toast('Save the record first.'); });
+  $('#moduleDocumentOutput')?.addEventListener('click', () => { const recordId = Number($('#moduleRecordForm').elements.id.value); if (recordId) void openRecordDocumentOutput({ moduleKey: state.activeRuntimeModuleKey, recordId }); else toast('Save the record first.'); });
+  $('#workflowRequestDetail')?.addEventListener('click', (event) => { if (event.target.closest('[data-workflow-document-output]')) void openRecordDocumentOutput({ workflowRequestId: state.activeWorkflowRequestKey }); });
+  $('#documentUndo')?.addEventListener('click', () => restoreDocumentHistory(false));
+  $('#documentRedo')?.addEventListener('click', () => restoreDocumentHistory(true));
+  $$('#documentDesignerWorkspace [data-add-document-element]').forEach((button) => button.addEventListener('click', () => insertDocumentElement(button.dataset.addDocumentElement)));
+  $('#documentTemplateSource')?.addEventListener('change', (event) => { const template = activeDocumentTemplate(); if (!template) return; captureDocumentHistory(); template.source = event.target.value; renderDocumentDesigner(); });
+  $('#documentPage')?.addEventListener('click', (event) => {
+    if (state.documentDesignerMode === 'preview') return;
+    const cell = event.target.closest('[data-document-cell]'); const element = event.target.closest('[data-document-element]'); const region = event.target.closest('[data-document-region]');
+    if (region) {
+      state.documentSelectedRegion = region.dataset.documentRegion;
+      const page = activeDocumentPhysicalPage().page; const columns = state.documentSelectedRegion === 'header' ? page.headerColumns : state.documentSelectedRegion === 'footer' ? page.footerColumns : 1; const bounds = region.getBoundingClientRect();
+      state.documentSelectedColumn = Math.min(columns, Math.max(1, Math.floor(((event.clientX - bounds.left) / Math.max(1, bounds.width)) * columns) + 1));
+    }
+    if (cell) { const [tableId, row, column] = cell.dataset.documentCell.split(':'); state.documentSelectedElementId = tableId; state.documentSelectedCell = { tableId, row: Number(row), column: Number(column) }; }
+    else if (element) { state.documentSelectedElementId = element.dataset.documentElement; state.documentSelectedCell = null; }
+    else { state.documentSelectedElementId = ''; state.documentSelectedCell = null; }
+    renderDocumentDesigner();
+  });
+  $('#documentFieldPalette')?.addEventListener('click', (event) => { const field = event.target.closest('[data-insert-document-field]'); const element = event.target.closest('[data-add-document-element]'); if (field) insertDocumentField(field.dataset.insertDocumentField, field.dataset.documentFieldLabel); if (element) insertDocumentElement(element.dataset.addDocumentElement); });
+  $('#documentFieldPalette')?.addEventListener('dragstart', (event) => { const field = event.target.closest('[data-insert-document-field]'); if (!field) return; event.dataTransfer.effectAllowed = 'copy'; event.dataTransfer.setData('application/x-babyyy-document-field', JSON.stringify({ binding: field.dataset.insertDocumentField, label: field.dataset.documentFieldLabel })); });
+  $('#documentPage')?.addEventListener('dragover', (event) => { if (event.dataTransfer.types.includes('application/x-babyyy-document-field')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } });
+  $('#documentPage')?.addEventListener('drop', (event) => { const payload = event.dataTransfer.getData('application/x-babyyy-document-field'); if (!payload) return; event.preventDefault(); const region = event.target.closest('[data-document-region]'); if (region) { state.documentSelectedRegion = region.dataset.documentRegion; const columns = state.documentSelectedRegion === 'header' ? activeDocumentTemplate().page.headerColumns : state.documentSelectedRegion === 'footer' ? activeDocumentTemplate().page.footerColumns : 1; const bounds = region.getBoundingClientRect(); state.documentSelectedColumn = Math.min(columns, Math.max(1, Math.floor(((event.clientX - bounds.left) / Math.max(1, bounds.width)) * columns) + 1)); } const field = parseStoredJson(payload); if (field?.binding) insertDocumentField(field.binding, field.label); });
+  $('#documentFieldsTab')?.addEventListener('click', () => { state.documentPaletteTab = 'fields'; renderDocumentFieldPalette(); });
+  $('#documentElementsTab')?.addEventListener('click', () => { state.documentPaletteTab = 'elements'; renderDocumentFieldPalette(); });
+  $('#documentFieldSearch')?.addEventListener('input', (event) => { state.documentFieldQuery = event.target.value; renderDocumentFieldPalette(); $('#documentFieldSearch').focus(); });
+  $('#documentCoordinateSystem')?.addEventListener('pointerdown', (event) => { if (state.documentDesignerMode === 'preview') return; const margin = event.target.closest('[data-document-margin-handle]'); const indent = event.target.closest('[data-document-indent-handle]'); const column = event.target.closest('[data-document-column-marker]'); const rowHeight = event.target.closest('[data-document-row-height-handle]'); if (!(margin || indent || column || rowHeight)) return; event.preventDefault(); event.target.setPointerCapture?.(event.pointerId); captureDocumentHistory(); if (margin) { state.documentMarginDrag = { side: margin.dataset.documentMarginHandle, pointerId: event.pointerId }; updateDocumentMarginDrag(event); } else if (rowHeight) { state.documentRulerDrag = { kind: 'row-height', rowTopCm: Number(rowHeight.dataset.documentRowTopCm), pointerId: event.pointerId }; updateDocumentRulerDrag(event); } else { state.documentRulerDrag = indent ? { kind: 'indent', side: indent.dataset.documentIndentHandle, pointerId: event.pointerId } : { kind: 'column', index: Number(column.dataset.documentColumnMarker), pointerId: event.pointerId }; updateDocumentRulerDrag(event); } });
+  document.addEventListener('pointermove', (event) => { if (state.documentMarginDrag) updateDocumentMarginDrag(event); if (state.documentRulerDrag) updateDocumentRulerDrag(event); });
+  document.addEventListener('pointerup', () => { if (state.documentMarginDrag) { state.documentMarginDrag = null; renderDocumentDesigner(); $('#documentDesignerAnnouncement').textContent = 'Page margin updated.'; } if (state.documentRulerDrag) { state.documentRulerDrag = null; renderDocumentDesigner(); $('#documentDesignerAnnouncement').textContent = 'Selected content geometry updated.'; } });
+  $('#documentProperties')?.addEventListener('change', (event) => updateDocumentProperty(event.target));
+  window.addEventListener('beforeprint', prepareDocumentPrint);
+  window.addEventListener('afterprint', restoreDocumentAfterPrint);
+  $('#documentProperties')?.addEventListener('change', (event) => updateDocumentPageProperty(event.target));
+  $('#documentPropertiesTab')?.addEventListener('click', () => { state.documentPropertiesTab = 'properties'; renderDocumentDesigner(); });
+  $('#documentPageTab')?.addEventListener('click', () => { state.documentPropertiesTab = 'page'; renderDocumentDesigner(); });
+  $('#documentProperties')?.addEventListener('click', (event) => {
+    const suggestionBind = event.target.closest('[data-document-suggestion-bind]');
+    if (suggestionBind) { const { element, cell } = selectedDocumentTarget(); const binding = suggestionBind.dataset.documentSuggestionBind; const label = documentSuggestionFields().find((field) => field.binding === binding)?.label || titleCaseMessage(binding.split('.').pop()); captureDocumentHistory(); if (cell) cell.binding = binding; else if (element) { element.type = 'field'; element.binding = binding; element.label = label; } renderDocumentDesigner(); return; }
+    const suggestionReject = event.target.closest('[data-document-suggestion-reject]');
+    if (suggestionReject) { const { element, table, cell } = selectedDocumentTarget(); const target = documentSuggestionTarget(element, table, cell); state.documentRejectedSuggestions.add(`${target.id}:${suggestionReject.dataset.documentSuggestionReject}`); renderDocumentDesigner(); return; }
+    const action = event.target.closest('[data-document-table-action]'); if (action) return documentTableAction(action.dataset.documentTableAction);
+    if (event.target.closest('[data-open-document-page-settings]')) { state.documentPropertiesTab = 'page'; renderDocumentDesigner(); return; }
+    if (event.target.closest('[data-document-static-text]')) { const { element } = selectedDocumentTarget(); if (!element) return; captureDocumentHistory(); element.type = 'text'; element.content = element.label || titleCaseMessage(element.binding); delete element.binding; delete element.label; renderDocumentDesigner(); return; }
+    if (event.target.closest('[data-remove-document-element]')) { const { template, element } = selectedDocumentTarget(); if (!element) return; captureDocumentHistory(); const regions = activeDocumentPhysicalPage(template).regions; regions[state.documentSelectedRegion] = regions[state.documentSelectedRegion].filter((item) => item.id !== element.id); state.documentSelectedElementId = ''; renderDocumentDesigner(); }
+  });
+  for (const id of ['workflowDocumentEnabled', 'workflowDocumentTemplate', 'workflowDocumentTrigger', 'workflowDocumentFormat']) $(`#${id}`)?.addEventListener('change', saveWorkflowDocumentOutput);
+  $('#openWorkflowDocumentDesigner')?.addEventListener('click', () => { const key = $('#workflowDocumentTemplate').value; if (key) { showAdminSection('adminDocumentTemplatesSection'); openDocumentDesigner(key); } });
+  $('#previewWorkflowDocument')?.addEventListener('click', () => { const key = $('#workflowDocumentTemplate').value; if (key) { showAdminSection('adminDocumentTemplatesSection'); openDocumentDesigner(key, true); } });
   $('#addMenuGroup')?.addEventListener('click', () => {
     const label = 'New group'; const key = menuStableKey(label);
     state.menuConfigDraft.items.push({ key, type: 'group', parentKey: null, label, icon: 'none', enabled: true, order: state.menuConfigDraft.items.length + 1, destination: null, visibility: { roles: [], userIds: [], departmentIds: [] } });
@@ -14467,6 +15268,7 @@ function debounce(fn, wait) {
 }
 
 async function init() {
+  loadDocumentPrototypeState();
   try {
     await loadAuthConfig();
   } catch (error) {

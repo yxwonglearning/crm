@@ -142,6 +142,7 @@
               <div id="customerFormFields"></div>
               <div class="form-actions">
                 <button type="submit">Save Customer</button>
+                <button type="button" class="secondary" id="customerDocumentOutput">Document PDF</button>
                 <button type="button" class="secondary" id="clearCustomerForm">Clear</button>
               </div>
             </form>
@@ -250,6 +251,7 @@
               <div id="moduleRecordFormFields"></div>
               <div class="form-actions">
                 <button type="submit" id="saveModuleRecordButton">Save Record</button>
+                <button type="button" class="secondary" id="moduleDocumentOutput">Document PDF</button>
                 <button type="button" class="secondary" id="cancelModuleRecordButton">Cancel</button>
               </div>
             </form>
@@ -440,6 +442,10 @@
               <button type="button" class="admin-section-button" data-admin-section="adminWorkflowSection" data-short="W">
                 <span>Approval Workflow</span>
                 <small>Stages, approvers, and publish state</small>
+              </button>
+              <button type="button" class="admin-section-button" data-admin-section="adminDocumentTemplatesSection" data-short="DT">
+                <span>Document Templates</span>
+                <small>Printable layouts and data bindings</small>
               </button>
               <button type="button" class="admin-section-button" data-admin-section="adminApiSection" data-short="API">
                 <span>API</span>
@@ -1014,10 +1020,94 @@
                       <div class="workflow-config-card-heading"><div><span class="workflow-config-index">04</span><div><h3>Linked Automation Flows</h3><p>Published Automation Flows can react after this workflow records an event.</p></div></div></div>
                       <div id="workflowLinkedAutomationFlows" class="workflow-stage-editor"></div>
                     </section>
+                    <section class="workflow-config-card" id="workflowDocumentOutputCard">
+                      <div class="workflow-config-card-heading"><div><span class="workflow-config-index">05</span><div><h3>Document output</h3><p>Reference a reusable template without making it part of this workflow.</p></div></div><span class="status-pill status-draft">Prototype</span></div>
+                      <div class="workflow-document-output-grid">
+                        <label class="checkbox-label workflow-document-toggle"><input id="workflowDocumentEnabled" type="checkbox"><span><strong>Generate document after approval</strong><small>Create the selected output when this route reaches its configured event.</small></span></label>
+                        <label>Template<select id="workflowDocumentTemplate"></select></label>
+                        <label>Generate when<select id="workflowDocumentTrigger"><option value="final_approval">Final approval</option></select></label>
+                        <label>Output<select id="workflowDocumentFormat"><option value="pdf">PDF</option></select></label>
+                      </div>
+                      <div class="form-actions workflow-document-actions"><button type="button" class="secondary" id="openWorkflowDocumentDesigner">Open Document Designer</button><button type="button" class="secondary" id="previewWorkflowDocument">Preview</button><small id="workflowDocumentSaveHint">Prototype settings are saved with the browser draft.</small></div>
+                    </section>
                     <section id="workflowCheckPanel" class="workflow-check-panel" hidden></section>
                     <footer class="workflow-definition-footer"><button type="button" class="secondary danger-link" id="archiveWorkflowDefinitionButton">Archive workflow</button><span class="muted">Published requests retain the exact version with which they started.</span></footer>
                   </form>
                 </main>
+              </div>
+            </section>
+
+            <section id="adminDocumentTemplatesSection" class="admin-section document-templates-section" hidden>
+              <div id="documentTemplateManagement" class="document-template-management">
+                <header class="toolbar document-template-management-header">
+                  <div><span class="eyebrow">Document Templates</span><h2>Print-ready business documents</h2><p>Build reusable layouts independently from data-entry forms and workflow routes.</p></div>
+                  <button type="button" id="newDocumentTemplateButton">Create template</button>
+                </header>
+                <div class="document-template-overview">
+                  <div><strong id="documentTemplateCount">0</strong><span>Templates</span></div>
+                  <div><strong>A4</strong><span>Prototype page format</span></div>
+                  <div><strong>Generic</strong><span>Module, form, workflow, or system data</span></div>
+                </div>
+                <div id="documentTemplateList" class="document-template-list" aria-live="polite"></div>
+              </div>
+
+              <div id="documentDesignerWorkspace" class="document-designer-workspace" hidden>
+                <header class="document-designer-titlebar">
+                  <button type="button" class="secondary" id="closeDocumentDesigner" aria-label="Back to Document Templates">← Templates</button>
+                  <label>Template name<input id="documentTemplateName" maxlength="160"></label>
+                  <label>Data context<select id="documentTemplateSource"></select></label>
+                  <div class="document-designer-title-actions">
+                    <button type="button" class="secondary" id="documentDesignMode" aria-pressed="true">Design</button>
+                    <button type="button" class="secondary" id="documentPreviewMode" aria-pressed="false">Preview</button>
+                    <div class="document-compare-controls" id="documentCompareControls" hidden>
+                      <label>View<select id="documentCompareMode"><option value="generated">Generated</option><option value="original">Original</option><option value="overlay">Overlay</option></select></label>
+                      <label id="documentOriginalOpacityLabel" hidden>Original opacity<input id="documentOriginalOpacity" type="range" min="10" max="90" step="10" value="40"></label>
+                    </div>
+                    <nav class="document-page-navigation" id="documentPageNavigation" aria-label="Imported PDF pages" hidden><button type="button" class="secondary" id="documentPreviousPage">Previous</button><strong id="documentPagePosition">Page 1 of 1</strong><button type="button" class="secondary" id="documentNextPage">Next</button></nav>
+                    <button type="button" id="downloadDocumentPdf">Download PDF</button>
+                    <button type="button" class="secondary" id="printDocumentTemplate" title="Convenience browser print. Use Download PDF for formal output.">Print</button>
+                    <button type="button" id="saveDocumentTemplate">Save</button>
+                  </div>
+                </header>
+                <div class="document-designer-toolbar" role="toolbar" aria-label="Document editing tools">
+                  <button type="button" class="secondary" id="documentUndo" aria-label="Undo document change">↶ Undo</button>
+                  <button type="button" class="secondary" id="documentRedo" aria-label="Redo document change">↷ Redo</button>
+                  <span class="document-toolbar-divider" aria-hidden="true"></span>
+                  <button type="button" class="secondary" data-add-document-element="text">+ Text</button>
+                  <button type="button" class="secondary" data-add-document-element="image">+ Image</button>
+                  <button type="button" class="secondary" data-add-document-element="table">+ Table</button>
+                  <span class="document-toolbar-hint">Select a region or table cell, then insert content.</span>
+                  <label>Record ID<input id="documentOutputRecordId" type="number" min="1" placeholder="Optional"></label>
+                  <label>Workflow request<input id="documentOutputWorkflowId" placeholder="Optional"></label>
+                  <label class="document-zoom-control">Zoom <input id="documentZoom" type="range" min="50" max="150" step="25" value="100"><output id="documentZoomLabel">100%</output></label>
+                </div>
+                <div class="document-designer-shell">
+                  <aside class="document-field-palette" aria-label="Available document fields">
+                    <div class="document-palette-tabs" role="tablist" aria-label="Insert content"><button type="button" id="documentFieldsTab" role="tab" aria-selected="true">Fields</button><button type="button" id="documentElementsTab" role="tab" aria-selected="false">Elements</button></div>
+                    <label class="document-field-search"><span class="sr-only">Search fields</span><input id="documentFieldSearch" type="search" placeholder="Search fields…" autocomplete="off"></label>
+                    <div id="documentFieldPalette"></div>
+                    <div class="document-insert-helper"><span aria-hidden="true">⇲</span><div><strong>Drag or click to insert</strong><p>Drag fields into the document or click to insert at cursor.</p></div></div>
+                  </aside>
+                  <main class="document-canvas-workspace">
+                    <iframe id="documentOutputPreview" title="Document PDF preview" sandbox="allow-same-origin allow-modals" hidden></iframe>
+                    <div id="documentPageViewport" class="document-page-viewport">
+                      <div id="documentCoordinateSystem" class="document-coordinate-system">
+                        <div class="document-ruler-corner" aria-hidden="true">cm</div>
+                        <div class="document-ruler document-horizontal-ruler" aria-label="Horizontal page ruler"><div id="documentRulerTicks"></div></div>
+                        <div class="document-ruler document-vertical-ruler" aria-label="Vertical page ruler"><div id="documentVerticalRulerTicks"></div></div>
+                        <article id="documentPage" class="document-page is-design" aria-label="A4 document page"></article>
+                        <embed id="documentOriginalPdf" class="document-original-pdf" type="application/pdf" hidden>
+                      </div>
+                    </div>
+                  </main>
+                  <aside class="document-properties-panel" aria-label="Selected item properties">
+                    <div class="document-properties-tabs" role="tablist" aria-label="Document settings"><button type="button" id="documentPropertiesTab" role="tab" aria-selected="true">Properties</button><button type="button" id="documentPageTab" role="tab" aria-selected="false">Page</button></div>
+                    <div class="document-panel-heading"><span class="eyebrow">Format</span><h3 id="documentPropertiesTitle">Properties</h3><p id="documentSelectionHelp">Select an element or cell to edit it.</p></div>
+                    <div id="documentProperties"></div>
+                  </aside>
+                </div>
+                <p id="documentOutputStatus" role="status" aria-live="polite">Download PDF is the recommended formal output. Enter a record ID or workflow request for live data.</p>
+                <p id="documentDesignerAnnouncement" class="sr-only" role="status" aria-live="polite"></p>
               </div>
             </section>
 
@@ -2331,6 +2421,32 @@
       </form>
     </div>
     <script src="/draft-history.js"></script>
+    <dialog id="recordDocumentDialog" aria-labelledby="recordDocumentTitle">
+      <h2 id="recordDocumentTitle">Document output</h2>
+      <p>Select a saved template. Only documents for records you can view are available.</p>
+      <label>Template<select id="recordDocumentTemplate"></select></label>
+      <p id="recordDocumentStatus" role="status"></p>
+      <div class="form-actions"><button type="button" id="recordDocumentPreview">Preview</button><button type="button" id="recordDocumentDownload">Download PDF</button><button type="button" class="secondary" id="closeRecordDocument">Close</button></div>
+      <iframe id="recordDocumentFrame" title="Record document preview" sandbox="allow-same-origin" hidden></iframe>
+    </dialog>
+    <dialog id="documentCreateDialog" aria-labelledby="documentCreateTitle" class="document-import-dialog">
+      <div class="document-import-heading"><span class="eyebrow">Create template</span><h2 id="documentCreateTitle">Choose a starting point</h2><p>Import creates an editable draft for review; it does not change the existing Preview or PDF output path.</p></div>
+      <div class="document-start-options">
+        <button type="button" data-document-start="blank"><strong>Blank template</strong><small>Start with the standard A4 document structure.</small></button>
+        <button type="button" data-document-start="pdf"><strong>Import from PDF</strong><small>Analyze a digital A4 PDF and create editable pages.</small></button>
+        <button type="button" data-document-start="duplicate"><strong>Duplicate existing</strong><small>Copy the most recently updated template.</small></button>
+      </div>
+      <form id="documentPdfImportForm" hidden>
+        <ol class="document-import-steps"><li class="is-current">Upload PDF</li><li>Analyze document</li><li>Review structure</li><li>Import &amp; Edit</li></ol>
+        <label class="document-pdf-drop">PDF file<input id="documentPdfFile" name="pdf" type="file" accept="application/pdf,.pdf" required><small>Digital A4 PDF · up to 25 pages · maximum 10 MB · scanned PDFs are not supported yet</small></label>
+        <div id="documentImportSummary" class="document-import-summary" aria-live="polite"></div>
+        <div class="form-actions"><button type="submit" id="analyzeDocumentPdf">Analyze PDF</button><button type="button" id="importAnalyzedDocument" hidden>Import &amp; Edit</button></div>
+      </form>
+      <div class="form-actions"><button type="button" class="secondary" id="closeDocumentCreateDialog">Cancel</button></div>
+    </dialog>
+    <link rel="stylesheet" href="/document-output-ui.css">
+    <script src="/document-output.js"></script>
+    <script src="/document-binding-suggestions.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

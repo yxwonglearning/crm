@@ -150,6 +150,10 @@ async function main() {
   const schemaPath = path.join(__dirname, 'schema.sql');
   const schema = await fs.readFile(schemaPath, 'utf8');
   await connection.query(schema);
+  await connection.query(await fs.readFile(path.join(__dirname, 'document-templates.sql'), 'utf8'));
+  await ensureColumn(connection, 'crm_document_templates', 'source_pdf', '`source_pdf` LONGBLOB NULL AFTER `revision`');
+  await ensureColumn(connection, 'crm_document_templates', 'source_pdf_name', '`source_pdf_name` VARCHAR(255) NULL AFTER `source_pdf`');
+  await ensureColumn(connection, 'crm_document_templates', 'source_pdf_checksum', '`source_pdf_checksum` CHAR(64) NULL AFTER `source_pdf_name`');
   await dropIndexIfExists(connection, 'users', 'users_clerk_user_id_unique');
   await dropColumnIfExists(connection, 'users', 'clerk_user_id');
   await ensureColumn(connection, 'users', 'staff_id', 'staff_id VARCHAR(80) NULL AFTER id');

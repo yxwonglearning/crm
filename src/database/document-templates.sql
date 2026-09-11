@@ -1,0 +1,10 @@
+CREATE TABLE IF NOT EXISTS crm_document_templates (
+  template_key VARCHAR(100) NOT NULL PRIMARY KEY,
+  definition JSON NOT NULL,
+  revision INT UNSIGNED NOT NULL DEFAULT 1,
+  source_pdf LONGBLOB NULL,
+  source_pdf_name VARCHAR(255) NULL,
+  source_pdf_checksum CHAR(64) NULL,
+  updated_by BIGINT UNSIGNED NOT NULL,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
