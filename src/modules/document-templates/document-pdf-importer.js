@@ -1,11 +1,14 @@
 const { AppError } = require('../../shared/errors');
 const zlib = require('node:zlib');
+const { OCRExtractor } = require('./ocr-extractor');
 
 const POINTS_PER_CM = 72 / 2.54;
 const MAX_PDF_BYTES = 10 * 1024 * 1024;
 const MAX_PDF_PAGES = 25;
 const round = (value, digits = 2) => Number(Number(value).toFixed(digits));
 const safeId = (prefix, index) => `${prefix}_${index + 1}`;
+const usefulTextLength = (lines) => lines.reduce((sum, line) => sum + line.text.replace(/\s/g, '').length, 0);
+const requiresOcr = (lines, imageCount = 1) => imageCount > 0 && (!lines.length || (lines.length < 2 && usefulTextLength(lines) < 20));
 
 function crc32(buffer) {
   let crc = 0xffffffff;
@@ -297,7 +300,7 @@ function imageElement(image, index, pageWidth, margins) {
 }
 
 async function analyzePdf(buffer, name = 'Imported PDF') {
-  let pdf; let loadingTask; let pdfjs;
+  let pdf; let loadingTask; let pdfjs; const ocr = new OCRExtractor();
   try {
     pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
     loadingTask = pdfjs.getDocument({ data: new Uint8Array(buffer), disableWorker: true, isEvalSupported: false, useSystemFonts: true, stopAtErrors: true, maxImageSize: 10_000_000 });
@@ -321,11 +324,18 @@ async function analyzePdf(buffer, name = 'Imported PDF') {
     try { text = await page.getTextContent({ disableNormalization: false }); operators = await page.getOperatorList(); } catch { throw new AppError(`Page ${pageNumber} is corrupted or unsupported. No pages were imported.`, 422); }
     const OPS = pdfjs.OPS;
     const imageCount = operators.fnArray.filter((operation) => [OPS.paintImageXObject, OPS.paintInlineImageXObject, OPS.paintImageMaskXObject].includes(operation)).length;
-    const extractedImages = await extractImages(page, operators, pdfjs, viewport, imageCache);
-    const vectorSegments = extractVectorSegments(operators, pdfjs, viewport);
+    let lines = groupTextItems(text.items, viewport.height);
+    if (!lines.length && !imageCount) throw new AppError(`Page ${pageNumber} is corrupted or contains no importable content. No pages were imported.`, 422);
+    const extractionMethod = requiresOcr(lines, imageCount) ? 'ocr' : 'digital';
+    let ocrResult = null;
+    if (extractionMethod === 'ocr') {
+      ocrResult = await ocr.extract(page, viewport, pageNumber);
+      lines = ocrResult.lines;
+      if (!lines.length) throw new AppError(`OCR could not recognize usable text on page ${pageNumber}. No pages were imported.`, 422);
+    }
+    const extractedImages = extractionMethod === 'digital' ? await extractImages(page, operators, pdfjs, viewport, imageCache) : [];
+    const vectorSegments = extractionMethod === 'digital' ? extractVectorSegments(operators, pdfjs, viewport) : [];
     const lineCount = operators.fnArray.filter((operation) => operation === OPS.constructPath || operation === OPS.stroke).length;
-    const lines = groupTextItems(text.items, viewport.height);
-    if (!lines.length) throw new AppError(`Page ${pageNumber} appears scanned or image-only. No pages were imported.`, 422);
     const margins = { top: 1, right: 1, bottom: 1, left: 1 };
     const possibleHeader = lines.filter((line) => line.y < viewport.height * .14); const possibleFooter = lines.filter((line) => line.y > viewport.height * .86);
     const headerLines = lines.filter((line) => line.y < viewport.height * .08);
@@ -347,7 +357,9 @@ async function analyzePdf(buffer, name = 'Imported PDF') {
     detectedTables.forEach((table, index) => regions.body.push({ y: table.y, element: tableElement(table, idOffset + index) }));
     for (const region of Object.keys(regions)) regions[region] = regions[region].sort((a, b) => a.y - b.y).map((entry) => entry.element);
     return { page: { size: 'A4', orientation, margins, headerFromTop: .7, footerFromBottom: .7, showMarginGuides: true, showGrid: false, headerColumns: 1, footerColumns: 1 }, regions,
-      summary: { pageNumber, page: { width: round(widthCm), height: round(heightCm), size: 'A4', orientation }, textBlocks: lines.length, images: imageCount, importedImages: extractedImages.length, skippedImages: Math.max(0, imageCount - extractedImages.length), lines: lineCount, tables: detectedTables.length, possibleHeader: possibleHeader.length ? { confidence: headerLines.length ? 'high' : 'medium' } : null, possibleFooter: possibleFooter.length ? { confidence: footerLines.length ? 'high' : 'medium' } : null, possibleRepeatingRow: detectedTables.length ? { confidence: 'low' } : null } };
+      summary: { pageNumber, page: { width: round(widthCm), height: round(heightCm), size: 'A4', orientation }, extractionMethod,
+        ocr: ocrResult ? { confidence: ocrResult.confidence, reviewRecommended: ocrResult.confidence !== 'high', rotation: page.rotate || 0 } : null,
+        textBlocks: lines.length, images: imageCount, importedImages: extractedImages.length, skippedImages: extractionMethod === 'digital' ? Math.max(0, imageCount - extractedImages.length) : 0, lines: lineCount, tables: detectedTables.length, possibleHeader: possibleHeader.length ? { confidence: headerLines.length ? 'high' : 'medium' } : null, possibleFooter: possibleFooter.length ? { confidence: footerLines.length ? 'high' : 'medium' } : null, possibleRepeatingRow: detectedTables.length ? { confidence: 'low' } : null } };
     };
     const physicalPages = [];
     for (let start = 1; start <= pdf.numPages; start += 4) {
@@ -364,7 +376,7 @@ async function analyzePdf(buffer, name = 'Imported PDF') {
     };
     const summaries = physicalPages.map((entry) => entry.summary);
     return { template, detectedLayout: { ...summaries[0], pageCount: summaries.length, pages: summaries, textBlocks: summaries.reduce((sum, page) => sum + page.textBlocks, 0), images: summaries.reduce((sum, page) => sum + page.images, 0), importedImages: summaries.reduce((sum, page) => sum + page.importedImages, 0), skippedImages: summaries.reduce((sum, page) => sum + page.skippedImages, 0), lines: summaries.reduce((sum, page) => sum + page.lines, 0), tables: summaries.reduce((sum, page) => sum + page.tables, 0) } };
-  } finally { await loadingTask?.destroy().catch(() => {}); }
+  } finally { await ocr.close(); await loadingTask?.destroy().catch(() => {}); }
 }
 
-module.exports = { MAX_PDF_BYTES, MAX_PDF_PAGES, validatePdfUpload, groupTextItems, inferTable, extractVectorSegments, inferVectorTables, inferAlignedTables, imageDataUrl, analyzePdf };
+module.exports = { MAX_PDF_BYTES, MAX_PDF_PAGES, validatePdfUpload, groupTextItems, inferTable, extractVectorSegments, inferVectorTables, inferAlignedTables, imageDataUrl, requiresOcr, analyzePdf };
